@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import datetime as dt
+import hashlib
 import json
 import math
 import os
@@ -35,7 +36,10 @@ from alphalens_pipeline.brokers.automanager.state_paths import entry_trails_path
 from alphalens_pipeline.brokers.automanager.trades import format_time
 from alphalens_pipeline.feedback.bar_window import BarFetch, default_bar_fetch
 from alphalens_pipeline.feedback.corporate_actions import (
+    ACTION_WINDOW_POST_CALENDAR_DAYS,
+    ACTION_WINDOW_PRE_CALENDAR_DAYS,
     CachedCorporateActionsLookup,
+    CorporateActionsLookupError,
     PolygonCorporateActionsLookup,
     PreExCloseFn,
 )
@@ -58,6 +62,7 @@ __all__ = [
     "OFF_GRID_AFTER_CLOSE",
     "OFF_GRID_BEFORE_OPEN",
     "OFF_GRID_NOT_A_SESSION",
+    "PROVENANCE_SCHEMA",
     "BarRefusal",
     "BarWindow",
     "BuiltBars",
@@ -890,9 +895,28 @@ def _outside(bar: Mapping[str, Any], kept: Sequence[Mapping[str, Any]]) -> bool:
     """
     if not kept:
         return True
-    return bar["high"] > max(other["high"] for other in kept) or bar["low"] < min(
-        other["low"] for other in kept
-    )
+    high, low = _price(bar, "high"), _price(bar, "low")
+    highs = [value for value in (_price(other, "high") for other in kept) if value is not None]
+    lows = [value for value in (_price(other, "low") for other in kept) if value is not None]
+    if high is None or low is None or not highs or not lows:
+        # A bar whose range cannot be read is reported as outside: only ``t``
+        # is checked on the way in, so a supplied file can carry a bar with no
+        # ``high``, and a reader seeing a silent ``false`` would read it as
+        # "measured, and inside".
+        return True
+    return high > max(highs) or low < min(lows)
+
+
+def _price(bar: Mapping[str, Any], key: str) -> float | None:
+    """One of a bar's four prices as a number, or ``None`` when it is neither.
+
+    The published shape is the ENGINE's contract and it refuses a missing or
+    non-numeric price with its own code, so this never refuses -- it only
+    declines to compare, which keeps a malformed supplied file a refusal from
+    the engine rather than a traceback from here.
+    """
+    value = bar.get(key)
+    return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else None
 
 
 def filter_to_grid(
@@ -923,7 +947,10 @@ def filter_to_grid(
         DroppedBar(
             t=bar["t"],
             session=session.session,
-            bar={key: bar[key] for key in _PUBLISHED_BAR_KEYS if key != "t"},
+            # ``.get`` and not ``[]``: the dropped bar is the one the engine
+            # never sees, so a supplied file's missing price has to be recorded
+            # as absent here rather than raised.
+            bar={key: bar.get(key) for key in _PUBLISHED_BAR_KEYS if key != "t"},
             outside_rest_of_session=_outside(bar, by_session.get(session.session, [])),
         )
         for session, bar in placed_at_close
@@ -978,6 +1005,11 @@ _BAR_SPACING_MS = 60_000
 _VENDOR_KEY = {"t": "t", "open": "o", "high": "h", "low": "l", "close": "c"}
 
 _BAR_CACHE_SCHEMA = "alphalens.research.replay_bars.cache/v1"
+
+# Where a run's bars came from. The two are not interchangeable: the vendor
+# path can name an endpoint and assert a basis, a supplied file cannot.
+_BAR_SOURCE_VENDOR = "polygon"
+_BAR_SOURCE_FILE = "file"
 
 
 def published_bars(payload: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -1096,9 +1128,15 @@ class BuiltBars:
     grid: GriddedSeries
     window: BarWindow
     mic: str
-    cache_path: pathlib.Path
+    cache_path: pathlib.Path | None
     cache_hit: bool
-    fetched_at: str
+    fetched_at: str | None
+    # Where the bars came from. ``"polygon"`` on the fetch path; ``"file"``
+    # when the caller supplied them with ``--bars``, where there is no vendor
+    # to name, no basis to assert and no cache key to write.
+    source: str = _BAR_SOURCE_VENDOR
+    source_path: pathlib.Path | None = None
+    source_sha256: str | None = None
 
     @property
     def series(self) -> tuple[dict[str, Any], ...]:
@@ -1120,12 +1158,290 @@ class BuiltBars:
             # would claim one-minute bars about an hourly file.
             "modal_spacing_ms": modal_spacing_ms(self.series),
             "counts": self.grid.counts(),
-            "cache": {"hit": self.cache_hit, "path": str(self.cache_path)},
+            "cache": {
+                "hit": self.cache_hit,
+                "path": None if self.cache_path is None else str(self.cache_path),
+            },
             # When the VENDOR answered, which comes out of the cache with the
             # payload: stamping the clock on every run would date a two-week-old
             # payload to today.
             "fetched_at": self.fetched_at,
         }
+
+
+# The sidecar's own schema. Separate from the command's answer: the answer is
+# a return value, this is a file a reader holds a year later beside the bars.
+PROVENANCE_SCHEMA = "alphalens.research.replay_bars/v1"
+
+# The vendor, named so a reader knows which basis and which endpoint produced
+# the series without having to ask the tool.
+_VENDOR_BLOCK = {
+    "name": _BAR_SOURCE_VENDOR,
+    "endpoint": "/v2/aggs/ticker/{ticker}/range/1/minute",
+    "client": "alphalens_pipeline.data.alt_data.polygon_client.PolygonClient",
+}
+
+_GRANULARITY_SOURCE = "measured modal t-spacing of the kept series"
+
+_CLOSE_BAR_RULE = "a bar stamped exactly at a session close is not part of that session"
+_CLOSE_BAR_WHY = (
+    "the minute stamped at the close spans close..close+59s; the session ends at the close"
+)
+
+
+def _window_provenance(window: BarWindow, *, mic: str, last_bar_t: int | None) -> dict[str, Any]:
+    """The window, with the formula that produced each of its edges.
+
+    The formulas travel as text because the edges are the facts a reader
+    disputes: that the series could observe the ladder's expiry
+    (``entry_deadline_t`` against ``last_bar_t``, with ``required_end_t``
+    saying which session that implied), and whether the margin was shortened
+    (``margin_sessions_requested`` against ``..._served``).
+    """
+    return {
+        "from_t": _epoch_ms(window.start),
+        "to_t": _epoch_ms(window.end),
+        "from_utc": format_time(window.start),
+        "to_utc": format_time(window.end),
+        "from_formula": (
+            f"config.walk_start (session_open_utc({window.start.date().isoformat()}, {mic}))"
+        ),
+        "to_formula": (
+            "min(session_close_utc(advance_trading_sessions("
+            f"max(entry_deadline, exits[-1].venue_time).date(), {_WINDOW_MARGIN_SESSIONS}, {mic})"
+            f", {mic}), session_close_utc(last_servable_session, {mic}))"
+        ),
+        "required_end_t": _epoch_ms(window.required_end),
+        "required_end_formula": (
+            f"session_close_utc(advance_trading_sessions(entry_deadline_session, 1, {mic}), {mic})"
+            " -- the grid is half-open, so the ladder's expiry is first observable on the"
+            " next session"
+        ),
+        "entry_deadline_t": _epoch_ms(window.entry_deadline),
+        "last_bar_t": last_bar_t,
+        "margin_sessions_requested": window.margin_sessions_requested,
+        "margin_sessions_served": window.margin_sessions_served,
+        "last_servable_session": window.last_servable_session.isoformat(),
+    }
+
+
+def bars_provenance(
+    built: BuiltBars,
+    *,
+    pick: str,
+    ticker: str,
+    bars_path: pathlib.Path,
+    sha256: str,
+    corporate_actions: dict[str, Any],
+    written_at: str,
+) -> dict[str, Any]:
+    """Everything the run constructed, beside the series it constructed it on.
+
+    The written file plus this object rebuild the SESSION series exactly: every
+    bar the grid placed, plus the one per session it excluded, with the four
+    prices that bar carried. What they do NOT rebuild is the raw vendor
+    payload -- ``counts.dropped_off_grid`` is a bare count covering roughly 32
+    times as many bars -- which is re-derivable from the cache alone.
+    """
+    stamps = [bar["t"] for bar in built.series]
+    return {
+        "schema": PROVENANCE_SCHEMA,
+        "pick": pick,
+        "ticker": ticker,
+        "mic": built.mic,
+        "source": built.source,
+        "source_path": None if built.source_path is None else str(built.source_path),
+        "source_sha256": built.source_sha256,
+        "bars_path": str(bars_path),
+        # Named only when a vendor answered: a supplied file has no endpoint
+        # and no client to name, and asserting one would be the construction
+        # this file exists to prevent.
+        "vendor": _VENDOR_BLOCK if built.source == _BAR_SOURCE_VENDOR else None,
+        "granularity": {
+            "modal_spacing_ms": modal_spacing_ms(built.series),
+            "label": _BAR_GRANULARITY,
+            "source": _GRANULARITY_SOURCE,
+        },
+        # The basis, which only the vendor path can state: the client defaults
+        # to unadjusted bars, and that is the basis the document's own limits
+        # and stops were written from.
+        "adjusted": _BAR_ADJUSTED if built.source == _BAR_SOURCE_VENDOR else None,
+        "window": _window_provenance(
+            built.window, mic=built.mic, last_bar_t=max(stamps) if stamps else None
+        ),
+        "session_filter": {
+            "predicate": GRID_PREDICATE,
+            "calendar": "exchange_calendars via alphalens_pipeline.market.calendar",
+            "exchange": built.mic,
+            "sessions": [
+                {
+                    "session": bounds.session.isoformat(),
+                    "open_t": bounds.open_t,
+                    "close_t": bounds.close_t,
+                    "half_day": bounds.half_day,
+                }
+                for bounds in built.grid.sessions
+            ],
+        },
+        "close_bar_drop": {
+            "applied": True,
+            "rule": _CLOSE_BAR_RULE,
+            "why": _CLOSE_BAR_WHY,
+            # The DISCRIMINATING count: a close-stamped bar exists on 91.34% of
+            # real sessions and so carries no signal, while its range leaves the
+            # rest of its session on 1.161% of them.
+            "range_narrowed": sum(
+                1 for drop in built.grid.dropped_at_close if drop.outside_rest_of_session
+            ),
+            "dropped": [
+                {
+                    "t": drop.t,
+                    "session": drop.session.isoformat(),
+                    "bar": drop.bar,
+                    "outside_rest_of_session": drop.outside_rest_of_session,
+                }
+                for drop in built.grid.dropped_at_close
+            ],
+        },
+        # There is deliberately no second spelling of the drop count inside
+        # ``close_bar_drop``: this one and the length of its list are the same
+        # number by construction.
+        "counts": built.grid.counts(),
+        "corporate_actions": corporate_actions,
+        "cache": {
+            "hit": built.cache_hit,
+            "path": None if built.cache_path is None else str(built.cache_path),
+        },
+        "fetched_at": built.fetched_at,
+        "written_at": written_at,
+        "sha256": sha256,
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class SuppliedBars:
+    """One operator-supplied bar file, read but not trusted."""
+
+    path: pathlib.Path
+    bars: list[dict[str, Any]]
+    sha256: str
+
+
+def read_supplied_bars(path: pathlib.Path) -> SuppliedBars | BarRefusal:
+    """``--bars``' own file, read defensively, or a usage refusal.
+
+    Only ``t``'s presence and TYPE are checked here. Price coherence, ordering
+    and the closed key set stay the engine's job, which refuses each with its
+    own published code -- re-implementing them would give an operator two
+    answers to the same question. What the engine cannot know is the session
+    grid, so ``t`` has to be readable before the grid can ask anything.
+
+    The refusal is a USAGE error (status 2): the operator named a path that is
+    not the published shape, which is a statement about the file and not about
+    the pick.
+    """
+    try:
+        text = path.read_text()
+    except OSError as exc:
+        return _unreadable(path, "not_json", str(exc))
+    try:
+        payload = json.loads(text)
+    except ValueError as exc:
+        return _unreadable(path, "not_json", str(exc))
+    if not isinstance(payload, list):
+        return _unreadable(path, "not_a_list", f"the top level is a {type(payload).__name__}")
+    for index, bar in enumerate(payload):
+        if not isinstance(bar, Mapping):
+            return _unreadable(path, "bar_not_object", f"a {type(bar).__name__}", index=index)
+        if "t" not in bar:
+            return _unreadable(path, "t_missing", "no `t`", index=index)
+        # ``bool`` is an ``int`` in Python and the engine refuses it, so the
+        # check is on the exact type rather than on ``isinstance``.
+        if type(bar["t"]) is not int:
+            return _unreadable(
+                path, "t_not_int", f"`t` is a {type(bar['t']).__name__}", index=index
+            )
+    return SuppliedBars(
+        path=path,
+        bars=[dict(bar) for bar in payload],
+        # The operator's OWN bytes, hashed before anything is filtered: it
+        # differs from the written series' hash exactly when something was
+        # dropped, which is how a reader tells the input from what was walked.
+        sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+    )
+
+
+def _unreadable(
+    path: pathlib.Path, reason: str, detail: str, *, index: int | None = None
+) -> BarRefusal:
+    where = "" if index is None else f" at index {index}"
+    return BarRefusal(
+        code="bars_unreadable",
+        reason=reason,
+        message=(
+            f"{path} is not the published bar shape{where}: {detail}. "
+            "`--bars` takes a JSON array of objects each carrying an integer `t` "
+            "in epoch milliseconds"
+        ),
+        status=2,
+        details={"path": str(path), "index": index},
+    )
+
+
+def _off_grid(gridded: GriddedSeries, *, mic: str, path: pathlib.Path) -> BarRefusal:
+    """The refusal for a supplied file carrying a bar no session interval holds.
+
+    NEVER for a bar at ``t == close_ms``: that bar is PLACED on its session and
+    then excluded by the half-open predicate, counted and enumerated in the
+    sidecar. The distinction has to live in the code and not only in the prose,
+    because all three of this repository's RTH helpers emit the close-stamped
+    bar -- a refusal that fired on it would refuse the files the override
+    exists to accept.
+    """
+    first = gridded.off_grid[0]
+    session = "no session of this venue" if first.session is None else first.session.isoformat()
+    if first.session_close_t is None:
+        where = f"on {_instant(first.t).date().isoformat()}, which is not a session on {mic}"
+    else:
+        edge = (
+            first.session_open_t if first.reason == OFF_GRID_BEFORE_OPEN else first.session_close_t
+        )
+        side = "before" if first.reason == OFF_GRID_BEFORE_OPEN else "after"
+        where = (
+            f"{side} that session's "
+            f"{'open' if side == 'before' else 'close'} {format_time(_instant(edge))} "
+            f"(session {session}, {format_time(_instant(first.session_open_t or 0))}"
+            f"-{format_time(_instant(first.session_close_t))})"
+        )
+    return BarRefusal(
+        code="bars_off_grid",
+        reason=first.reason,
+        message=(
+            f"{path} carries {len(gridded.off_grid)} bars the {mic} session grid cannot "
+            f"place. The first is at {format_time(_instant(first.t))}, {where}. A bar "
+            "stamped exactly at a close is dropped and listed in the sidecar; this one "
+            "is not that, so it is refused. Drop the flag to fetch the window instead"
+        ),
+        status=1,
+        details={
+            # A LIST, because the incident had two off-grid bars in two
+            # different sessions: one session field for the whole refusal would
+            # have described the first bar's session beside another bar's `t`.
+            "count": len(gridded.off_grid),
+            "offenders": [
+                {
+                    "t": bar.t,
+                    "reason": bar.reason,
+                    "session": None if bar.session is None else bar.session.isoformat(),
+                    "session_open_t": bar.session_open_t,
+                    "session_close_t": bar.session_close_t,
+                }
+                for bar in gridded.off_grid
+            ],
+            "exchange": mic,
+            "path": str(path),
+        },
+    )
 
 
 def _unusable_details(gridded: GriddedSeries, window: BarWindow) -> dict[str, Any]:
@@ -1139,7 +1455,9 @@ def _unusable_details(gridded: GriddedSeries, window: BarWindow) -> dict[str, An
     }
 
 
-def _wrong_granularity(gridded: GriddedSeries) -> BarRefusal | None:
+def _wrong_granularity(
+    gridded: GriddedSeries, *, path: pathlib.Path | None = None
+) -> BarRefusal | None:
     """Whether the kept series is not one-minute bars, or ``None``.
 
     Asked AFTER the close-stamped drop, because the gate reads the spacing the
@@ -1164,7 +1482,7 @@ def _wrong_granularity(gridded: GriddedSeries) -> BarRefusal | None:
             "modal_spacing_ms": spacing,
             "bars": len(gridded.kept),
             "sessions": len(gridded.sessions),
-            "path": None,
+            "path": None if path is None else str(path),
         },
     )
 
@@ -1229,8 +1547,10 @@ def build_bars(
     cache_root: pathlib.Path,
     now: dt.datetime,
     offline_argv: list[str],
+    supplied: SuppliedBars | None = None,
 ) -> BuiltBars | BarRefusal:
-    """The bars for one pick's window: the cache, else the vendor.
+    """The bars for one pick's window: a supplied file, else the cache, else
+    the vendor.
 
     The cache is read first so a re-run of the same pick costs no quota --
     Polygon's free tier is metered at five requests a minute -- and what it
@@ -1239,10 +1559,35 @@ def build_bars(
     the record of what the vendor sent, rather than inheriting this run's
     filter.
 
+    A SUPPLIED series takes the same grid and the same four gates. The one
+    difference is what happens to a bar the grid cannot place at all: on the
+    fetch path that is the vendor's normal output -- 12.08% of a raw payload
+    is outside regular hours -- and it is dropped with a count, while on a
+    supplied file it is an assertion the operator's construction cannot account
+    for, which is the incident's own shape, and it is refused.
+
     ``offline_argv`` is the invocation that reads a bar file instead of
     fetching one. It travels into the vendor-failure refusal, because a caller
     with no network needs the route out and not only the reason.
     """
+    if supplied is not None:
+        gridded = filter_to_grid(
+            supplied.bars, session_grid(window.start, window.end, mic=mic), mic=mic
+        )
+        if gridded.off_grid:
+            return _off_grid(gridded, mic=mic, path=supplied.path)
+        refusal = _gates(gridded, window, pick=pick, mic=mic, now=now, path=supplied.path)
+        return refusal or BuiltBars(
+            grid=gridded,
+            window=window,
+            mic=mic,
+            cache_path=None,
+            cache_hit=False,
+            fetched_at=None,
+            source=_BAR_SOURCE_FILE,
+            source_path=supplied.path,
+            source_sha256=supplied.sha256,
+        )
     cache_path = _bar_cache_path(cache_root, ticker, window)
     cached = _read_cached_payload(cache_path)
     fetched_at = format_time(now)
@@ -1275,19 +1620,42 @@ def build_bars(
     gridded = filter_to_grid(
         published_bars(payload), session_grid(window.start, window.end, mic=mic), mic=mic
     )
-    # The gate ORDER is the memo's, and it is load-bearing: emptiness, then
-    # granularity, then the left edge, then the right one. Each one states
-    # something the next takes for granted, and a reordering renames real
-    # defects -- an empty series reported as too coarse, or a short series
-    # reported as uncovered at its left edge.
-    # Sequentially and not over a tuple of calls: each gate is asked only once
-    # the one before it has passed, so `_wrong_granularity` never reads a
-    # spacing off an empty series and `_walk_start_uncovered` never reads a
-    # first bar off one.
+    refusal = _gates(gridded, window, pick=pick, mic=mic, now=now, path=None)
+    return refusal or BuiltBars(
+        grid=gridded,
+        window=window,
+        mic=mic,
+        cache_path=cache_path,
+        cache_hit=cached is not None,
+        fetched_at=fetched_at,
+    )
+
+
+def _gates(
+    gridded: GriddedSeries,
+    window: BarWindow,
+    *,
+    pick: str,
+    mic: str,
+    now: dt.datetime,
+    path: pathlib.Path | None,
+) -> BarRefusal | None:
+    """The four gates every kept series passes, in the order the memo sets.
+
+    The ORDER is load-bearing: emptiness, then granularity, then the left edge,
+    then the right one. Each one states something the next takes for granted,
+    and a reordering renames real defects -- an empty series reported as too
+    coarse, or a short series reported as uncovered at its left edge.
+
+    Asked sequentially and not over a tuple of calls, so ``_wrong_granularity``
+    never reads a spacing off an empty series and ``_walk_start_uncovered``
+    never reads a first bar off one. ONE function for both paths, because a
+    supplied file has to meet the same requirements a fetched window does.
+    """
     empty = _empty_window(gridded, window)
     if empty is not None:
         return empty
-    wrong = _wrong_granularity(gridded)
+    wrong = _wrong_granularity(gridded, path=path)
     if wrong is not None:
         return wrong
     left = _walk_start_uncovered(gridded, window)
@@ -1295,7 +1663,9 @@ def build_bars(
         return left
     # The right edge, asked of the SERIES. The pre-fetch check predicted what
     # the vendor would serve; this measures what it did -- and it fires on a
-    # supplied file for the same reason.
+    # supplied file for the same reason, which is where it is worth most: a
+    # hand-built file that stops before the deadline publishes a `no_fill` with
+    # an empty trace, which reads exactly like a pick that never filled.
     coverage = deadline_coverage(gridded.kept, entry_deadline=window.entry_deadline)
     if not coverage.reaches:
         return BarRefusal(
@@ -1305,13 +1675,103 @@ def build_bars(
             status=_EXIT_TRANSIENT,
             details=_window_details(pick, window, mic=mic, now=now, last_bar_t=coverage.last_bar_t),
         )
-    return BuiltBars(
-        grid=gridded,
-        window=window,
-        mic=mic,
-        cache_path=cache_path,
-        cache_hit=cached is not None,
-        fetched_at=fetched_at,
+    return None
+
+
+# Where the corporate-action answer came from, for the sidecar.
+_ACTIONS_SOURCE = "polygon /v3/reference/{splits,dividends}"
+
+
+def action_lookup_window(window: BarWindow) -> tuple[dt.date, dt.date]:
+    """The calendar-day span the corporate-action question is asked over.
+
+    The padding is IMPORTED from the module that owns the question rather than
+    restated here: an action executed just before the window still poisons the
+    raw bars inside it (-3 calendar days), and a record date skews the other
+    way (+1).
+    """
+    return (
+        window.start.date() - dt.timedelta(days=ACTION_WINDOW_PRE_CALENDAR_DAYS),
+        window.end.date() + dt.timedelta(days=ACTION_WINDOW_POST_CALENDAR_DAYS),
+    )
+
+
+def clean_actions_block(lookup_window: tuple[dt.date, dt.date]) -> dict[str, Any]:
+    """The one corporate-action verdict a sidecar ever carries: ``"none"``.
+
+    "Asked and clean" is the written file; "found an action" and "could not
+    ask" are both refusals with their own codes. So a reader holding a sidecar
+    knows the lookup answered, rather than having to trust a field that might
+    have meant three things.
+    """
+    start, end = lookup_window
+    return {
+        "verdict": "none",
+        "window": {"start": start.isoformat(), "end": end.isoformat()},
+        "detail": None,
+        "source": _ACTIONS_SOURCE,
+    }
+
+
+def _action_reason(detail: str | None) -> str:
+    """Which of the two things the lookup can find this detail describes.
+
+    The lookup writes exactly two detail shapes -- ``split <from>:<to>
+    executed <date>`` and ``special dividend <cash>/share ex <date> ...`` --
+    so the leading token is total over its own answers.
+    """
+    return "special_dividend" if detail and detail.startswith("special dividend") else "split"
+
+
+def check_corporate_actions(
+    *, ticker: str, lookup: Any, lookup_window: tuple[dt.date, dt.date]
+) -> BarRefusal | None:
+    """``None`` when the window is clean, a refusal when it is not.
+
+    Asked on EVERY run and never behind a return threshold. A uniform
+    rescaling of every price in a window cancels out of the return, so only a
+    window that CROSSES a break carries a fabricated step -- and that window's
+    own return need not look extreme at all. A window that does cross one is a
+    run to REFUSE rather than a series to rescale: real brokers cancel resting
+    orders on a corporate action, so a mechanically adjusted ladder models an
+    order state that would not have existed.
+    """
+    start, end = lookup_window
+    try:
+        answer = lookup.lookup(ticker, start, end)
+    except (CorporateActionsLookupError, OSError) as exc:
+        return BarRefusal(
+            code="corporate_actions_unanswered",
+            reason="lookup_failed",
+            message=(
+                f"whether a corporate action crosses {ticker}'s bar window "
+                f"({start.isoformat()}-{end.isoformat()}) could not be answered: {exc}. "
+                "The lookup is fail-closed, so the run is held rather than published on "
+                "a basis nothing checked; re-running asks again"
+            ),
+            status=_EXIT_TRANSIENT,
+            details={
+                "ticker": ticker,
+                "lookup_window": {"start": start.isoformat(), "end": end.isoformat()},
+                "vendor_message": str(exc),
+            },
+        )
+    if not answer.found:
+        return None
+    return BarRefusal(
+        code="bars_corporate_action",
+        reason=_action_reason(answer.detail),
+        message=(
+            f"a corporate action crosses {ticker}'s bar window "
+            f"({start.isoformat()}-{end.isoformat()}): {answer.detail}. The raw bars "
+            "step at the ex-date, and a real broker would have cancelled the resting "
+            "ladder rather than carried it across, so this run cannot be compared"
+        ),
+        status=1,
+        details={
+            "detail": answer.detail,
+            "lookup_window": {"start": start.isoformat(), "end": end.isoformat()},
+        },
     )
 
 
@@ -1409,26 +1869,36 @@ _USAGE = """USAGE
 
   TRADES_JSON is the output of `alphalens broker trades --format json`, or `-`
   to read it from stdin. The report decides comparability, so the command needs
-  no broker of its own; it does ask the price vendor for the pick's own bar
-  window, unless that window is already in the bar cache.
+  no broker of its own -- but it does reach the price vendor. It fetches the
+  pick's own bar window unless `--bars` states a file, and it asks whether a
+  corporate action crosses that window on EVERY run; neither call is made when
+  the answer is already in the bar cache.
 
 OPTIONS
-  --out DIR              where the three files are written (default: .)
+  --out DIR              where the four files are written (default: .)
   --entry-trails PATH    the entry-trail journal (default: the report env's own)
   --entry-trail-bps N    state the distance instead of reading it; 0 means OFF
-  --bars PATH            reserved for an offline bar file; NOT READ YET, so the
-                         bars are fetched and filtered either way
+  --bars PATH            an offline override: walk these bars instead of
+                         fetching them. Filtered onto the venue's half-open
+                         session grid exactly as a fetched window is, and
+                         refused only for a bar the grid cannot place at all
   --bar-cache DIR        the bar cache root (default: ~/.alphalens/replay_bars)
   --format human|json    default human
 
 OUTPUT
+  Four files under --out: `<PICK>.document.json`, `<PICK>.config.json`,
+  `<PICK>.bars.json` and `<PICK>.bars.provenance.json`.
+
   json: one object on stdout with `document_path`, `config_path`, `bars_path`,
-  the stated `facts`, the whole `configuration`, a `bars` block carrying the
-  session filter and its counts, and a runnable `replay_argv`.
+  `bars_provenance_path`, the stated `facts`, the whole `configuration`, a
+  `bars` block carrying the session filter and its counts, and a runnable
+  `replay_argv`.
 
   The bars are the venue's own session grid, half-open at the close
   (`open_ms <= t < close_ms`), so the bar stamped at a session close is not
-  part of the written series.
+  part of the written series. The provenance file lists every session the grid
+  used, every bar it dropped at a close with the four prices that bar carried,
+  the corporate-action verdict, and a sha256 of the written series.
 
 EXIT CODES
   0 ok, 1 the pick cannot be replayed, 2 usage, 4 the report has no such pick,
@@ -1437,7 +1907,39 @@ EXIT CODES
 EXAMPLES
   alphalens broker trades --env live --format json > /tmp/trades.json
   python -m scripts.replay_from_pick /tmp/trades.json VST:2026-09-21 --out /tmp/vst
+
+  # offline, from a bar file you already hold; it is filtered, not trusted
+  python -m scripts.replay_from_pick /tmp/trades.json VST:2026-09-21 \\
+      --out /tmp/vst --bars /tmp/vst/bars.json
 """
+
+
+def _parser() -> argparse.ArgumentParser:
+    """The command's option surface, as one object.
+
+    Built by a function rather than inline in ``main`` so a test can ask the
+    parser what it takes and compare that against ``_USAGE``: argparse
+    generates no option list here (``usage=argparse.SUPPRESS`` with a
+    raw-description formatter), so a flag the hand-written text omits is
+    invisible to every caller.
+    """
+    parser = argparse.ArgumentParser(
+        prog="replay_from_pick",
+        usage=argparse.SUPPRESS,
+        description=_USAGE,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("trades_json")
+    parser.add_argument("pick_key")
+    parser.add_argument("--out", default=".")
+    parser.add_argument("--entry-trails", default=None)
+    parser.add_argument("--entry-trail-bps", type=int, default=None)
+    parser.add_argument("--bars", default=None)
+    # Resolved by ``bar_cache_root`` at the call, never here: a default built
+    # with the parser would resolve the operator's home ahead of every refusal.
+    parser.add_argument("--bar-cache", default=None)
+    parser.add_argument("--format", choices=("human", "json"), default="human")
+    return parser
 
 
 def _report_trades(source: str) -> tuple[str, dict[str, Mapping[str, Any]]]:
@@ -1473,6 +1975,97 @@ def _trail_distance(
             f"distance is unknown (env={env}); state it with --entry-trail-bps (0 = OFF)"
         )
     return distances[pick]
+
+
+# One whole-market daily session per file, beside the bars whose basis it
+# vouches for. The dividend-materiality denominator is a raw close, so this is
+# the RAW (``adjusted=false``) grouped payload and never the split-adjusted
+# store the O'Neil relative-strength term reads.
+_GROUPED_CACHE_DIRNAME = "grouped"
+_GROUPED_CACHE_SCHEMA = "alphalens.research.replay_bars.grouped/v1"
+
+# (session) -> {TICKER: {t,o,h,l,c,v,vw}} for the whole US market.
+GroupedFetch = Callable[[dt.date], dict[str, dict[str, Any]]]
+
+
+def _default_grouped_fetch(date: dt.date) -> dict[str, dict[str, Any]]:
+    """Production grouped-daily source: the canonical Polygon client, ONE call.
+
+    US equities only -- the endpoint's own locale -- so a dividend-paying pick
+    on a non-US venue is absent from the answer, the denominator is unknown and
+    the lookup fails closed into ``corporate_actions_unanswered``.
+    """
+    from alphalens_pipeline.data.alt_data.polygon_client import get_default_polygon_client
+
+    return get_default_polygon_client().get_grouped_daily(date)
+
+
+def grouped_pre_ex_close(
+    cache_root: pathlib.Path, mic: str, *, grouped_fetch: GroupedFetch = _default_grouped_fetch
+) -> PreExCloseFn:
+    """The dividend-materiality denominator: the raw close BEFORE an ex-date.
+
+    One whole-market call per session, cached, and only when a concrete
+    dividend record needs assessing -- the materiality test runs inside the
+    lookup's own loop, so a window with no dividend record costs nothing here.
+
+    ``None`` when the session is not on disk and cannot be fetched, or when the
+    ticker did not trade that session. The lookup then fails closed rather than
+    guessing a denominator, which is what turns an unanswerable question into a
+    refusal instead of a clean verdict.
+    """
+
+    def pre_ex_close(ticker: str, ex_date: dt.date) -> float | None:
+        session = previous_trading_day(ex_date, exchange=mic)
+        path = cache_root / _GROUPED_CACHE_DIRNAME / f"{session.isoformat()}.json"
+        rows = _read_grouped_session(path)
+        if rows is None:
+            rows = grouped_fetch(session)
+            if rows:
+                _write_grouped_session(path, session, rows)
+        row = rows.get(ticker.upper())
+        return None if row is None else row.get("c")
+
+    return pre_ex_close
+
+
+def _read_grouped_session(path: pathlib.Path) -> dict[str, dict[str, Any]] | None:
+    """The cached whole-market session, or ``None`` for "not fetched yet".
+
+    ``None`` and an empty mapping are DIFFERENT answers: a present cache holds
+    the entire market for that session, so a ticker absent from it did not
+    trade. A corrupt file re-fetches with a warning rather than failing a run.
+    """
+    if not path.exists():
+        return None
+    try:
+        cached = json.loads(path.read_text())
+        rows = cached["rows"]
+        if not isinstance(rows, dict):
+            raise TypeError(type(rows).__name__)
+    except (OSError, TypeError, KeyError, ValueError) as exc:
+        print(
+            f"replay_from_pick: ignoring an unreadable grouped cache {path} ({exc})",
+            file=sys.stderr,
+        )
+        return None
+    return rows
+
+
+def _write_grouped_session(
+    path: pathlib.Path, session: dt.date, rows: dict[str, dict[str, Any]]
+) -> None:
+    """Record one whole-market session, atomically, under its own date."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = {
+        "schema": _GROUPED_CACHE_SCHEMA,
+        "session": session.isoformat(),
+        "adjusted": _BAR_ADJUSTED,
+        "rows": rows,
+    }
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(body))
+    os.replace(tmp, path)
 
 
 def bar_cache_root(stated: str | None) -> pathlib.Path:
@@ -1566,23 +2159,7 @@ def main(
     because its disk cache sits under the run's own bar-cache root. ``now`` is
     the clock the servable-window question is asked against.
     """
-    parser = argparse.ArgumentParser(
-        prog="replay_from_pick",
-        usage=argparse.SUPPRESS,
-        description=_USAGE,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument("trades_json")
-    parser.add_argument("pick_key")
-    parser.add_argument("--out", default=".")
-    parser.add_argument("--entry-trails", default=None)
-    parser.add_argument("--entry-trail-bps", type=int, default=None)
-    parser.add_argument("--bars", default=None)
-    # Resolved by ``bar_cache_root`` at the call, never here: a default built
-    # with the parser would resolve the operator's home ahead of every refusal.
-    parser.add_argument("--bar-cache", default=None)
-    parser.add_argument("--format", choices=("human", "json"), default="human")
-    args = parser.parse_args(argv)
+    args = _parser().parse_args(argv)
 
     if args.entry_trail_bps is not None and args.entry_trail_bps < 0:
         return _fail(
@@ -1707,16 +2284,46 @@ def main(
             **_window_details(args.pick_key, window, mic=mic, now=moment),
         )
 
+    cache_root = bar_cache_root(args.bar_cache)
+    ticker = inputs.document["instrument"]["ticker"]
+    # Step 6: BEFORE the cache read and the fetch, so a repeat run inside the
+    # answer's own cache window makes no vendor call at all -- and a refusing
+    # answer spends no metered quota on bars the run will not publish.
+    lookup_window = action_lookup_window(window)
+    action = check_corporate_actions(
+        ticker=ticker,
+        lookup=actions_lookup(cache_root, grouped_pre_ex_close(cache_root, mic)),
+        lookup_window=lookup_window,
+    )
+    if action is not None:
+        return _fail(
+            action.code,
+            action.reason,
+            action.message,
+            action.status,
+            fmt=args.format,
+            **action.details,
+        )
+
+    supplied: SuppliedBars | None = None
+    if args.bars:
+        read = read_supplied_bars(pathlib.Path(args.bars))
+        if isinstance(read, BarRefusal):
+            return _fail(
+                read.code, read.reason, read.message, read.status, fmt=args.format, **read.details
+            )
+        supplied = read
+
     built = build_bars(
         pick=args.pick_key,
         # The ticker and the venue travel from ONE block of the document the
         # author wrote; the trades record's own instrument block carries a uic
         # and no symbol at all.
-        ticker=inputs.document["instrument"]["ticker"],
+        ticker=ticker,
         mic=mic,
         window=window,
         bar_fetch=bar_fetch,
-        cache_root=bar_cache_root(args.bar_cache),
+        cache_root=cache_root,
         now=moment,
         offline_argv=[
             sys.executable,
@@ -1729,6 +2336,7 @@ def main(
             "--bars",
             "<BARS.json>",
         ],
+        supplied=supplied,
     )
     if isinstance(built, BarRefusal):
         return _fail(
@@ -1749,9 +2357,28 @@ def main(
     document_path = out / f"{stem}.document.json"
     config_path = out / f"{stem}.config.json"
     bars_path = out / f"{stem}.bars.json"
+    provenance_path = out / f"{stem}.bars.provenance.json"
     document_path.write_text(json.dumps(inputs.document, indent=1) + "\n")
     config_path.write_text(json.dumps(inputs.configuration, indent=1) + "\n")
     bars_path.write_text(json.dumps(built.series) + "\n")
+    # The sidecar is written SECOND and hashes the bytes on disk, so a reader
+    # can check it with `shasum -a 256` rather than having to re-serialise the
+    # series the way this command happened to.
+    provenance_path.write_text(
+        json.dumps(
+            bars_provenance(
+                built,
+                pick=args.pick_key,
+                ticker=ticker,
+                bars_path=bars_path,
+                sha256=hashlib.sha256(bars_path.read_bytes()).hexdigest(),
+                corporate_actions=clean_actions_block(lookup_window),
+                written_at=format_time(moment),
+            ),
+            indent=1,
+        )
+        + "\n"
+    )
 
     facts = stated_facts(trade)
     answer = {
@@ -1761,6 +2388,7 @@ def main(
         "document_path": str(document_path),
         "config_path": str(config_path),
         "bars_path": str(bars_path),
+        "bars_provenance_path": str(provenance_path),
         "bars": built.summary(bars_path),
         "facts": {
             "fx_rate": facts.fx_rate,
@@ -1787,7 +2415,10 @@ def main(
     if args.format == "json":
         print(json.dumps(answer))
         return 0
-    print(f"{args.pick_key} ({env}) -> {document_path} + {config_path} + {bars_path}")
+    print(
+        f"{args.pick_key} ({env}) -> {document_path} + {config_path} + {bars_path} "
+        f"+ {provenance_path}"
+    )
     for name, value in answer["facts"].items():
         print(f"  {name}: {value}")
     print("  next: " + " ".join(answer["replay_argv"]))

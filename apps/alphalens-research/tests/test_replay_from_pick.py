@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import hashlib
 import io
 import json
 import pathlib
@@ -26,12 +27,20 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import state_paths
 from alphalens_pipeline.brokers.automanager.trades import TradesFilters, build_trades
+from alphalens_pipeline.feedback.corporate_actions import (
+    ACTION_WINDOW_POST_CALENDAR_DAYS,
+    ACTION_WINDOW_PRE_CALENDAR_DAYS,
+    CorporateActionsAnswer,
+    CorporateActionsLookupError,
+)
 from broker_contract.trade_intent.codec import supplied_derived_paths
 from intent_replay.bars import check_window_covers, parse_bars, validate_sequence
 from intent_replay.config import RunConfig
 from scripts.replay_from_pick import (
+    GRID_PREDICATE,
     BarRefusal,
     ExitTimeUnknownError,
+    _parser,
     _served_short_message,
     authored_document,
     bar_cache_root,
@@ -95,6 +104,49 @@ def _aggs(
             **extra,
         }
         for index in range(count)
+    ]
+
+
+class _FakeActionsLookup:
+    """One stated answer to the corporate-action question, with its calls kept.
+
+    The production default reaches Polygon's reference endpoints, which the
+    no-live-network guard refuses, so every run that gets past the window has
+    to state this.
+    """
+
+    def __init__(
+        self,
+        answer: CorporateActionsAnswer | None = None,
+        raises: Exception | None = None,
+    ) -> None:
+        self.answer = answer if answer is not None else CorporateActionsAnswer(found=False)
+        self.raises = raises
+        self.calls: list[tuple[str, dt.date, dt.date]] = []
+
+    def lookup(self, ticker: str, start: dt.date, end: dt.date) -> CorporateActionsAnswer:
+        self.calls.append((ticker, start, end))
+        if self.raises is not None:
+            raise self.raises
+        return self.answer
+
+    def factory(self) -> Any:
+        """This lookup, as the factory shape `main`'s seam takes."""
+        return lambda cache_root, pre_ex_close: self
+
+
+def _published(*instants: dt.datetime, price: float = 10.0) -> list[dict[str, Any]]:
+    """Bars in the engine's own PUBLISHED shape, which is what `--bars` takes:
+    `t` plus the four prices, and none of the vendor's `v` / `vw` / `n`."""
+    return [
+        {
+            "t": _epoch_ms(moment),
+            "open": price,
+            "high": price + 0.5,
+            "low": price - 0.5,
+            "close": price + 0.1,
+        }
+        for moment in instants
     ]
 
 
@@ -1046,6 +1098,7 @@ class _CommandTestCase(unittest.TestCase):
         series = self._tape() if payload is None else payload
         seams: dict[str, Any] = {
             "bar_fetch": lambda ticker, start, end: series,
+            "actions_lookup": _FakeActionsLookup().factory(),
             "now": lambda: self.NOW,
         }
         seams.update(over)
@@ -1403,6 +1456,7 @@ class TheUnservableWindowRefusesBeforeAnyVendorCallTest(_CommandTestCase):
             "--format",
             fmt,
             bar_fetch=lambda ticker, start, end: calls.append((ticker, start, end)) or [],
+            actions_lookup=_FakeActionsLookup().factory(),
             now=lambda: now or self._NOW,
         )
         return status, out, err, calls
@@ -1494,6 +1548,19 @@ class _FetchingTestCase(_CommandTestCase):
 
     _PICK = "VST:2026-09-21"
 
+    # XNYS's own close on 2026-09-21, read from the calendar, not open + 390.
+    _CLOSE = dt.datetime(2026, 9, 21, 20, 0, tzinfo=dt.UTC)
+
+    def _tape_through_the_close(self, **extra: Any) -> list[dict[str, Any]]:
+        """VST's own tape with the last two minutes of 2026-09-21 added: the
+        one at 19:59:00Z, inside the session, and the one stamped exactly at the
+        20:00:00Z close."""
+        return (
+            _aggs(self.WALK_START, 3)
+            + _aggs(self._CLOSE - dt.timedelta(minutes=1), 2, price=20.0, **extra)
+            + _aggs(self.AFTER_DEADLINE, 3, price=11.0)
+        )
+
     def _replay(
         self,
         directory: pathlib.Path,
@@ -1504,6 +1571,8 @@ class _FetchingTestCase(_CommandTestCase):
         fmt: str = "json",
         now: dt.datetime | None = None,
         cache: pathlib.Path | None = None,
+        lookup: _FakeActionsLookup | None = None,
+        bars: pathlib.Path | None = None,
     ) -> tuple[int, str, str, list[tuple[Any, ...]]]:
         """One run with a recording fake fetch, a stated clock and a cache root
         inside the temporary directory."""
@@ -1519,6 +1588,7 @@ class _FetchingTestCase(_CommandTestCase):
         status, out, err = self._run(
             str(self._report(directory)),
             pick or self._PICK,
+            *(() if bars is None else ("--bars", str(bars))),
             "--out",
             str(directory),
             # Stated because `main` resolves the journal's own default path
@@ -1533,6 +1603,7 @@ class _FetchingTestCase(_CommandTestCase):
             "--format",
             fmt,
             bar_fetch=fetch,
+            actions_lookup=(lookup or _FakeActionsLookup()).factory(),
             now=lambda: now or self.NOW,
         )
         return status, out, err, calls
@@ -1543,6 +1614,10 @@ class _FetchingTestCase(_CommandTestCase):
 
     def _stamps(self, out: str) -> list[int]:
         return [bar["t"] for bar in self._written(out)]
+
+    def _sidecar(self, out: str) -> dict[str, Any]:
+        """The provenance file the run wrote, parsed."""
+        return json.loads(pathlib.Path(json.loads(out)["bars_provenance_path"]).read_text())
 
 
 class TheBarsAreFetchedNotHandBuiltTest(_FetchingTestCase):
@@ -1760,6 +1835,20 @@ class TheBarsAreFetchedNotHandBuiltTest(_FetchingTestCase):
             self.assertEqual(status, 0, err)
             self.assertIn(str(directory / "VST_2026-09-21.bars.json"), out.splitlines()[0])
 
+    def test_the_human_renderer_names_the_sidecar_too(self) -> None:
+        """Four files are written, and the provenance file is the one a reader
+        needs a year later: leaving it out of the only line an operator reads
+        is how it goes unnoticed and unarchived."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+
+            status, out, err, _ = self._replay(directory, fmt="human")
+
+            self.assertEqual(status, 0, err)
+            self.assertIn(
+                str(directory / "VST_2026-09-21.bars.provenance.json"), out.splitlines()[0]
+            )
+
     def test_a_corrupt_cache_file_is_refetched_with_a_warning_not_a_crash(self) -> None:
         """A half-written cache is never a reason for a command to fail: the
         vendor can be asked again. The shape is checked on the way in, so a
@@ -1823,19 +1912,6 @@ class TheCloseStampedBarIsNotPartOfTheSessionTest(_FetchingTestCase):
     bps) where dropping it leaves 9 (0.057%, worst 34.7 bps) -- and on CRSR
     2026-08-06 keeping it flipped a real outcome from `open` to `closed_tp`.
     """
-
-    # XNYS's own close on 2026-09-21, read from the calendar, not open + 390.
-    _CLOSE = dt.datetime(2026, 9, 21, 20, 0, tzinfo=dt.UTC)
-
-    def _tape_through_the_close(self, **extra: Any) -> list[dict[str, Any]]:
-        """VST's own tape with the last two minutes of 2026-09-21 added: the
-        one at 19:59:00Z, inside the session, and the one stamped exactly at the
-        20:00:00Z close."""
-        return (
-            _aggs(self.WALK_START, 3)
-            + _aggs(self._CLOSE - dt.timedelta(minutes=1), 2, price=20.0, **extra)
-            + _aggs(self.AFTER_DEADLINE, 3, price=11.0)
-        )
 
     def test_the_close_stamped_bar_is_dropped(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -2290,6 +2366,606 @@ class TheRightEdgeIsCheckedOnTheSeriesAfterTheFetchTest(_FetchingTestCase):
             self.assertIn("2026-10-01", err)
 
 
+class ASuppliedBarsFileIsFilteredNotTrustedTest(_FetchingTestCase):
+    """`--bars` used to be a placeholder the operator filled in by hand, and
+    the file they filled it in with carried a bar ninety minutes after the
+    session close, fired a take-profit on it, and was then lost.
+
+    So the override stays -- an offline route is worth having -- but the file
+    is FILTERED onto the same grid a fetched window gets, and a bar the grid
+    cannot place at all is refused.
+    """
+
+    # The second session the supplied fixtures use: 2026-10-01, whose own XNYS
+    # close is 20:00Z and whose 13:30Z open is past VST's entry deadline.
+    _SECOND_CLOSE = dt.datetime(2026, 10, 1, 20, 0, tzinfo=dt.UTC)
+
+    def _rth_file(self, directory: pathlib.Path, *extra: dict[str, Any]) -> pathlib.Path:
+        """A file of the shape all three of this repo's RTH helpers produce:
+        every session's bars, ending with the bar stamped at its close."""
+        bars = (
+            _published(*(self.WALK_START + dt.timedelta(minutes=n) for n in range(3)))
+            + _published(self._CLOSE, price=20.0)
+            + _published(
+                *(self.AFTER_DEADLINE + dt.timedelta(minutes=n) for n in range(3)), price=11.0
+            )
+            + _published(self._SECOND_CLOSE, price=11.0)
+            + list(extra)
+        )
+        path = directory / "supplied.bars.json"
+        path.write_text(json.dumps(bars))
+        return path
+
+    def test_a_file_built_with_this_repo_s_own_rth_filter_is_accepted_and_filtered(self) -> None:
+        """Measured: all three of this repository's RTH helpers emit one
+        close-stamped bar per session, on 40 of 40 real files and 805 bars over
+        831 sessions. Refusing that bar would refuse every file the repository
+        itself produces, and the refusal's own best advice would be "stop using
+        --bars" -- the shape of a guard that gets switched off."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            supplied = self._rth_file(directory)
+
+            status, out, err, calls = self._replay(directory, bars=supplied, fmt="json")
+
+            self.assertEqual(status, 0, err)
+            self.assertEqual(calls, [], "a supplied file is the offline route")
+            counts = json.loads(out)["bars"]["counts"]
+            self.assertEqual(counts["dropped_at_close"], 2)
+            self.assertEqual(counts["dropped_off_grid"], 0)
+            self.assertEqual(counts["kept"], 6)
+            self.assertNotIn(_epoch_ms(self._CLOSE), self._stamps(out))
+            self.assertNotIn(_epoch_ms(self._SECOND_CLOSE), self._stamps(out))
+
+    def test_an_unplaceable_bar_in_a_supplied_file_is_refused_naming_its_session_boundary(
+        self,
+    ) -> None:
+        """The incident's own bar: 2026-09-28T21:30:00.000Z, ninety minutes
+        past that session's 20:00:00.000Z close. Today the command never opens
+        the file, so the run that published a retracted 1.05% exited 0."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            incident = dt.datetime(2026, 9, 28, 21, 30, tzinfo=dt.UTC)
+            supplied = self._rth_file(directory, *_published(incident, price=30.0))
+
+            status, out, err, _ = self._replay(directory, bars=supplied)
+
+            self.assertEqual(status, 1)
+            self.assertEqual(out, "")
+            self.assertIn("bars_off_grid", err)
+            self.assertIn("2026-09-28T21:30:00.000Z", err)
+            self.assertIn("2026-09-28T20:00:00.000Z", err)
+            self.assertEqual(sorted(p.name for p in directory.glob("VST_*")), [])
+
+    def test_two_unplaceable_bars_in_two_sessions_are_both_named_in_the_json(self) -> None:
+        """One `session` / `session_open_t` / `session_close_t` triple for the
+        whole refusal describes the FIRST bar's session beside another bar's
+        `t`. The incident had two off-grid bars in two different sessions."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            supplied = self._rth_file(
+                directory,
+                *_published(dt.datetime(2026, 9, 28, 21, 30, tzinfo=dt.UTC), price=30.0),
+                *_published(dt.datetime(2026, 9, 29, 21, 30, tzinfo=dt.UTC), price=31.0),
+            )
+
+            status, out, err, _ = self._replay(directory, bars=supplied, fmt="json")
+
+            self.assertEqual(status, 1)
+            self.assertEqual(out, "")
+            details = json.loads(err.strip().splitlines()[-1])["details"]
+            self.assertEqual(details["count"], 2)
+            self.assertEqual(
+                [offender["session"] for offender in details["offenders"]],
+                ["2026-09-28", "2026-09-29"],
+            )
+            self.assertEqual(
+                [offender["reason"] for offender in details["offenders"]],
+                ["after_close", "after_close"],
+            )
+            self.assertEqual(details["exchange"], "XNYS")
+            self.assertEqual(details["path"], str(supplied))
+
+    def test_a_close_stamped_bar_and_an_after_close_bar_in_one_file_are_treated_differently(
+        self,
+    ) -> None:
+        """One membership predicate for both is wrong in either direction: it
+        refuses the bar every RTH helper in this repository emits, or it passes
+        the bar the incident fired a take-profit on."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            after_close = dt.datetime(2026, 9, 28, 21, 30, tzinfo=dt.UTC)
+            supplied = self._rth_file(directory, *_published(after_close, price=30.0))
+
+            status, _, err, _ = self._replay(directory, bars=supplied, fmt="json")
+
+            self.assertEqual(status, 1)
+            details = json.loads(err.strip().splitlines()[-1])["details"]
+            self.assertEqual(
+                [offender["t"] for offender in details["offenders"]], [_epoch_ms(after_close)]
+            )
+            self.assertNotIn(_epoch_ms(self._CLOSE), [o["t"] for o in details["offenders"]])
+
+    def test_the_supplied_file_is_never_modified(self) -> None:
+        """Filtering in place rewrites an operator's own file, and the sidecar
+        then claims a hash of bytes that no longer exist."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            supplied = self._rth_file(directory)
+            before = supplied.read_bytes()
+
+            status, _, err, _ = self._replay(directory, bars=supplied)
+
+            self.assertEqual(status, 0, err)
+            self.assertEqual(supplied.read_bytes(), before)
+
+    def test_the_replay_argv_points_at_the_written_series_not_the_supplied_file(self) -> None:
+        """Pointing at `args.bars` replays the UNFILTERED series while the
+        sidecar claims a filter: the operator's file is not what gets walked."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            supplied = self._rth_file(directory)
+
+            status, out, err, _ = self._replay(directory, bars=supplied, fmt="json")
+
+            self.assertEqual(status, 0, err)
+            answer = json.loads(out)
+            argv = answer["replay_argv"]
+            self.assertEqual(
+                argv[argv.index("--bars") + 1], str(directory / "VST_2026-09-21.bars.json")
+            )
+            self.assertNotIn(str(supplied), argv)
+
+    def test_a_supplied_file_that_is_not_the_published_shape_exits_2(self) -> None:
+        """A usage error, not a statement about the pick: the operator named a
+        path that is not the shape `--bars` publishes. Parsing with no shape
+        check raises a traceback instead."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            cases = {
+                "not_json": "{not json",
+                "not_a_list": json.dumps({"bars": []}),
+                "bar_not_object": json.dumps([[1, 2]]),
+                "t_missing": json.dumps([{"open": 1.0}]),
+                "t_not_int": json.dumps([{"t": "1790170200000"}]),
+            }
+            for reason, text in cases.items():
+                with self.subTest(reason=reason):
+                    supplied = directory / f"{reason}.json"
+                    supplied.write_text(text)
+
+                    status, out, err, _ = self._replay(directory, bars=supplied, fmt="json")
+
+                    self.assertEqual(status, 2)
+                    self.assertEqual(out, "")
+                    envelope = json.loads(err.strip().splitlines()[-1])
+                    self.assertEqual(envelope["code"], "bars_unreadable")
+                    self.assertEqual(envelope["reason"], reason)
+                    self.assertEqual(envelope["details"]["path"], str(supplied))
+
+    def test_a_boolean_t_is_refused_as_a_wrong_type_not_read_as_one(self) -> None:
+        """`True` IS an `int` in Python, so an `isinstance` check lets it
+        through into the arithmetic -- and the engine refuses a boolean `t`
+        with its own `wrong_type`, a worse place to find out."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            supplied = directory / "boolean.json"
+            supplied.write_text(json.dumps([{"t": True, "open": 1.0}]))
+
+            status, _, err, _ = self._replay(directory, bars=supplied, fmt="json")
+
+            self.assertEqual(status, 2)
+            self.assertEqual(json.loads(err.strip().splitlines()[-1])["reason"], "t_not_int")
+
+    def test_a_supplied_file_gets_a_sidecar_with_both_hashes(self) -> None:
+        """One hash cannot distinguish what the operator handed over from what
+        was walked -- and those differ exactly when the filter dropped
+        something."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            supplied = self._rth_file(directory)
+
+            status, out, err, _ = self._replay(directory, bars=supplied, fmt="json")
+
+            self.assertEqual(status, 0, err)
+            sidecar = self._sidecar(out)
+            bars_path = pathlib.Path(json.loads(out)["bars_path"])
+            self.assertEqual(sidecar["source"], "file")
+            self.assertEqual(sidecar["source_path"], str(supplied))
+            self.assertEqual(
+                sidecar["source_sha256"], hashlib.sha256(supplied.read_bytes()).hexdigest()
+            )
+            self.assertEqual(sidecar["sha256"], hashlib.sha256(bars_path.read_bytes()).hexdigest())
+            self.assertGreater(sidecar["counts"]["dropped_at_close"], 0)
+            self.assertNotEqual(sidecar["sha256"], sidecar["source_sha256"])
+
+    def test_a_supplied_file_that_stops_before_the_deadline_is_refused(self) -> None:
+        """Section 6.6's most valuable new guard, and it is on THIS path: a
+        hand-built file that stops before the entry deadline publishes a
+        `no_fill` with an empty trace, which reads exactly like a pick that
+        never filled. Applying the right-edge check on the fetch path only
+        leaves the hand-built file unguarded."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            supplied = directory / "short.bars.json"
+            supplied.write_text(
+                json.dumps(
+                    _published(*(self.WALK_START + dt.timedelta(minutes=n) for n in range(3)))
+                )
+            )
+
+            status, out, err, _ = self._replay(directory, bars=supplied, fmt="json")
+
+            self.assertEqual(status, 7)
+            self.assertEqual(out, "")
+            envelope = json.loads(err.strip().splitlines()[-1])
+            self.assertEqual(envelope["code"], "bars_window_unservable")
+            self.assertEqual(envelope["reason"], "vendor_served_short")
+            self.assertEqual(
+                envelope["details"]["last_bar_t"],
+                _epoch_ms(self.WALK_START + dt.timedelta(minutes=2)),
+            )
+            self.assertEqual(sorted(p.name for p in directory.glob("VST_*")), [])
+
+    def test_an_hourly_supplied_file_refuses_rather_than_being_called_one_minute(self) -> None:
+        """The granularity the sidecar publishes is MEASURED, so a literal
+        `"1m"` would assert one-minute bars about an hourly file. On this path
+        the refusal has to name the file, because the operator wrote it."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            supplied = directory / "hourly.bars.json"
+            supplied.write_text(
+                json.dumps(
+                    _published(*(self.WALK_START + dt.timedelta(hours=n) for n in range(6)))
+                    + _published(
+                        *(self.AFTER_DEADLINE + dt.timedelta(hours=n) for n in range(5)),
+                        price=11.0,
+                    )
+                )
+            )
+
+            status, out, err, _ = self._replay(directory, bars=supplied, fmt="json")
+
+            self.assertEqual(status, 1)
+            self.assertEqual(out, "")
+            envelope = json.loads(err.strip().splitlines()[-1])
+            self.assertEqual(envelope["code"], "bars_wrong_granularity")
+            self.assertEqual(envelope["reason"], "not_one_minute")
+            self.assertEqual(envelope["details"]["modal_spacing_ms"], 3_600_000)
+            self.assertEqual(envelope["details"]["path"], str(supplied))
+            self.assertEqual(sorted(p.name for p in directory.glob("VST_*")), [])
+
+    def test_a_dropped_bar_missing_a_price_is_recorded_not_a_traceback(self) -> None:
+        """Only `t` is checked on the way in, so a bar can reach the grid with
+        no `high`. If that bar is the one the grid excludes, the engine never
+        sees it -- so reading its quadruple with `[]` turns an operator's
+        malformed file into a stack trace from a laboratory command."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            holed = {"t": _epoch_ms(self._CLOSE), "open": 20.0, "low": 19.5, "close": 20.1}
+            supplied = directory / "holed.bars.json"
+            supplied.write_text(
+                json.dumps(
+                    [
+                        *_published(*(self.WALK_START + dt.timedelta(minutes=n) for n in range(3))),
+                        holed,
+                        *_published(
+                            *(self.AFTER_DEADLINE + dt.timedelta(minutes=n) for n in range(3)),
+                            price=11.0,
+                        ),
+                    ]
+                )
+            )
+
+            status, out, err, _ = self._replay(directory, bars=supplied, fmt="json")
+
+            self.assertEqual(status, 0, err)
+            dropped = self._sidecar(out)["close_bar_drop"]["dropped"]
+            self.assertEqual([drop["t"] for drop in dropped], [_epoch_ms(self._CLOSE)])
+            self.assertEqual(
+                dropped[0]["bar"], {"open": 20.0, "high": None, "low": 19.5, "close": 20.1}
+            )
+
+
+class TheProvenanceSidecarMakesAPublishedNumberRecheckableTest(_FetchingTestCase):
+    """The incident's bar file was lost, so its session filter and its
+    close-bar treatment cannot be reconstructed at all -- which is why the
+    retracted 1.05% cannot be audited even now that it is known wrong.
+
+    Everything the run constructed therefore travels in a file beside the
+    bars, so a reader holding the two can recheck a published number without
+    the tool.
+    """
+
+    def test_the_sidecar_carries_the_session_filter_the_run_used(self) -> None:
+        """Recording only the exchange is the SMMT loss again: the venue's name
+        does not say which sessions were in the window, where each one opened
+        and closed, or which were half days."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+
+            status, out, err, _ = self._replay(directory)
+
+            self.assertEqual(status, 0, err)
+            self.assertEqual(
+                pathlib.Path(json.loads(out)["bars_provenance_path"]),
+                directory / "VST_2026-09-21.bars.provenance.json",
+            )
+            session_filter = self._sidecar(out)["session_filter"]
+            self.assertEqual(session_filter["exchange"], "XNYS")
+            self.assertEqual(session_filter["predicate"], "open_ms <= t < close_ms")
+            sessions = session_filter["sessions"]
+            grid = session_grid(self.WALK_START, self.AFTER_DEADLINE, mic="XNYS")
+            self.assertEqual(
+                [row["session"] for row in sessions][: len(grid)],
+                [bounds.session.isoformat() for bounds in grid],
+            )
+            self.assertEqual(sessions[0]["open_t"], _epoch_ms(self.WALK_START))
+            self.assertEqual(
+                sessions[0]["close_t"],
+                _epoch_ms(dt.datetime(2026, 9, 21, 20, 0, tzinfo=dt.UTC)),
+            )
+            self.assertIs(sessions[0]["half_day"], False)
+
+    def test_the_predicate_string_matches_the_code_that_filtered(self) -> None:
+        """Two spellings of one rule is the defect the engine's own `walked`
+        docstring warns about: the string a reader applies by hand has to be
+        the string the filter applied, and every written bar has to satisfy it
+        against one of the sessions the same file lists."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+
+            status, out, err, _ = self._replay(directory, payload=self._tape_through_the_close())
+
+            self.assertEqual(status, 0, err)
+            sidecar = self._sidecar(out)
+            self.assertEqual(sidecar["session_filter"]["predicate"], GRID_PREDICATE)
+            sessions = sidecar["session_filter"]["sessions"]
+            for stamp in self._stamps(out):
+                holding = [row for row in sessions if row["open_t"] <= stamp < row["close_t"]]
+                with self.subTest(t=stamp):
+                    self.assertEqual(len(holding), 1)
+
+    def test_the_drop_count_and_the_drop_list_cannot_disagree(self) -> None:
+        """One traversal produces both. A count written from one pass and a
+        list from another describe two different series, and a reader cannot
+        tell which the number came from."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+
+            status, out, err, _ = self._replay(directory, payload=self._tape_through_the_close())
+
+            self.assertEqual(status, 0, err)
+            sidecar = self._sidecar(out)
+            self.assertEqual(
+                sidecar["counts"]["dropped_at_close"],
+                len(sidecar["close_bar_drop"]["dropped"]),
+            )
+            self.assertGreater(sidecar["counts"]["dropped_at_close"], 0)
+            self.assertEqual(sidecar["close_bar_drop"]["applied"], True)
+
+    def test_the_narrowed_count_is_the_discriminating_one(self) -> None:
+        """`dropped_at_close` is near-constant at one per session -- 91.34% of
+        real pairs carry exactly one -- so on its own it carries no signal.
+        The number that does is how many of those bars' ranges left the range
+        the rest of their session traded."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            second_close = dt.datetime(2026, 10, 1, 20, 0, tzinfo=dt.UTC)
+            payload = [
+                *_aggs(self.WALK_START, 3),
+                # 2026-09-21's close bar runs past everything the session
+                # traded: the real CRSR shape.
+                {"t": _epoch_ms(self._CLOSE), "o": 10.89, "h": 12.80, "l": 10.61, "c": 12.79},
+                *_aggs(self.AFTER_DEADLINE, 3, price=11.0),
+                # 2026-10-01's close bar sits inside its session's range.
+                {"t": _epoch_ms(second_close), "o": 11.1, "h": 11.4, "l": 10.6, "c": 11.2},
+            ]
+
+            status, out, err, _ = self._replay(directory, payload=payload)
+
+            self.assertEqual(status, 0, err)
+            sidecar = self._sidecar(out)
+            self.assertEqual(sidecar["counts"]["dropped_at_close"], 2)
+            self.assertEqual(sidecar["close_bar_drop"]["range_narrowed"], 1)
+            narrowed = [
+                drop
+                for drop in sidecar["close_bar_drop"]["dropped"]
+                if drop["outside_rest_of_session"]
+            ]
+            self.assertEqual([drop["t"] for drop in narrowed], [_epoch_ms(self._CLOSE)])
+
+    def test_the_sidecar_states_the_deadline_beside_the_last_bar(self) -> None:
+        """The window without the quantity the series has to reach cannot be
+        checked: a reader needs `entry_deadline_t` and `last_bar_t` in one
+        object to see that the ladder's expiry was observable at all."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+
+            status, out, err, _ = self._replay(directory)
+
+            self.assertEqual(status, 0, err)
+            config = json.loads(pathlib.Path(json.loads(out)["config_path"]).read_text())
+            window = self._sidecar(out)["window"]
+            self.assertEqual(window["entry_deadline_t"], config["entry_deadline"]["value"])
+            self.assertEqual(window["from_t"], config["walk_start"]["value"])
+            self.assertEqual(window["last_bar_t"], max(self._stamps(out)))
+            self.assertGreaterEqual(window["last_bar_t"], window["entry_deadline_t"])
+
+    def test_a_shortened_margin_is_stated_not_inferred(self) -> None:
+        """A single `clamped: true` flag is not joinable to anything: a reader
+        cannot tell how much margin was lost or why. So the request, what was
+        served and the session that capped it all travel together.
+
+        Measured: no fixture record truncates the margin at the memo's own
+        `now`, so this runs VST on 2026-10-03, where the vendor's calendar day
+        caps the window one session past the deadline's own session.
+        """
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+
+            status, out, err, _ = self._replay(
+                directory, now=dt.datetime(2026, 10, 3, 8, 14, 3, tzinfo=dt.UTC)
+            )
+
+            self.assertEqual(status, 0, err)
+            window = self._sidecar(out)["window"]
+            self.assertEqual(window["margin_sessions_requested"], 2)
+            self.assertEqual(window["margin_sessions_served"], 1)
+            self.assertEqual(window["last_servable_session"], "2026-10-02")
+            self.assertEqual(
+                window["to_t"], _epoch_ms(dt.datetime(2026, 10, 2, 20, 0, tzinfo=dt.UTC))
+            )
+
+    def test_the_sha256_is_the_sha256_of_the_bars_file_bytes(self) -> None:
+        """Hashing the in-memory list gives a digest no reader can reproduce.
+        `shasum -a 256 <bars_path>` has to answer the sidecar's own number."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+
+            status, out, err, _ = self._replay(directory)
+
+            self.assertEqual(status, 0, err)
+            bars_path = pathlib.Path(json.loads(out)["bars_path"])
+            self.assertEqual(
+                self._sidecar(out)["sha256"],
+                hashlib.sha256(bars_path.read_bytes()).hexdigest(),
+            )
+
+
+class TheCorporateActionGuardIsAskedOnEveryRunTest(_FetchingTestCase):
+    """A window that crosses a split or a material special dividend carries a
+    fabricated price step in RAW bars, and a resting ladder replayed across it
+    models an order state no broker would have kept: real brokers cancel
+    resting orders on a corporate action.
+
+    So the question is asked on EVERY run rather than behind a return
+    threshold, and both of its unhappy answers refuse.
+    """
+
+    def test_a_split_inside_the_window_refuses_the_run(self) -> None:
+        """Gating the lookup behind a move threshold would never ask it on a
+        normal window, which is the shape #1090 removed: a uniform rescaling
+        cancels out of the return, so only a window that CROSSES the break
+        carries the step -- and its return need not look extreme at all."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            found = _FakeActionsLookup(
+                CorporateActionsAnswer(found=True, detail="split 1:4 executed 2026-09-28")
+            )
+
+            status, out, err, _ = self._replay(directory, lookup=found, fmt="json")
+
+            self.assertEqual(status, 1)
+            self.assertEqual(out, "")
+            envelope = json.loads(err.strip().splitlines()[-1])
+            self.assertEqual(envelope["code"], "bars_corporate_action")
+            self.assertEqual(envelope["reason"], "split")
+            self.assertIn("split 1:4 executed 2026-09-28", envelope["message"])
+            self.assertEqual(envelope["details"]["detail"], "split 1:4 executed 2026-09-28")
+            self.assertFalse(envelope["retryable"])
+
+    def test_the_lookup_window_is_padded_with_the_module_s_own_constants(self) -> None:
+        """The padding belongs to the module that owns the question: an action
+        executed just before the window still poisons the raw bars inside it,
+        and a record date skews the other way. Re-spelling 3 and 1 here is how
+        the two drift apart."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            clean = _FakeActionsLookup()
+
+            status, out, err, _ = self._replay(directory, lookup=clean, fmt="json")
+
+            self.assertEqual(status, 0, err)
+            config = json.loads(pathlib.Path(json.loads(out)["config_path"]).read_text())
+            window = bar_window(
+                walk_start=dt.datetime.fromtimestamp(config["walk_start"]["value"] / 1000, dt.UTC),
+                entry_deadline=dt.datetime.fromtimestamp(
+                    config["entry_deadline"]["value"] / 1000, dt.UTC
+                ),
+                exit_instant=exit_instant(self.trades[self._PICK]),
+                mic="XNYS",
+                now=self.NOW,
+            )
+            self.assertEqual(len(clean.calls), 1)
+            ticker, start, end = clean.calls[0]
+            self.assertEqual(ticker, "VST")
+            self.assertEqual(ACTION_WINDOW_PRE_CALENDAR_DAYS, 3)
+            self.assertEqual(ACTION_WINDOW_POST_CALENDAR_DAYS, 1)
+            self.assertEqual(start, window.start.date() - dt.timedelta(days=3))
+            self.assertEqual(end, window.end.date() + dt.timedelta(days=1))
+
+    def test_a_lookup_that_cannot_answer_refuses_rather_than_writing_the_bars(self) -> None:
+        """The block this composes answers an unanswerable question with "carry,
+        counted", which is a DEFERRAL: the nightly sweep asks again in 24 hours
+        and the row is published neither clean nor dirty.
+
+        A one-shot command has no sweep, so its only honest deferral is a
+        refusal the operator can re-run. Writing the bars with a
+        `lookup_failed` verdict publishes a run whose basis was never checked,
+        which is the incident this whole design exists for.
+        """
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            mute = _FakeActionsLookup(
+                raises=CorporateActionsLookupError("no pre-ex-date close for VST@2026-09-25")
+            )
+
+            status, out, err, _ = self._replay(directory, lookup=mute, fmt="json")
+
+            self.assertEqual(status, 7)
+            self.assertEqual(out, "")
+            envelope = json.loads(err.strip().splitlines()[-1])
+            self.assertEqual(envelope["code"], "corporate_actions_unanswered")
+            self.assertEqual(envelope["reason"], "lookup_failed")
+            self.assertTrue(envelope["retryable"])
+            self.assertEqual(envelope["details"]["ticker"], "VST")
+            self.assertIn("no pre-ex-date close", envelope["details"]["vendor_message"])
+            self.assertEqual(sorted(p.name for p in directory.glob("VST_*")), [])
+
+    def test_the_lookup_is_asked_before_any_bar_is_fetched(self) -> None:
+        """Ordering the lookup after the fetch spends metered quota -- Polygon
+        is five requests a minute on the free tier -- on a run that refuses."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            found = _FakeActionsLookup(
+                CorporateActionsAnswer(found=True, detail="split 1:4 executed 2026-09-28")
+            )
+
+            status, _, _, calls = self._replay(directory, lookup=found)
+
+            self.assertEqual(status, 1)
+            self.assertEqual(calls, [], "a refused run spends no vendor quota on bars")
+            self.assertEqual(len(found.calls), 1)
+
+    def test_only_a_clean_verdict_is_ever_written(self) -> None:
+        """A three-value sidecar vocabulary, two of whose values mean "do not
+        trust this run", is a field a reader has to interpret. "Asked and
+        clean" is the written file; the other two answers are refusals with
+        their own codes, so holding a sidecar means the lookup answered."""
+        branches = (
+            (0, _FakeActionsLookup()),
+            (1, _FakeActionsLookup(CorporateActionsAnswer(found=True, detail="split 1:4"))),
+            (7, _FakeActionsLookup(raises=CorporateActionsLookupError("vendor down"))),
+        )
+        for expected, lookup in branches:
+            with self.subTest(status=expected), TemporaryDirectory() as tmp:
+                directory = pathlib.Path(tmp)
+
+                status, out, err, _ = self._replay(directory, lookup=lookup, fmt="json")
+
+                self.assertEqual(status, expected, err)
+                sidecars = sorted(directory.glob("*.bars.provenance.json"))
+                if expected != 0:
+                    self.assertEqual(sidecars, [])
+                    continue
+                self.assertEqual(
+                    self._sidecar(out)["corporate_actions"]["verdict"],
+                    "none",
+                )
+                self.assertIsNone(self._sidecar(out)["corporate_actions"]["detail"])
+
+
 class TheHelpTextIsThePublishedSurfaceTest(unittest.TestCase):
     """``usage=argparse.SUPPRESS`` with a raw-description formatter means
     argparse generates no option list, so a flag the hand-written help text
@@ -2326,6 +3002,44 @@ class TheHelpTextIsThePublishedSurfaceTest(unittest.TestCase):
         block = self._help().split("OPTIONS", 1)[1].split("OUTPUT", 1)[0]
 
         self.assertIn("--bar-cache", block)
+
+    def test_every_flag_the_parser_takes_appears_in_the_help_text(self) -> None:
+        """Nothing pinned `_USAGE` before this. The parser is built with
+        `usage=argparse.SUPPRESS` and a raw-description formatter, so argparse
+        generates no option list at all -- a flag added to the parser and not
+        to the hand-written text is invisible to every caller."""
+        block = self._help().split("OPTIONS", 1)[1].split("OUTPUT", 1)[0]
+
+        for action in _parser()._actions:
+            for option in action.option_strings:
+                # `-h` / `--help` are argparse's own and are not part of this
+                # command's published surface.
+                if option in ("-h", "--help"):
+                    continue
+                with self.subTest(option=option):
+                    self.assertIn(option, block)
+
+    def test_the_usage_block_does_not_promise_an_offline_run_it_cannot_give(self) -> None:
+        """The command fetches its bars unless `--bars` is given, and asks the
+        price vendor about corporate actions on EVERY run unless that answer is
+        already cached. "Runs offline" was true and is not."""
+        usage = self._help().split("OPTIONS", 1)[0]
+
+        self.assertNotIn("runs offline", usage)
+        for token in ("--bars", "corporate action", "bar cache"):
+            with self.subTest(token=token):
+                self.assertIn(token, usage)
+
+    def test_the_output_block_names_the_sidecar_and_the_four_files(self) -> None:
+        """Two files became four: the document, the configuration, the bars and
+        their provenance. A published block that says two tells the operator
+        the command does less than it does."""
+        text = self._help()
+        options = text.split("OPTIONS", 1)[1].split("OUTPUT", 1)[0]
+        output = text.split("OUTPUT", 1)[1].split("EXIT CODES", 1)[0]
+
+        self.assertIn("four files", options)
+        self.assertIn("bars_provenance_path", output)
 
 
 class TheSeamsAreReachableFromATestTest(_CommandTestCase):
