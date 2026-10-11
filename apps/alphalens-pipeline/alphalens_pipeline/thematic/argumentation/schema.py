@@ -8,7 +8,7 @@ weighted score) are NOT in this schema. Entry/exit price levels are computed
 deterministically by ``alphalens_pipeline.thematic.trade_setup`` and persisted
 as the ``brief_trade_setup`` JSON; the LLM only composes narrative — the LLM only composes
 narrative around them. See doctrine
-``feedback_llm_training_cutoff_numerical_data_2026_05_17``.
+``fb_llm_cutoff_260517``.
 """
 
 from __future__ import annotations

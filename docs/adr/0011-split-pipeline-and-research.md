@@ -57,7 +57,7 @@ apps/web/                     ← SvelteKit dashboard (unchanged)
   universes (S&P 500/400/600 PIT yamls), factors.
 - `core/` — candidates queue plumbing.
 - `scorers/` — reusable validated-scorer library carved out of research
-  per [`feedback_validated_paradigm_scorer_reuse_2026_05_16`].
+  per [`fb_scorer_reuse_260516`].
 
 The CLI binary `alphalens` is registered in
 `apps/alphalens-pipeline/pyproject.toml`. Research-side commands
@@ -145,7 +145,7 @@ arc (since merged to `main` — see [ADR 0009](0009-django-replaces-fastapi.md))
   `DEFAULT_DATA_ROOT` from PR2), `CLAUDE.md` / `README.md` restructure,
   this ADR.
 
-[`feedback_validated_paradigm_scorer_reuse_2026_05_16`]: ../../.claude/projects/-Users-jacoren-Developer-Personal-AlphaLens/memory/feedback_validated_paradigm_scorer_reuse_2026_05_16.md
+[`fb_scorer_reuse_260516`]: ../../.claude/projects/-Users-jacoren-Developer-Personal-AlphaLens/memory/fb_scorer_reuse_260516.md
 
 ## Amendment 2026-10-03 — `data/` is a shared tier, not live infrastructure
 

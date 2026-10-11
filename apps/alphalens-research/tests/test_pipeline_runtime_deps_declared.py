@@ -14,8 +14,7 @@ Why this exists:
   workspace-wide via ``drf-spectacular``. Local tests + dev CLI both
   passed; the freshly-rebuilt pipeline image crashed at
   ``alphalens --help`` because the CLI eagerly registers the
-  ``templates`` subapp at startup. See
-  ``feedback_pipeline_image_manual_rebuild_after_merge``.
+  ``templates`` subapp at startup. See ``fb_pipeline_rebuild``.
 
   ``uv export --no-dev --package alphalens-pipeline`` is the source of
   truth — it returns the exact set of distributions ``uv sync`` would

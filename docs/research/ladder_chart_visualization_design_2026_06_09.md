@@ -145,7 +145,7 @@ expanded at once. Lazy-mount: the chart only instantiates when a row is expanded
 ## 5. Honesty & correctness caveats
 
 These are load-bearing, not cosmetic — a user acts on this with real money
-([[feedback_dont_oversimplify_money_entrusted_2026_06_05]]):
+([[fb_retail_shortcut_260605]]):
 
 1. **Modeled, not executed.** Markers are bar-replay fills, no broker, no slippage. Label every
    surface `modeled / hypothetical / backtest fill`; never "executed" or bare "P&L".

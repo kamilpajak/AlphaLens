@@ -54,6 +54,6 @@ active-alpha generation product:
 ## References
 
 - `CLAUDE.md` — "Research lab posture (2026-04-25 →)" section
-- Memory: `project_research_infrastructure_pivot.md`
+- Memory: `proj_research_pivot.md`
 - `docs/research/paradigm_failures_postmortem.md`
 - ADR 0005 (closed layers retention policy)

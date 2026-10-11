@@ -4,7 +4,7 @@
 **Status:** LOCKED — 6×/day approved
 **Track:** epic #295 PR-F (issue #300)
 **Author:** session 2026-05-30
-**Related:** `project_exchange_agnostic_calendar_2026_05_30.md`, `feedback_zen_deepseek_first_always_2026_05_28.md`
+**Related:** `proj_exchange_mic_260530.md`, `fb_zen_deepseek_260528.md`
 
 ## Question
 

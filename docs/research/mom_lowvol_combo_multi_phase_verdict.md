@@ -49,7 +49,7 @@ With pre-registration + multi-phase audit:
 | pure_contrarian | 60d-DD + 5d bounce | FAIL | −0.88 (single) | −52% |
 | mom_lowvol_combo | z(mom)−z(vol) | FAIL | +0.49 (5-phase mean) | −5.7% |
 
-Reinforces the strategic pivot (`project_research_infrastructure_pivot.md` 2026-04-25): retail price-only factor strategies on AlphaLens R2000-like PIT universe do not survive phase-robust validation.
+Reinforces the strategic pivot (`proj_research_pivot.md` 2026-04-25): retail price-only factor strategies on AlphaLens R2000-like PIT universe do not survive phase-robust validation.
 
 ## What's NOT closed
 

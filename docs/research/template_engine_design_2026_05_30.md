@@ -399,8 +399,8 @@ The existing 39-class event_type enum stays. The existing 4-signal scorer stays.
 - **Issue #143** (this design memo replaces the deferral note)
 - **Companion PR-G #318** (DeepSeek v4 swap) — required dependency: hybrid mode uses the canonical OpenRouter client for the Flash fallback path
 - **Ideal-shape doc** `docs/research/alphalens_ideal_shape_2026_05_29.md` — Track H extension in §6 + roadmap insert in §8
-- **`feedback_llm_training_cutoff_numerical_data_2026_05_17`** — extended doctrine: typed facts come from authoritative sources; templates extend this to article-derived facts
-- **`feedback_validated_paradigm_scorer_reuse_2026_05_16`** — Track G enabler for PR-5
+- **`fb_llm_cutoff_260517`** — extended doctrine: typed facts come from authoritative sources; templates extend this to article-derived facts
+- **`fb_scorer_reuse_260516`** — Track G enabler for PR-5
 - **DeepSeek v4 Pro zen review** (continuation id `4e44c29d-2447-4903-98a4-df6f959d1218`) — full architectural critique
 - **Perplexity Research** (45 sources, see `/tmp/perplexity_research.md`) — RavenPack / Refinitiv / GDELT / ICEWS / FANAL / ASEE / Plumber / Liberal Event Extraction industry survey
 

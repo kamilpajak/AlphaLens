@@ -194,7 +194,7 @@ Per design doc §8 Bonferroni n=2: both splits must pass independently. OOS coll
 - `alphalens/archive/screeners/insider/` **retain for backtest-only reference** (no registry removal — same pattern as Layer 2c lean).
 - `launchd/com.alphalens.watchdog.insider.plist` — **never loaded** (we did not deploy; no systemd/launchctl action needed).
 - No Layer 3 queue integration. `SOURCE_PRIORITY["insider"]` was never registered; leave as-is.
-- Memory notes updated: `project_pivot_alt_data.md` marked CLOSED; Layer 2d appended to `project_archive_decisions.md`.
+- Memory notes updated: `project_pivot_alt_data.md` marked CLOSED; Layer 2d appended to `proj_archive_decisions.md`.
 
 Next candidate (open): **Layer 3 rejection-prediction classifier** per Layer 2b post-mortem §Pivot direction Option B — reuse 6 months of Layer 3 BUY/HOLD/SELL decisions as panel data, train classifier on pre-decision features. Alternative: short-interest or options-flow alt data.
 

@@ -10,8 +10,8 @@ Pins three things across both Pro and Flash templates:
      - includes a ``<template_facts>`` block listing each key/value
      - names the source ``template_id`` so the audit trail is in-prompt
      - carries a verbatim-citation instruction (extends the
-       ``feedback_llm_training_cutoff_numerical_data_2026_05_17`` doctrine
-       to article-derived facts) instructing the model to use these
+       ``fb_llm_cutoff_260517`` doctrine to article-derived facts)
+       instructing the model to use these
        values WITHOUT paraphrase / normalisation / unit conversion.
 
 3. The template_facts block carries the same anti-prompt-injection clause

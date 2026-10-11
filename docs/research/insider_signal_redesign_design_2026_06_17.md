@@ -27,7 +27,7 @@ The thematic screener scores each candidate on opportunistic insider buying (Coh
 
 ### 1.3 Blast radius (bounded)
 
-Per [[reference_candidate_lifecycle_selection_vs_ordering_2026_06_13]]: insider does **not** gate SELECTION (catalyst + map-themes gates + mcap own that). The percentile is **display-only** (card chip + brief LLM prompt line). `insider_is_positive` (absolute `score_usd > $50k`) feeds **ordering** (`layer4_weighted_score`, 2× weight) — currently always False → contributes nothing. So no capital is misallocated today, but: (a) the card/brief mislead the human on 85% of cards, and (b) the strongest-weighted ordering signal is dead.
+Per [[ref_lifecycle_260613]]: insider does **not** gate SELECTION (catalyst + map-themes gates + mcap own that). The percentile is **display-only** (card chip + brief LLM prompt line). `insider_is_positive` (absolute `score_usd > $50k`) feeds **ordering** (`layer4_weighted_score`, 2× weight) — currently always False → contributes nothing. So no capital is misallocated today, but: (a) the card/brief mislead the human on 85% of cards, and (b) the strongest-weighted ordering signal is dead.
 
 ## 2. Evidence base (Perplexity deep-research 2026-06-17, 18 sources)
 

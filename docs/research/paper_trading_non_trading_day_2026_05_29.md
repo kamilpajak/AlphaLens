@@ -144,7 +144,7 @@ liquidity-floor guard — not the universal "defer to 09:45" rule.
   participates (or doesn't) in the opening cross + decides whether to
   default to `tif="opg"` for the first day.
 
-Track F in `project_alphalens_ideal_shape_2026_05_29.md` consumes
+Track F in `proj_ideal_shape_260529.md` consumes
 PR-D output for the cron migration.
 
 ## 5.1 Weekend news flow into Monday brief (not changing)
@@ -208,7 +208,7 @@ Known limitations (not in scope for PR-A; planned follow-ups):
   the Saturday/Sunday SPA read-experience, not the Monday execution
   path. **Planned PR-F:** 4×/day pipeline cadence (06:30 / 12:30 /
   18:30 / 23:30 UTC) per Track F in
-  `project_alphalens_ideal_shape_2026_05_29.md`. Polygon Starter
+  `proj_ideal_shape_260529.md`. Polygon Starter
   rate limit (15 req/min, ~21.6 K/day) gates this; verify quota
   budget before PR-F.
 
