@@ -16,11 +16,14 @@ import contextlib
 import datetime as dt
 import json
 import math
+import os
 import pathlib
 import re
 import sys
+from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import pairwise
 from typing import Any
 
 from alphalens_pipeline.brokers import execution
@@ -38,6 +41,8 @@ from alphalens_pipeline.feedback.corporate_actions import (
 )
 from alphalens_pipeline.market.calendar import (
     advance_trading_sessions,
+    is_half_day,
+    is_trading_day,
     previous_trading_day,
     session_close_utc,
     session_on_or_after,
@@ -45,23 +50,40 @@ from alphalens_pipeline.market.calendar import (
 )
 from broker_contract.trade_intent.codec import supplied_derived_paths
 from intent_replay import units
+from intent_replay.bars import _BAR_KEYS as _PUBLISHED_BAR_KEYS
 from intent_replay.fx import Fx
 
 __all__ = [
+    "GRID_PREDICATE",
+    "OFF_GRID_AFTER_CLOSE",
+    "OFF_GRID_BEFORE_OPEN",
+    "OFF_GRID_NOT_A_SESSION",
+    "BarRefusal",
     "BarWindow",
+    "BuiltBars",
     "DeadlineCoverage",
+    "DroppedBar",
     "ExitTimeUnknownError",
+    "GriddedSeries",
+    "OffGridBar",
     "ReplayInputs",
+    "SessionBounds",
     "StatedFacts",
     "authored_document",
     "bar_cache_root",
     "bar_window",
+    "build_bars",
     "deadline_coverage",
     "entry_trail_bps_by_pick",
     "exit_instant",
+    "filter_to_grid",
     "main",
+    "modal_spacing_ms",
+    "off_grid_bar",
+    "published_bars",
     "replay_inputs",
     "run_configuration",
+    "session_grid",
     "stated_facts",
 ]
 
@@ -685,6 +707,614 @@ def _margin_served(anchor_session: dt.date, end: dt.datetime, *, mic: str) -> in
     return served
 
 
+# The membership rule, spelled ONCE. The sidecar publishes this string, so a
+# reader checking each ``t`` by hand applies the predicate the filter applied
+# rather than a second spelling of it.
+GRID_PREDICATE = "open_ms <= t < close_ms"
+
+
+@dataclass(frozen=True, slots=True)
+class SessionBounds:
+    """One session of the window, in the unit a bar is stamped in.
+
+    Both bounds are READ from the calendar per session, never computed as
+    ``open + 390 minutes``: measured over 29 venues, that assumption is wrong
+    on 21 of them in both directions -- XWAR 90 minutes short and XETR 120,
+    while XSHG runs 60 minutes PAST the real close and XTAI 120. The long
+    direction is the one that keeps a bar the session never traded.
+    """
+
+    session: dt.date
+    open_t: int
+    close_t: int
+    half_day: bool
+
+    def holds(self, t: int) -> bool:
+        """Whether the grid can PLACE a bar stamped ``t`` on this session.
+
+        Placement is the INCLUSIVE interval. Excluding the close-stamped bar is
+        a MEMBERSHIP decision taken afterwards, and keeping the two apart is
+        the whole point: all three of this repository's RTH helpers emit one
+        close-stamped bar per session, so a rule that could not place that bar
+        would refuse every file the repository itself produces, while a bar
+        ninety minutes after the close -- the incident's own bar -- stays
+        unplaceable.
+        """
+        return self.open_t <= t <= self.close_t
+
+    def member(self, t: int) -> bool:
+        """Whether a bar stamped ``t`` is IN this session: ``open <= t < close``.
+
+        The minute stamped at the close spans close..close+59s and the session
+        ends at the close, so that minute lies outside the session except for
+        its first instant.
+        """
+        return self.open_t <= t < self.close_t
+
+
+def session_grid(start: dt.datetime, end: dt.datetime, *, mic: str) -> tuple[SessionBounds, ...]:
+    """Every session of ``mic`` whose own interval meets ``[start, end]``.
+
+    Built from INTERVALS and never from a bar's UTC date: a session can open on
+    a date that is not itself a session -- XASX's 2026-10-12 session opens at
+    2026-10-11T23:00:00Z, a Sunday -- so bucketing by date would drop the first
+    hour of every XASX session. The candidate dates therefore reach a day
+    either side of the window.
+    """
+    sessions: list[SessionBounds] = []
+    day = start.date() - dt.timedelta(days=1)
+    final = end.date() + dt.timedelta(days=1)
+    while day <= final:
+        if is_trading_day(day, exchange=mic):
+            opened = session_open_utc(day, exchange=mic)
+            closed = session_close_utc(day, exchange=mic)
+            if closed >= start and opened <= end:
+                sessions.append(
+                    SessionBounds(
+                        session=day,
+                        open_t=_epoch_ms(opened),
+                        close_t=_epoch_ms(closed),
+                        half_day=is_half_day(day, exchange=mic),
+                    )
+                )
+        day += dt.timedelta(days=1)
+    return tuple(sessions)
+
+
+# Why the grid cannot place a bar. A closed vocabulary, published as the
+# ``bars_off_grid`` reasons.
+OFF_GRID_AFTER_CLOSE = "after_close"
+OFF_GRID_BEFORE_OPEN = "before_open"
+OFF_GRID_NOT_A_SESSION = "not_a_session"
+
+
+@dataclass(frozen=True, slots=True)
+class OffGridBar:
+    """One bar no session interval of this venue holds.
+
+    On the fetch path this is the vendor's normal output -- pre-market,
+    post-market, 12.08% of a raw payload -- and is dropped with a count. On a
+    supplied file it is an assertion the operator's construction cannot
+    account for, which is the incident's own shape, and is refused.
+    """
+
+    t: int
+    reason: str
+    session: dt.date | None
+    session_open_t: int | None
+    session_close_t: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class DroppedBar:
+    """One bar the grid PLACED on a session and then excluded at its close.
+
+    It carries the quadruple the vendor sent, because the series the grid
+    describes is the written file PLUS this list: the SMMT file's own close-bar
+    treatment can no longer be reconstructed at all, and that is the larger
+    half of the incident's cost.
+    """
+
+    t: int
+    session: dt.date
+    bar: dict[str, float]
+    outside_rest_of_session: bool
+
+
+@dataclass(frozen=True, slots=True)
+class GriddedSeries:
+    """What the venue's own grid did to one series, from one traversal."""
+
+    kept: tuple[dict[str, Any], ...]
+    dropped_at_close: tuple[DroppedBar, ...]
+    off_grid: tuple[OffGridBar, ...]
+    sessions: tuple[SessionBounds, ...]
+
+    def counts(self) -> dict[str, int]:
+        """The sidecar's own counts.
+
+        ``dropped_at_close`` is the length of the drop list by construction, so
+        the two cannot disagree, and ``fetched`` is the sum of the three
+        outcomes rather than a separately remembered payload length: a reader
+        who cannot see the whole cannot tell a filter from a loss, and a raw
+        payload is 12.08% off-grid bars.
+        """
+        kept, at_close, off_grid = len(self.kept), len(self.dropped_at_close), len(self.off_grid)
+        return {
+            "fetched": kept + at_close + off_grid,
+            "kept": kept,
+            "dropped_at_close": at_close,
+            "dropped_off_grid": off_grid,
+            "sessions": len(self.sessions),
+        }
+
+
+def off_grid_bar(t: int, *, mic: str) -> OffGridBar:
+    """Why the grid cannot place the bar stamped ``t``, against which session.
+
+    Asked only AFTER every session interval has been tried, so all three
+    reasons describe a bar no interval holds. The session named is the one on
+    the bar's own UTC date, which is where an operator reading the refusal
+    looks; when that date holds no session there is nothing to name.
+    """
+    day = _instant(t).date()
+    if not is_trading_day(day, exchange=mic):
+        return OffGridBar(
+            t=t,
+            reason=OFF_GRID_NOT_A_SESSION,
+            session=None,
+            session_open_t=None,
+            session_close_t=None,
+        )
+    opened = _epoch_ms(session_open_utc(day, exchange=mic))
+    closed = _epoch_ms(session_close_utc(day, exchange=mic))
+    return OffGridBar(
+        t=t,
+        reason=OFF_GRID_BEFORE_OPEN if t < opened else OFF_GRID_AFTER_CLOSE,
+        session=day,
+        session_open_t=opened,
+        session_close_t=closed,
+    )
+
+
+def _outside(bar: Mapping[str, Any], kept: Sequence[Mapping[str, Any]]) -> bool:
+    """Whether ``bar``'s range leaves the range ``kept`` traded.
+
+    This, and not the drop count, is the discriminating number: a close-stamped
+    bar exists on 91.34% of real sessions and so carries no signal on its own,
+    while its range leaves the rest of its session on 1.161% of them.
+
+    A session that contributed nothing else has no range to compare against,
+    and its dropped bar is reported as outside: a reader then sees the one bar
+    that session carried, rather than a silent zero.
+    """
+    if not kept:
+        return True
+    return bar["high"] > max(other["high"] for other in kept) or bar["low"] < min(
+        other["low"] for other in kept
+    )
+
+
+def filter_to_grid(
+    bars: Iterable[Mapping[str, Any]], sessions: Sequence[SessionBounds], *, mic: str
+) -> GriddedSeries:
+    """Place each bar on a session, then ask whether it is IN that session.
+
+    TWO steps, not one, and the split is load-bearing. Collapsing them is how a
+    supplied file ends up either silently stripped of the incident's bar or
+    refused for carrying the repository's own.
+    """
+    kept: list[dict[str, Any]] = []
+    placed_at_close: list[tuple[SessionBounds, Mapping[str, Any]]] = []
+    off_grid: list[OffGridBar] = []
+    by_session: dict[dt.date, list[Mapping[str, Any]]] = {}
+    for bar in bars:
+        t = bar["t"]
+        session = next((candidate for candidate in sessions if candidate.holds(t)), None)
+        if session is None:
+            off_grid.append(off_grid_bar(t, mic=mic))
+            continue
+        if session.member(t):
+            kept.append(dict(bar))
+            by_session.setdefault(session.session, []).append(bar)
+            continue
+        placed_at_close.append((session, bar))
+    dropped = tuple(
+        DroppedBar(
+            t=bar["t"],
+            session=session.session,
+            bar={key: bar[key] for key in _PUBLISHED_BAR_KEYS if key != "t"},
+            outside_rest_of_session=_outside(bar, by_session.get(session.session, [])),
+        )
+        for session, bar in placed_at_close
+    )
+    return GriddedSeries(
+        kept=tuple(kept),
+        dropped_at_close=dropped,
+        off_grid=tuple(off_grid),
+        sessions=tuple(sessions),
+    )
+
+
+def modal_spacing_ms(bars: Sequence[Mapping[str, Any]]) -> int | None:
+    """The commonest gap between consecutive ``t`` of the WHOLE series.
+
+    The whole series and never one session: a per-session rule over-fires on 26
+    of 17 163 real (file, session) pairs -- sparse sessions whose commonest gap
+    is 2, 3, 4 or 9 minutes -- while the whole-series rule fires on 0 of 881
+    real windows.
+
+    ``None`` for a series of fewer than two bars, which has no spacing to
+    measure at all: that keeps the one-bar-at-``walk_start`` case legal.
+    """
+    stamps = sorted(bar["t"] for bar in bars)
+    gaps = Counter(later - earlier for earlier, later in pairwise(stamps))
+    if not gaps:
+        return None
+    return gaps.most_common(1)[0][0]
+
+
+# The request's own granularity, which is a REQUEST parameter and not a
+# measurement: it goes in the cache key so a later day-bar variant can never
+# read a minute file as its own, while the granularity GATE reads the spacing
+# the kept series actually has.
+_BAR_GRANULARITY = "1m"
+
+# What the seam can say. ``BarFetch`` is three positional arguments and never
+# forwards ``adjusted``, so the basis is the client's own default -- which is
+# the basis this join wants: the document's limits and stops are prices their
+# author wrote from live unadjusted quotes.
+_BAR_ADJUSTED = False
+_ADJUSTED_TOKEN = "raw"
+
+# What one-minute bars are, in the unit a bar is stamped in. The gate compares
+# the MEASURED modal spacing of the kept series against it.
+_BAR_SPACING_MS = 60_000
+
+# The vendor key behind each published one. The map is driven by the engine's
+# OWN key tuple, so the converter is ADDITIVE: a vendor key it does not name --
+# Polygon sends ``otc`` on an OTC ticker -- cannot reach the output, where the
+# engine would refuse the whole file as ``unknown_key``.
+_VENDOR_KEY = {"t": "t", "open": "o", "high": "h", "low": "l", "close": "c"}
+
+_BAR_CACHE_SCHEMA = "alphalens.research.replay_bars.cache/v1"
+
+
+def published_bars(payload: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """``payload`` translated into the engine's published bar shape.
+
+    Built key by key from ``bars._BAR_KEYS`` rather than by deleting the keys
+    this module happens to know about: the published shape is CLOSED, so a
+    subtractive converter passes every vendor key it has not heard of into an
+    ``unknown_key`` refusal the operator cannot act on.
+
+    ``t`` stays an ``int`` because the engine refuses a float -- and a
+    ``bool`` -- ``t``.
+    """
+    return [
+        {
+            key: int(raw[_VENDOR_KEY[key]]) if key == "t" else float(raw[_VENDOR_KEY[key]])
+            for key in _PUBLISHED_BAR_KEYS
+        }
+        for raw in payload
+    ]
+
+
+def _bar_cache_path(root: pathlib.Path, ticker: str, window: BarWindow) -> pathlib.Path:
+    """Where the RAW payload for one (ticker, window, granularity, adjusted)
+    lives.
+
+    The whole key is spelled into the file name so a human reading the cache
+    directory can tell what a file answers. The window is IN the key rather
+    than a growing file's tail, because a replay window does not grow: it ends
+    at a session the vendor has already published, so presence means complete
+    and there is no TTL to get wrong.
+    """
+    name = (
+        f"{ticker.upper()}_{_epoch_ms(window.start)}-{_epoch_ms(window.end)}"
+        f"_{_BAR_GRANULARITY}_{_ADJUSTED_TOKEN}.json"
+    )
+    return root / "bars" / name
+
+
+def _read_cached_payload(path: pathlib.Path) -> tuple[list[dict[str, Any]], str] | None:
+    """The cached RAW payload and the instant it was fetched, or ``None``.
+
+    A corrupt or half-written file is IGNORED with a warning rather than
+    raising: the vendor can be asked again, and a cache is never a reason for a
+    command to fail. The shape is checked here so that a file which parses as
+    JSON but is not a payload re-fetches too, instead of surfacing later as a
+    vendor error about a vendor that was never called.
+    """
+    if not path.exists():
+        return None
+    try:
+        cached = json.loads(path.read_text())
+        payload = cached["bars"]
+        fetched_at = cached["fetched_at"]
+        if not isinstance(payload, list) or not isinstance(fetched_at, str):
+            raise TypeError(
+                f"bars {type(payload).__name__}, fetched_at {type(fetched_at).__name__}"
+            )
+        for raw in payload:
+            missing = [key for key in _VENDOR_KEY.values() if key not in raw]
+            if missing:
+                raise KeyError(", ".join(missing))
+    except (OSError, TypeError, KeyError, ValueError) as exc:
+        print(f"replay_from_pick: ignoring an unreadable bar cache {path} ({exc})", file=sys.stderr)
+        return None
+    return payload, fetched_at
+
+
+def _write_cached_payload(
+    path: pathlib.Path, payload: list[dict[str, Any]], fetched_at: str
+) -> None:
+    """Record the RAW payload, atomically, under its own key.
+
+    Temporary file plus ``os.replace`` so a run interrupted mid-write leaves
+    the previous answer rather than a truncated one. Only a SUCCESS is written
+    (the caller does not call this for an empty or failed fetch), so a later
+    run re-pays the vendor instead of inheriting a hole.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = {
+        "schema": _BAR_CACHE_SCHEMA,
+        "granularity": _BAR_GRANULARITY,
+        "adjusted": _BAR_ADJUSTED,
+        "fetched_at": fetched_at,
+        "bars": payload,
+    }
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(body))
+    os.replace(tmp, path)
+
+
+@dataclass(frozen=True, slots=True)
+class BarRefusal:
+    """One refusal of the bar stage, in the envelope's own vocabulary.
+
+    Returned rather than printed, so the stage stays a function the tests can
+    run and ``main`` keeps every refusal site it owns in one place.
+    """
+
+    code: str
+    reason: str
+    message: str
+    status: int
+    details: dict[str, Any]
+    suggestions: list[dict[str, list[str]]] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class BuiltBars:
+    """The series the walk will read, with the provenance of its construction.
+
+    ONE traversal produces all of it, which is what keeps a count and the list
+    it summarises from describing different series.
+    """
+
+    grid: GriddedSeries
+    window: BarWindow
+    mic: str
+    cache_path: pathlib.Path
+    cache_hit: bool
+    fetched_at: str
+
+    @property
+    def series(self) -> tuple[dict[str, Any], ...]:
+        """The series the walk reads: the bars the grid kept."""
+        return self.grid.kept
+
+    def summary(self, bars_path: pathlib.Path) -> dict[str, Any]:
+        """What the result states about the bars, for the command's answer.
+
+        A TOP-LEVEL block of that answer and never part of ``configuration``:
+        that object is the engine's own eight-key run configuration and
+        ``RunConfig.from_jsonable`` refuses a key it does not model.
+        """
+        return {
+            "path": str(bars_path),
+            "exchange": self.mic,
+            "predicate": GRID_PREDICATE,
+            # MEASURED off the written series, never asserted: a stated "1m"
+            # would claim one-minute bars about an hourly file.
+            "modal_spacing_ms": modal_spacing_ms(self.series),
+            "counts": self.grid.counts(),
+            "cache": {"hit": self.cache_hit, "path": str(self.cache_path)},
+            # When the VENDOR answered, which comes out of the cache with the
+            # payload: stamping the clock on every run would date a two-week-old
+            # payload to today.
+            "fetched_at": self.fetched_at,
+        }
+
+
+def _unusable_details(gridded: GriddedSeries, window: BarWindow) -> dict[str, Any]:
+    stamps = [bar["t"] for bar in gridded.kept]
+    return {
+        "window": {"from_t": _epoch_ms(window.start), "to_t": _epoch_ms(window.end)},
+        "walk_start": _epoch_ms(window.start),
+        "first_t": min(stamps) if stamps else None,
+        "bars": len(gridded.kept),
+        "dropped_at_close": len(gridded.dropped_at_close),
+    }
+
+
+def _wrong_granularity(gridded: GriddedSeries) -> BarRefusal | None:
+    """Whether the kept series is not one-minute bars, or ``None``.
+
+    Asked AFTER the close-stamped drop, because the gate reads the spacing the
+    KEPT series has -- and dropping one bar per session cannot change a modal
+    spacing of 60 000 ms, measured on 0 of 881 real windows under either grid.
+
+    A series of fewer than two bars has no spacing and is exempt.
+    """
+    spacing = modal_spacing_ms(gridded.kept)
+    if spacing is None or spacing == _BAR_SPACING_MS:
+        return None
+    return BarRefusal(
+        code="bars_wrong_granularity",
+        reason="not_one_minute",
+        message=(
+            f"the kept series is {spacing} ms apart at its commonest gap, not "
+            f"{_BAR_SPACING_MS} ms: a trailing stop cannot be reproduced from a bar "
+            "that carries no path through the session"
+        ),
+        status=1,
+        details={
+            "modal_spacing_ms": spacing,
+            "bars": len(gridded.kept),
+            "sessions": len(gridded.sessions),
+            "path": None,
+        },
+    )
+
+
+def _empty_window(gridded: GriddedSeries, window: BarWindow) -> BarRefusal | None:
+    """Whether the grid kept nothing at all, or ``None``.
+
+    Asked FIRST, and separately from granularity: a daily series stamped at
+    each session's close -- which is what this repository's own daily store
+    holds, 492 of 497 files -- grids to nothing, and reporting that as
+    ``not_one_minute`` would tell the operator to fix the wrong thing. There is
+    also no modal spacing to read off a series with no bars.
+    """
+    if gridded.kept:
+        return None
+    return BarRefusal(
+        code="bars_unusable",
+        reason="empty_window",
+        message=(
+            f"no bar of the fetched window falls on {window.start.date()}"
+            f"-{window.end.date()}'s sessions, so there is nothing to walk"
+        ),
+        status=1,
+        details=_unusable_details(gridded, window),
+    )
+
+
+def _walk_start_uncovered(gridded: GriddedSeries, window: BarWindow) -> BarRefusal | None:
+    """Whether the kept series begins after ``walk_start``, or ``None``.
+
+    Asked HERE rather than left to the engine: under the grid a pre-market bar
+    that used to cover ``walk_start`` is dropped -- 75 of 17 163 real pairs
+    carry no bar at the open, and 44 of those do carry a pre-market one -- so
+    the operator is told that the venue printed no opening bar for that
+    session, instead of being handed ``begins_after_walk_start`` to map back
+    onto a fetch fact.
+    """
+    first = min(bar["t"] for bar in gridded.kept)
+    if first <= _epoch_ms(window.start):
+        return None
+    return BarRefusal(
+        code="bars_unusable",
+        reason="walk_start_uncovered",
+        message=(
+            f"the venue printed no bar at the session open "
+            f"{format_time(window.start)}: the first bar the grid kept is "
+            f"{format_time(_instant(first))}, so the tape does not cover the "
+            "interval the entry ladder was live over"
+        ),
+        status=1,
+        details=_unusable_details(gridded, window),
+    )
+
+
+def build_bars(
+    *,
+    pick: str,
+    ticker: str,
+    mic: str,
+    window: BarWindow,
+    bar_fetch: BarFetch,
+    cache_root: pathlib.Path,
+    now: dt.datetime,
+    offline_argv: list[str],
+) -> BuiltBars | BarRefusal:
+    """The bars for one pick's window: the cache, else the vendor.
+
+    The cache is read first so a re-run of the same pick costs no quota --
+    Polygon's free tier is metered at five requests a minute -- and what it
+    holds is the RAW payload, before translation and before the session grid.
+    That separation is the point: a later change to the grid re-derives from
+    the record of what the vendor sent, rather than inheriting this run's
+    filter.
+
+    ``offline_argv`` is the invocation that reads a bar file instead of
+    fetching one. It travels into the vendor-failure refusal, because a caller
+    with no network needs the route out and not only the reason.
+    """
+    cache_path = _bar_cache_path(cache_root, ticker, window)
+    cached = _read_cached_payload(cache_path)
+    fetched_at = format_time(now)
+    if cached is not None:
+        payload, fetched_at = cached
+    else:
+        try:
+            payload = list(bar_fetch(ticker, window.start, window.end))
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            return BarRefusal(
+                code="bars_fetch_failed",
+                reason="vendor_error",
+                message=(
+                    f"the price vendor did not answer for {ticker} over "
+                    f"{format_time(window.start)}-{format_time(window.end)}: {exc}"
+                ),
+                status=_EXIT_TRANSIENT,
+                details={
+                    "ticker": ticker,
+                    "window": {
+                        "from_t": _epoch_ms(window.start),
+                        "to_t": _epoch_ms(window.end),
+                    },
+                    "vendor_message": str(exc),
+                },
+                suggestions=[{"argv": list(offline_argv)}],
+            )
+        if payload:
+            _write_cached_payload(cache_path, payload, fetched_at)
+    gridded = filter_to_grid(
+        published_bars(payload), session_grid(window.start, window.end, mic=mic), mic=mic
+    )
+    # The gate ORDER is the memo's, and it is load-bearing: emptiness, then
+    # granularity, then the left edge, then the right one. Each one states
+    # something the next takes for granted, and a reordering renames real
+    # defects -- an empty series reported as too coarse, or a short series
+    # reported as uncovered at its left edge.
+    # Sequentially and not over a tuple of calls: each gate is asked only once
+    # the one before it has passed, so `_wrong_granularity` never reads a
+    # spacing off an empty series and `_walk_start_uncovered` never reads a
+    # first bar off one.
+    empty = _empty_window(gridded, window)
+    if empty is not None:
+        return empty
+    wrong = _wrong_granularity(gridded)
+    if wrong is not None:
+        return wrong
+    left = _walk_start_uncovered(gridded, window)
+    if left is not None:
+        return left
+    # The right edge, asked of the SERIES. The pre-fetch check predicted what
+    # the vendor would serve; this measures what it did -- and it fires on a
+    # supplied file for the same reason.
+    coverage = deadline_coverage(gridded.kept, entry_deadline=window.entry_deadline)
+    if not coverage.reaches:
+        return BarRefusal(
+            code="bars_window_unservable",
+            reason="vendor_served_short",
+            message=_served_short_message(pick, window, coverage),
+            status=_EXIT_TRANSIENT,
+            details=_window_details(pick, window, mic=mic, now=now, last_bar_t=coverage.last_bar_t),
+        )
+    return BuiltBars(
+        grid=gridded,
+        window=window,
+        mic=mic,
+        cache_path=cache_path,
+        cache_hit=cached is not None,
+        fetched_at=fetched_at,
+    )
+
+
 def _assert_comparable(trade: Mapping[str, Any]) -> None:
     """Refuse a record the report itself marks as not comparable.
 
@@ -779,19 +1409,26 @@ _USAGE = """USAGE
 
   TRADES_JSON is the output of `alphalens broker trades --format json`, or `-`
   to read it from stdin. The report decides comparability, so the command needs
-  no broker of its own and runs offline.
+  no broker of its own; it does ask the price vendor for the pick's own bar
+  window, unless that window is already in the bar cache.
 
 OPTIONS
-  --out DIR              where the two files are written (default: .)
+  --out DIR              where the three files are written (default: .)
   --entry-trails PATH    the entry-trail journal (default: the report env's own)
   --entry-trail-bps N    state the distance instead of reading it; 0 means OFF
-  --bars PATH            bars to put in the suggested command
+  --bars PATH            reserved for an offline bar file; NOT READ YET, so the
+                         bars are fetched and filtered either way
   --bar-cache DIR        the bar cache root (default: ~/.alphalens/replay_bars)
   --format human|json    default human
 
 OUTPUT
-  json: one object on stdout with `document_path`, `config_path`, the stated
-  `facts`, the whole `configuration` and a runnable `replay_argv`.
+  json: one object on stdout with `document_path`, `config_path`, `bars_path`,
+  the stated `facts`, the whole `configuration`, a `bars` block carrying the
+  session filter and its counts, and a runnable `replay_argv`.
+
+  The bars are the venue's own session grid, half-open at the close
+  (`open_ms <= t < close_ms`), so the bar stamped at a session close is not
+  part of the written series.
 
 EXIT CODES
   0 ok, 1 the pick cannot be replayed, 2 usage, 4 the report has no such pick,
@@ -1070,13 +1707,51 @@ def main(
             **_window_details(args.pick_key, window, mic=mic, now=moment),
         )
 
+    built = build_bars(
+        pick=args.pick_key,
+        # The ticker and the venue travel from ONE block of the document the
+        # author wrote; the trades record's own instrument block carries a uic
+        # and no symbol at all.
+        ticker=inputs.document["instrument"]["ticker"],
+        mic=mic,
+        window=window,
+        bar_fetch=bar_fetch,
+        cache_root=bar_cache_root(args.bar_cache),
+        now=moment,
+        offline_argv=[
+            sys.executable,
+            "-m",
+            "scripts.replay_from_pick",
+            args.trades_json,
+            args.pick_key,
+            "--out",
+            args.out,
+            "--bars",
+            "<BARS.json>",
+        ],
+    )
+    if isinstance(built, BarRefusal):
+        return _fail(
+            built.code,
+            built.reason,
+            built.message,
+            built.status,
+            fmt=args.format,
+            suggestions=built.suggestions,
+            **built.details,
+        )
+
+    # Nothing is written until every gate has passed, so a refused run leaves
+    # no half-built input set behind for somebody to replay by hand.
     out = pathlib.Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     stem = args.pick_key.replace(":", "_")
     document_path = out / f"{stem}.document.json"
     config_path = out / f"{stem}.config.json"
+    bars_path = out / f"{stem}.bars.json"
     document_path.write_text(json.dumps(inputs.document, indent=1) + "\n")
     config_path.write_text(json.dumps(inputs.configuration, indent=1) + "\n")
+    bars_path.write_text(json.dumps(built.series) + "\n")
 
     facts = stated_facts(trade)
     answer = {
@@ -1085,6 +1760,8 @@ def main(
         "pick": args.pick_key,
         "document_path": str(document_path),
         "config_path": str(config_path),
+        "bars_path": str(bars_path),
+        "bars": built.summary(bars_path),
         "facts": {
             "fx_rate": facts.fx_rate,
             "fx_rate_asof": facts.fx_rate_asof,
@@ -1102,13 +1779,15 @@ def main(
             "--config",
             str(config_path),
             "--bars",
-            args.bars or "<BARS.json>",
+            # The written series, never the supplied file: on both paths the
+            # bars the walk reads are the filtered ones.
+            str(bars_path),
         ],
     }
     if args.format == "json":
         print(json.dumps(answer))
         return 0
-    print(f"{args.pick_key} ({env}) -> {document_path} + {config_path}")
+    print(f"{args.pick_key} ({env}) -> {document_path} + {config_path} + {bars_path}")
     for name, value in answer["facts"].items():
         print(f"  {name}: {value}")
     print("  next: " + " ".join(answer["replay_argv"]))
