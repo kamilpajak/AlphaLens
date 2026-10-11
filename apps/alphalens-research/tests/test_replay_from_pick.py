@@ -20,13 +20,16 @@ import json
 import pathlib
 import unittest
 from tempfile import TemporaryDirectory
+from typing import Any
 from unittest import mock
 
+from alphalens_pipeline.brokers.automanager import state_paths
 from alphalens_pipeline.brokers.automanager.trades import TradesFilters, build_trades
 from broker_contract.trade_intent.codec import supplied_derived_paths
 from intent_replay.config import RunConfig
 from scripts.replay_from_pick import (
     authored_document,
+    bar_cache_root,
     entry_trail_bps_by_pick,
     main,
     replay_inputs,
@@ -517,10 +520,14 @@ class TheJournalledDistanceIsStatedNotInheritedTest(unittest.TestCase):
         self.assertIn("OFF:2026-09-21", distances)
 
 
-class TheCommandWritesBothInputsAndSaysHowToRunThemTest(unittest.TestCase):
-    """The entry point exists because hand-assembling the run is the error this
-    module is about: a driver written per pick is where the wrong rate, the
-    wrong threshold and the wrong calendar each came from."""
+class _CommandTestCase(unittest.TestCase):
+    """The command, run in process over the fixture report.
+
+    ``_run`` forwards ``main``'s three keyword-only seams (``bar_fetch``,
+    ``actions_lookup``, ``now``). Without that forwarding no test can reach
+    them, and the production defaults are the only thing that ever would -- one
+    of which calls a metered vendor.
+    """
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -531,11 +538,17 @@ class TheCommandWritesBothInputsAndSaysHowToRunThemTest(unittest.TestCase):
         path.write_text(json.dumps({"env": "live", "trades": list(self.trades.values())}))
         return path
 
-    def _run(self, *args: str) -> tuple[int, str, str]:
+    def _run(self, *args: str, **seams: Any) -> tuple[int, str, str]:
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            status = main(list(args))
+            status = main(list(args), **seams)
         return status, out.getvalue(), err.getvalue()
+
+
+class TheCommandWritesBothInputsAndSaysHowToRunThemTest(_CommandTestCase):
+    """The entry point exists because hand-assembling the run is the error this
+    module is about: a driver written per pick is where the wrong rate, the
+    wrong threshold and the wrong calendar each came from."""
 
     def test_it_writes_the_two_files_the_replay_takes(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -698,6 +711,164 @@ class TheCommandWritesBothInputsAndSaysHowToRunThemTest(unittest.TestCase):
             )
             self.assertEqual(status, 0)
             self.assertIsNone(json.loads(out)["configuration"]["entry_trail_bps"])
+
+
+class EveryRefusalCarriesOneEnvelopeTest(_CommandTestCase):
+    """Four refusal sites printed four differently shaped sentences and nothing
+    at all on stdout in JSON mode, so a caller had only prose to branch on and
+    a `--format json` caller had nothing to read."""
+
+    def _refusals(self, directory: pathlib.Path) -> tuple[tuple[str, int, tuple[str, ...]], ...]:
+        """One invocation per published code, with the status it owes."""
+        report = str(self._report(directory))
+        broken = directory / "broken.json"
+        broken.write_text(json.dumps({"env": "live"}))
+        empty = directory / "no-trails.jsonl"
+        empty.write_text("")
+        excluded = next(key for key, trade in self.trades.items() if trade["replay_exclusions"])
+        journal = str(_JOURNAL)
+        return (
+            ("usage", 2, (report, "VST:2026-09-21", "--entry-trail-bps", "-5")),
+            ("report_unreadable", 2, (str(broken), "VST:2026-09-21")),
+            ("pick_not_in_report", 4, (report, "NOPE:2026-09-21", "--entry-trails", journal)),
+            ("not_comparable", 1, (report, excluded, "--entry-trails", journal)),
+            ("entry_trail_unknown", 1, (report, "VST:2026-09-21", "--entry-trails", str(empty))),
+        )
+
+    def test_every_refusal_prefixes_its_code_to_the_human_message(self) -> None:
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            for code, status, argv in self._refusals(directory):
+                with self.subTest(code=code):
+                    got, out, err = self._run(*argv, "--out", str(directory))
+
+                    self.assertEqual(got, status)
+                    self.assertEqual(out, "")
+                    self.assertIn(f"replay_from_pick: {code}: ", err)
+
+    def test_a_refusal_in_json_is_one_object_on_the_last_line_of_stderr(self) -> None:
+        """The machine rule the broker CLI publishes: stdout stays empty and
+        exactly one stderr line is a JSON object, the last one."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            for code, status, argv in self._refusals(directory):
+                with self.subTest(code=code):
+                    got, out, err = self._run(*argv, "--out", str(directory), "--format", "json")
+
+                    self.assertEqual(got, status)
+                    self.assertEqual(out, "")
+                    envelope = json.loads(err.strip().splitlines()[-1])
+                    self.assertEqual(
+                        sorted(envelope),
+                        [
+                            "code",
+                            "details",
+                            "message",
+                            "reason",
+                            "retryable",
+                            "schema",
+                            "suggestions",
+                        ],
+                    )
+                    self.assertEqual(
+                        envelope["schema"], "alphalens.research.replay_from_pick.error/v1"
+                    )
+                    self.assertEqual(envelope["code"], code)
+                    self.assertTrue(envelope["reason"])
+                    self.assertTrue(envelope["message"])
+                    self.assertFalse(envelope["retryable"])
+
+
+class TheBarCacheRootIsStatedOrDerivedNeverJoinedTest(_CommandTestCase):
+    """Polygon is metered at 5 requests a minute, so a replay re-run must read
+    a cache rather than re-pay for it -- and a test must never read or write
+    the operator's own."""
+
+    def test_the_bar_cache_flag_is_on_the_parser(self) -> None:
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+
+            status, _, err = self._run(
+                str(self._report(directory)),
+                "VST:2026-09-21",
+                "--out",
+                str(directory),
+                "--entry-trails",
+                str(_JOURNAL),
+                "--bar-cache",
+                str(directory / "cache"),
+            )
+
+            self.assertEqual(status, 0, err)
+
+    def test_the_bar_cache_root_defaults_under_the_alphalens_home(self) -> None:
+        """Through ``state_paths._alphalens_home()``, not a ``Path.home()`` join
+        of its own: that seam is what the #1696 operator-state guard wraps, so a
+        broker-tier test running this command without an override is refused
+        loudly instead of reading the live cache."""
+        with TemporaryDirectory() as tmp:
+            home = pathlib.Path(tmp) / "alphalens-home"
+            with mock.patch.object(state_paths, "_alphalens_home", return_value=home):
+                derived = bar_cache_root(None)
+
+            self.assertEqual(derived, home / "replay_bars")
+
+    def test_a_stated_bar_cache_root_wins(self) -> None:
+        with TemporaryDirectory() as tmp:
+            stated = pathlib.Path(tmp) / "elsewhere"
+
+            self.assertEqual(bar_cache_root(str(stated)), stated)
+
+
+class TheHelpTextIsThePublishedSurfaceTest(unittest.TestCase):
+    """``usage=argparse.SUPPRESS`` with a raw-description formatter means
+    argparse generates no option list, so a flag the hand-written help text
+    omits is invisible and a status it omits is undocumented."""
+
+    def _help(self) -> str:
+        out, err = io.StringIO(), io.StringIO()
+        with (
+            contextlib.redirect_stdout(out),
+            contextlib.redirect_stderr(err),
+            self.assertRaises(SystemExit),
+        ):
+            main(["--help"])
+        return out.getvalue()
+
+    def test_the_exit_codes_block_lists_every_status_the_command_returns(self) -> None:
+        block = self._help().split("EXIT CODES", 1)[1].split("EXAMPLES", 1)[0]
+
+        for status in ("0", "1", "2", "4", "7"):
+            with self.subTest(status=status):
+                self.assertRegex(block, rf"\b{status}\b")
+
+    def test_the_options_block_names_the_bar_cache_flag(self) -> None:
+        block = self._help().split("OPTIONS", 1)[1].split("OUTPUT", 1)[0]
+
+        self.assertIn("--bar-cache", block)
+
+
+class TheSeamsAreReachableFromATestTest(_CommandTestCase):
+    """``_run`` forwarded no keywords, so no test could state the clock, the bar
+    fetch or the corporate-action lookup -- and the only thing that ever would
+    was a production default that calls a metered vendor over the network.
+
+    A silently dropped keyword is the failure to catch: ``main`` ignores an
+    argument it is never handed, so an end-to-end run stays green either way.
+    """
+
+    def test_run_forwards_all_three_seams_to_the_command(self) -> None:
+        seams: dict[str, Any] = {
+            "bar_fetch": object(),
+            "actions_lookup": object(),
+            "now": object(),
+        }
+
+        with mock.patch("tests.test_replay_from_pick.main", return_value=0) as spy:
+            self._run("trades.json", "VST:2026-09-21", **seams)
+
+        self.assertEqual(spy.call_args.kwargs, seams)
+        self.assertEqual(spy.call_args.args, (["trades.json", "VST:2026-09-21"],))
 
 
 if __name__ == "__main__":

@@ -18,16 +18,22 @@ import math
 import pathlib
 import re
 import sys
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from alphalens_pipeline.brokers import execution
-from alphalens_pipeline.brokers.automanager import costs
+from alphalens_pipeline.brokers.automanager import costs, state_paths
 from alphalens_pipeline.brokers.automanager.costs import fee_card_for
 from alphalens_pipeline.brokers.automanager.entry_trails import fold_entry_trail_lines
 from alphalens_pipeline.brokers.automanager.pick_window import effective_ttl_days, pick_window
 from alphalens_pipeline.brokers.automanager.state_paths import entry_trails_path
+from alphalens_pipeline.feedback.bar_window import BarFetch, default_bar_fetch
+from alphalens_pipeline.feedback.corporate_actions import (
+    CachedCorporateActionsLookup,
+    PolygonCorporateActionsLookup,
+    PreExCloseFn,
+)
 from alphalens_pipeline.market.calendar import (
     advance_trading_sessions,
     session_open_utc,
@@ -40,6 +46,7 @@ __all__ = [
     "ReplayInputs",
     "StatedFacts",
     "authored_document",
+    "bar_cache_root",
     "entry_trail_bps_by_pick",
     "main",
     "replay_inputs",
@@ -54,6 +61,29 @@ SCHEMA = "alphalens.research.replay_from_pick/v1"
 _MANUAL_SOURCE = "manual"
 
 _SEGMENT = re.compile(r"([^\[\]]+)((?:\[\d+\])*)")
+
+# The corporate-action answer for one (ticker, window) is cached inside the bar
+# cache root, beside the bars whose basis it vouches for.
+_ACTIONS_CACHE_FILENAME = "corporate_actions_cache.json"
+
+# The bar cache lives beside the rest of this machine's alphalens state.
+_BAR_CACHE_DIRNAME = "replay_bars"
+
+# (bar cache root, the dividend-materiality denominator) -> an object carrying
+# ``lookup(ticker, start, end)``. A FACTORY rather than the lookup itself: the
+# disk cache lives under this run's own ``--bar-cache`` root, which no import
+# may resolve -- resolving the operator's home at import time would refuse this
+# module inside any test that installed the #1696 operator-state guard first.
+ActionsLookupFactory = Callable[[pathlib.Path, PreExCloseFn], Any]
+
+# The clock, as a seam: whether the vendor can serve a window yet is a question
+# about now, and a test must be able to ask it on a fixed instant.
+Clock = Callable[[], dt.datetime]
+
+
+def _utc_now() -> dt.datetime:
+    """Production clock: the current instant, aware, in UTC."""
+    return dt.datetime.now(dt.UTC)
 
 
 def _segments(path: str) -> Iterator[str | int]:
@@ -420,6 +450,7 @@ OPTIONS
   --entry-trails PATH    the entry-trail journal (default: the report env's own)
   --entry-trail-bps N    state the distance instead of reading it; 0 means OFF
   --bars PATH            bars to put in the suggested command
+  --bar-cache DIR        the bar cache root (default: ~/.alphalens/replay_bars)
   --format human|json    default human
 
 OUTPUT
@@ -427,7 +458,8 @@ OUTPUT
   `facts`, the whole `configuration` and a runnable `replay_argv`.
 
 EXIT CODES
-  0 ok, 1 the pick cannot be replayed, 2 usage, 4 the report has no such pick
+  0 ok, 1 the pick cannot be replayed, 2 usage, 4 the report has no such pick,
+  7 a transient vendor failure or a window the vendor cannot serve yet; re-run
 
 EXAMPLES
   alphalens broker trades --env live --format json > /tmp/trades.json
@@ -470,8 +502,97 @@ def _trail_distance(
     return distances[pick]
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Write both replay inputs for one pick of a `broker trades` report."""
+def bar_cache_root(stated: str | None) -> pathlib.Path:
+    """The bar cache root: the stated path, else ``<alphalens home>/replay_bars``.
+
+    Derived through ``state_paths._alphalens_home()`` rather than a
+    ``Path.home()`` join of its own, because that seam is the one the #1696
+    operator-state guard wraps: a broker-tier test that runs this command
+    without ``--bar-cache`` is then refused loudly instead of reading -- and
+    writing -- the operator's live cache.
+
+    Resolved LAZILY, at the call and never while the parser is built: the
+    refusals the command owes its caller come first, and two of them are
+    reached by invocations that state no cache at all.
+    """
+    if stated:
+        return pathlib.Path(stated)
+    return state_paths._alphalens_home() / _BAR_CACHE_DIRNAME
+
+
+# The refusal envelope. One schema for every code, so `--format json` has a
+# shape a caller can parse and `--format human` names the same code in prose.
+_ERROR_SCHEMA = "alphalens.research.replay_from_pick.error/v1"
+
+# The reserved transient status: a vendor failure, or a window the vendor
+# cannot serve yet. It is the only status worth re-running on, which is what
+# ``retryable`` reports -- so nothing has to state the two separately.
+_EXIT_TRANSIENT = 7
+
+
+def _fail(
+    code: str,
+    reason: str,
+    message: str,
+    status: int,
+    *,
+    fmt: str,
+    suggestions: list[dict[str, list[str]]] | None = None,
+    **details: Any,
+) -> int:
+    """Refuse: nothing on stdout, one shaped refusal on stderr, ``status`` back.
+
+    ``--format human`` writes the message as prose behind its code, so the
+    operator still reads a sentence. ``--format json`` writes ONE object as the
+    LAST line of stderr -- the machine rule the `alphalens broker` CLI
+    publishes, which lets a caller read the last line and parse it.
+
+    ``code`` is the field to branch on; ``reason`` narrows it inside one
+    failure mode, the shape `broker arm` uses rather than one top-level code
+    per rule.
+    """
+    if fmt == "json":
+        print(
+            json.dumps(
+                {
+                    "schema": _ERROR_SCHEMA,
+                    "code": code,
+                    "reason": reason,
+                    "message": message,
+                    "retryable": status == _EXIT_TRANSIENT,
+                    "details": details,
+                    "suggestions": suggestions or [],
+                }
+            ),
+            file=sys.stderr,
+        )
+    else:
+        print(f"replay_from_pick: {code}: {message}", file=sys.stderr)
+    return status
+
+
+def main(
+    argv: list[str] | None = None,
+    *,
+    bar_fetch: BarFetch = default_bar_fetch,
+    actions_lookup: ActionsLookupFactory = lambda cache_root, pre_ex_close: (
+        CachedCorporateActionsLookup(
+            PolygonCorporateActionsLookup(pre_ex_close=pre_ex_close),
+            cache_root / _ACTIONS_CACHE_FILENAME,
+        )
+    ),
+    now: Clock = _utc_now,
+) -> int:
+    """Write both replay inputs for one pick of a `broker trades` report.
+
+    ``bar_fetch`` is the price-vendor seam, stated in the signature with its
+    production default rather than defaulted to ``None`` and resolved inside:
+    a ``None`` would leave the vendor call untested in every direction, because
+    the no-live-network guard forbids running the real one. ``actions_lookup``
+    is the same seam for the corporate-action question, and is a factory
+    because its disk cache sits under the run's own bar-cache root. ``now`` is
+    the clock the servable-window question is asked against.
+    """
     parser = argparse.ArgumentParser(
         prog="replay_from_pick",
         usage=argparse.SUPPRESS,
@@ -484,40 +605,86 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--entry-trails", default=None)
     parser.add_argument("--entry-trail-bps", type=int, default=None)
     parser.add_argument("--bars", default=None)
+    # Resolved by ``bar_cache_root`` at the call, never here: a default built
+    # with the parser would resolve the operator's home ahead of every refusal.
+    parser.add_argument("--bar-cache", default=None)
     parser.add_argument("--format", choices=("human", "json"), default="human")
     args = parser.parse_args(argv)
 
     if args.entry_trail_bps is not None and args.entry_trail_bps < 0:
-        print(
-            "replay_from_pick: --entry-trail-bps must be 0 (OFF) or above; "
-            f"got {args.entry_trail_bps}",
-            file=sys.stderr,
+        return _fail(
+            "usage",
+            "negative_trail_distance",
+            f"--entry-trail-bps must be 0 (OFF) or above; got {args.entry_trail_bps}",
+            2,
+            fmt=args.format,
+            stated=args.entry_trail_bps,
         )
-        return 2
     try:
         env, trades = _report_trades(args.trades_json)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
-        print(f"replay_from_pick: {exc}", file=sys.stderr)
-        return 2
+        return _fail(
+            "report_unreadable",
+            "not_a_trades_report",
+            str(exc),
+            2,
+            fmt=args.format,
+            path=args.trades_json,
+        )
     trade = trades.get(args.pick_key)
     if trade is None:
-        print(
-            f"replay_from_pick: {args.pick_key} is not in this report "
-            f"({len(trades)} picks, env={env})",
-            file=sys.stderr,
+        return _fail(
+            "pick_not_in_report",
+            "no_such_pick",
+            f"{args.pick_key} is not in this report ({len(trades)} picks, env={env})",
+            4,
+            fmt=args.format,
+            pick=args.pick_key,
+            picks=len(trades),
+            env=env,
         )
-        return 4
 
     journal = pathlib.Path(args.entry_trails) if args.entry_trails else entry_trails_path(env)
+    # Three refusals, not one: comparability is the report's own verdict, an
+    # unknown trail distance is a journal gap, and the mapping's own failures
+    # are neither. One `except` could only report the first of the three.
     try:
         _assert_comparable(trade)
+    except (OSError, ValueError) as exc:
+        return _fail(
+            "not_comparable",
+            "report_excluded",
+            str(exc),
+            1,
+            fmt=args.format,
+            pick=args.pick_key,
+            reasons=list(trade.get("replay_exclusions") or []),
+        )
+    try:
         distance = _trail_distance(
             args.pick_key, stated=args.entry_trail_bps, journal=journal, env=env
         )
+    except (OSError, ValueError) as exc:
+        return _fail(
+            "entry_trail_unknown",
+            "unknown_distance",
+            str(exc),
+            1,
+            fmt=args.format,
+            pick=args.pick_key,
+            path=str(journal),
+        )
+    try:
         inputs = replay_inputs(trade, entry_trail_bps=distance)
     except (OSError, ValueError) as exc:
-        print(f"replay_from_pick: {exc}", file=sys.stderr)
-        return 1
+        return _fail(
+            "unclassified",
+            "refusal_not_yet_coded",
+            str(exc),
+            1,
+            fmt=args.format,
+            pick=args.pick_key,
+        )
 
     out = pathlib.Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

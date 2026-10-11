@@ -44,7 +44,7 @@ DEFAULT_LOOKBACK_DAYS = 14
 BarFetch = Callable[[str, dt.datetime, dt.datetime], Sequence[dict[str, Any]]]
 
 
-def _default_bar_fetch(
+def default_bar_fetch(
     ticker: str, start: dt.datetime, end: dt.datetime
 ) -> Sequence[dict[str, Any]]:
     """Production bar source: the canonical Polygon client minute aggregates."""
@@ -58,5 +58,5 @@ __all__ = [
     "HOLDING_HORIZON_TRADING_DAYS",
     "IMPLAUSIBLE_RETURN_THRESHOLD",
     "BarFetch",
-    "_default_bar_fetch",
+    "default_bar_fetch",
 ]
