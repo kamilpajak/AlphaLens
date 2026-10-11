@@ -494,6 +494,7 @@ class BarWindow:
     entry_deadline_session: dt.date
     expiry_observable_session: dt.date
     anchor: dt.datetime
+    anchor_session: dt.date
     last_servable_session: dt.date
     servable_end: dt.datetime
     margin_sessions_requested: int
@@ -553,7 +554,16 @@ def bar_window(
     # was still open; the exit alone would cut the other three while their
     # entry ladder was still live.
     anchor = max(entry_deadline, exit_instant) if exit_instant else entry_deadline
+    # From the INSTANT, not from its UTC calendar date: an anchor past its own
+    # session's close still resolves to that session by date, which spends one
+    # of the margin sessions on a session the anchor is already past. Rolled on
+    # the CLOSE and on nothing else, because a session can open on the previous
+    # UTC day -- XASX's 2026-10-12 session opens 2026-10-11T23:00Z -- so a
+    # date comparison would push every such anchor a session too far. Only the
+    # SOFT margin is at stake; ``required_end`` comes from the deadline.
     anchor_session = session_on_or_after(anchor.date(), exchange=mic)
+    if anchor > session_close_utc(anchor_session, exchange=mic):
+        anchor_session = advance_trading_sessions(anchor_session, 1, exchange=mic)
     desired_end = session_close_utc(
         advance_trading_sessions(anchor_session, _WINDOW_MARGIN_SESSIONS, exchange=mic),
         exchange=mic,
@@ -580,6 +590,7 @@ def bar_window(
         entry_deadline_session=deadline_session,
         expiry_observable_session=expiry_observable_session,
         anchor=anchor,
+        anchor_session=anchor_session,
         last_servable_session=last_servable_session,
         servable_end=servable_end,
         margin_sessions_requested=_WINDOW_MARGIN_SESSIONS,
@@ -1217,8 +1228,15 @@ def _window_provenance(window: BarWindow, *, mic: str, last_bar_t: int | None) -
         ),
         "to_formula": (
             "min(session_close_utc(advance_trading_sessions("
-            f"max(entry_deadline, exits[-1].venue_time).date(), {_WINDOW_MARGIN_SESSIONS}, {mic})"
-            f", {mic}), session_close_utc(last_servable_session, {mic}))"
+            f"anchor_session, {_WINDOW_MARGIN_SESSIONS}, {mic}), {mic})"
+            f", session_close_utc(last_servable_session, {mic}))"
+        ),
+        "anchor_session": window.anchor_session.isoformat(),
+        "anchor_session_formula": (
+            f"session_on_or_after(max(entry_deadline, exits[-1].venue_time).date(), {mic})"
+            ", advanced one session when the anchor instant is past that session's close"
+            " -- the close and not the date, because a session can open on the previous"
+            " UTC day"
         ),
         "required_end_t": _epoch_ms(window.required_end),
         "required_end_formula": (

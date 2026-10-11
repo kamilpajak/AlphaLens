@@ -388,6 +388,8 @@ This is a deliberate tightening, not an oversight. Replaying a pre-market print 
 exit_instant   = exits[-1].venue_time.value       (absent -> the pick never filled)
 anchor         = max(entry_deadline, exit_instant)
 anchor_session = session_on_or_after(anchor.date(), mic)
+if anchor > session_close_utc(anchor_session, mic):                   # see the note below
+    anchor_session = advance_trading_sessions(anchor_session, 1, mic)
 deadline_sess  = session_on_or_after(entry_deadline.date(), mic)
 
 required_end   = session_close_utc(advance_trading_sessions(deadline_sess, 1, mic), mic)
@@ -402,6 +404,8 @@ window_end     = min(desired_end, servable_end)
 ```
 
 One function computes both the filled and the never-filled case, because a module that computes one quantity on two sides and does it twice ends up describing two different panels.
+
+The roll on `anchor_session` is there because `session_on_or_after` takes a DATE: an anchor past its own session's close resolves back to that session, and the margin would then spend one of its two sessions on a session the anchor is already past. It is compared against the session's CLOSE and not against its date, because a session can open on the previous UTC day — XASX's 2026-10-12 session opens 2026-10-11T23:00:00Z — so a date comparison would push every such anchor one session too far. The comparison is strict, so the common real case of an anchor exactly AT a session close does not roll: the two margin sessions are already the two after it. Only the SOFT margin is affected; `required_end` comes from the entry deadline. Latent in today's data: of the 12 comparable records (**M7**), none exits after its own session's close, so the witness is a constructed instant.
 
 `required_end` is the one line the half-open grid changed, and §6.3 is why.
 
@@ -699,7 +703,9 @@ File: `<out>/<stem>.bars.provenance.json`, beside `<stem>.bars.json`. Written on
     "from_utc": "2026-09-23T13:30:00.000Z",
     "to_utc": "2026-10-06T20:00:00.000Z",
     "from_formula": "config.walk_start (session_open_utc(2026-09-23, XNAS))",
-    "to_formula": "min(session_close_utc(advance_trading_sessions(max(entry_deadline, exits[-1].venue_time).date(), 2, XNAS), XNAS), session_close_utc(last_servable_session, XNAS))",
+    "to_formula": "min(session_close_utc(advance_trading_sessions(anchor_session, 2, XNAS), XNAS), session_close_utc(last_servable_session, XNAS))",
+    "anchor_session": "2026-10-02",
+    "anchor_session_formula": "session_on_or_after(max(entry_deadline, exits[-1].venue_time).date(), XNAS), advanced one session when the anchor instant is past that session's close — the close and not the date, because a session can open on the previous UTC day",
     "required_end_t": 1791230400000,
     "required_end_formula": "session_close_utc(advance_trading_sessions(entry_deadline_session, 1, XNAS), XNAS) — the grid is half-open, so the ladder's expiry is first observable on the next session",
     "entry_deadline_t": 1790971200000,

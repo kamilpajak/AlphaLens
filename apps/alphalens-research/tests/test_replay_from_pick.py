@@ -45,6 +45,7 @@ from scripts.replay_from_pick import (
     _parser,
     _served_short_message,
     _unservable_message,
+    _window_provenance,
     authored_document,
     bar_cache_root,
     bar_window,
@@ -748,6 +749,81 @@ class TheWindowReachesTheLadderSExpiryTest(unittest.TestCase):
         # Thursday): 10-02, then 10-05. The deadline's own session would have
         # ended the window two sessions earlier, at 10-02T20:00Z.
         self.assertEqual(window.end, dt.datetime(2026, 10, 5, 20, 0, tzinfo=dt.UTC))
+
+    def test_an_anchor_past_its_own_session_s_close_counts_from_the_next_session(self) -> None:
+        """The anchor session is derived from the INSTANT, not from its UTC
+        calendar date. An anchor at 2026-09-22T22:00Z is two hours past the
+        XNYS close of its own 2026-09-22 session, so counting the margin from
+        2026-09-22 spends one of the two margin sessions on a session the
+        anchor is already past and the window ends a session early.
+
+        Only the SOFT margin is affected: `required_end` is derived from the
+        entry deadline and is unmoved, so a window built this way still
+        observes the ladder's expiry. The instant is CONSTRUCTED -- none of the
+        twelve comparable fixture records exits after its own session's close,
+        so no record can witness this.
+        """
+        window = bar_window(
+            walk_start=dt.datetime(2026, 9, 14, 13, 30, tzinfo=dt.UTC),
+            entry_deadline=dt.datetime(2026, 9, 22, 20, 0, tzinfo=dt.UTC),
+            exit_instant=dt.datetime(2026, 9, 22, 22, 0, tzinfo=dt.UTC),
+            mic="XNYS",
+            now=dt.datetime(2026, 10, 9, 8, 0, tzinfo=dt.UTC),
+        )
+
+        # Two XNYS sessions after 2026-09-23, the first session the anchor is
+        # not already past: 09-24, then 09-25. Counting from 09-22 would end
+        # the window at 09-24T20:00Z.
+        self.assertEqual(window.end, dt.datetime(2026, 9, 25, 20, 0, tzinfo=dt.UTC))
+        self.assertEqual((window.margin_sessions_requested, window.margin_sessions_served), (2, 2))
+
+    def test_an_anchor_in_a_session_that_opened_yesterday_is_not_pushed_forward(self) -> None:
+        """The roll fires on the session's CLOSE and on nothing else. XASX's
+        2026-10-12 session opens at 2026-10-11T23:00Z and closes at
+        2026-10-12T05:00Z, so an anchor at 2026-10-11T23:30Z is inside that
+        session while its UTC date is the Sunday before it.
+
+        A roll written as "advance when the anchor's date is not the session's
+        date", or compared against the session OPEN, would push every XASX
+        anchor one session too far -- the same straddle `session_grid` was
+        written for.
+        """
+        window = bar_window(
+            walk_start=dt.datetime(2026, 10, 5, 23, 0, tzinfo=dt.UTC),
+            entry_deadline=dt.datetime(2026, 10, 9, 5, 0, tzinfo=dt.UTC),
+            exit_instant=dt.datetime(2026, 10, 11, 23, 30, tzinfo=dt.UTC),
+            mic="XASX",
+            now=dt.datetime(2026, 10, 20, 8, 0, tzinfo=dt.UTC),
+        )
+
+        # Two XASX sessions after the anchor's own 2026-10-12: 10-13, 10-14.
+        self.assertEqual(window.end, dt.datetime(2026, 10, 14, 5, 0, tzinfo=dt.UTC))
+        self.assertEqual((window.margin_sessions_requested, window.margin_sessions_served), (2, 2))
+
+    def test_the_published_block_names_the_session_the_margin_was_counted_from(self) -> None:
+        """`margin_sessions_served` is counted from the anchor SESSION, so a
+        block that publishes the count without that session leaves a reader
+        unable to check it -- and the old `to_formula` said the count started
+        at `max(entry_deadline, exits[-1].venue_time).date()`, which is the
+        very date the roll exists to not use. For the rolled case the published
+        formula and the published count would then describe two different
+        windows.
+        """
+        window = bar_window(
+            walk_start=dt.datetime(2026, 9, 14, 13, 30, tzinfo=dt.UTC),
+            entry_deadline=dt.datetime(2026, 9, 22, 20, 0, tzinfo=dt.UTC),
+            exit_instant=dt.datetime(2026, 9, 22, 22, 0, tzinfo=dt.UTC),
+            mic="XNYS",
+            now=dt.datetime(2026, 10, 9, 8, 0, tzinfo=dt.UTC),
+        )
+
+        block = _window_provenance(window, mic="XNYS", last_bar_t=None)
+
+        self.assertEqual(block["anchor_session"], "2026-09-23")
+        self.assertEqual(block["margin_sessions_served"], 2)
+        self.assertEqual(block["to_t"], _epoch_ms(dt.datetime(2026, 9, 25, 20, 0, tzinfo=dt.UTC)))
+        self.assertIn("anchor_session", block["to_formula"])
+        self.assertNotIn(".date()", block["to_formula"])
 
     def test_a_margin_the_vendor_cannot_serve_is_served_short_rather_than_refused(self) -> None:
         """The same SMMT window run three days earlier, when the vendor could
