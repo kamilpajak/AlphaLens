@@ -98,7 +98,7 @@ Two mechanics worth recording. The sign comes from `Amount`: `Direction` is the 
 
 ## 1.6 Phase 0 probes (run 2026-10-05 on LIVE, GET-only, results)
 
-Run on the VPS, not on the Mac: the LIVE token store has a documented single-refresher invariant, so a LIVE read from another host would damage the daemon's auth. Attended, under the recipe in `reference_live_oneoff_cli_needs_rails_and_envfile_2026_08_28` with `ALPHALENS_BROKER_ALLOW_ORDERS=0`. Only GETs were issued. ADR 0015's attended unlock covers an attended probe and ADR 0017 preserves it verbatim for exactly this, so no new authorization was needed (§8.3).
+Run on the VPS, not on the Mac: the LIVE token store has a documented single-refresher invariant, so a LIVE read from another host would damage the daemon's auth. Attended, under the recipe in `ref_oneoff_rails_260828` with `ALPHALENS_BROKER_ALLOW_ORDERS=0`. Only GETs were issued. ADR 0015's attended unlock covers an attended probe and ADR 0017 preserves it verbatim for exactly this, so no new authorization was needed (§8.3).
 
 The process logs `SAXO LIVE ORDER RAIL UNLOCKED … real-money orders are now possible in THIS process`. That is the grant verifying, not a warning about something that happened.
 

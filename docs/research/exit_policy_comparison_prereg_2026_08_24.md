@@ -78,7 +78,7 @@ matured, 300 with both arms, paired mean difference +0.157 R in favour of the br
 t = 3.73. Those figures are quoted here as the **provenance of the question**, not as evidence,
 and they are not re-derived in this memo. They are also provisional in the ordinary way brief
 parquets are provisional: the store is rewritten on all six daily slots, so a count from one
-read is a count as of that slot (`feedback_single_day_sample_is_provisional_2026_08_20`).
+read is a count as of that slot (`fb_single_day_260820`).
 
 Four defects were raised against that read. Each is sufficient on its own, each is carried
 forward here, and §4-§7 say what this design does about it.

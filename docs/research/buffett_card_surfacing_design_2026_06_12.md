@@ -3,7 +3,7 @@
 **Status: LOCKED** (design agreed; implementation not yet started)
 **Date:** 2026-06-12
 **Author:** research session (multi-agent workflow `buffett-card-design` + user design review)
-**Related:** [`buffett_cascade_alphalens_feasibility_2026_06_10.md`](buffett_cascade_alphalens_feasibility_2026_06_10.md), epic #500 (Buffett filter-cascade), `project_buffett_edge_correlation_deferred_2026_06_11` (deferred validation)
+**Related:** [`buffett_cascade_alphalens_feasibility_2026_06_10.md`](buffett_cascade_alphalens_feasibility_2026_06_10.md), epic #500 (Buffett filter-cascade), `proj_expert_edge_260611` (deferred validation)
 
 ## 0. Purpose
 
@@ -37,7 +37,7 @@ brief, expensive qual lazily fetched on-demand and cached. **The user overruled 
 - **Magnitude.** ~$0.15/candidate × ~14 survivors = ~$2/brief. Dedup by `(date, ticker)`
   across the 6×/day runs → realistically **~$2-3/day ≈ $60-90/mo worst case.** A single
   capital decision on a poorly-researched company costs a multiple of that. Doctrine:
-  people act on AlphaLens with real money (`feedback_dont_oversimplify_money_entrusted_2026_06_05`).
+  people act on AlphaLens with real money (`fb_retail_shortcut_260605`).
 - **The stronger argument is friction, not price.** An on-demand "fetch (~25 s)" model
   creates exactly the friction that discourages the analysis the tool exists to provide —
   a user may decide on the cheap chip alone. That **is** the "insufficiently-researched
@@ -90,7 +90,7 @@ coverage (N/6)" (mirroring the `peer_cohort_level` THIN treatment), NOT "failed 
 
 **Qual (LLM verdict) NEVER enters sorting.** Even though it is now always present, it has no
 validated link to forward returns until **Buffett×EDGE** (deferred, N≥30, ~2026-09+,
-`project_buffett_edge_correlation_deferred_2026_06_11`). Eager-compute makes it
+`proj_expert_edge_260611`). Eager-compute makes it
 *visible-always*, not *predictive*. Qual stays **display-only**.
 
 Sorting may use **only the cheap numeric `buffett_quality_score`**, as a **secondary

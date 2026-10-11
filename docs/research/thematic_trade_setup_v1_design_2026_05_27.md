@@ -15,7 +15,7 @@ Inspiration: a WhatsApp-group member's bot emits a tiered **entry ladder** (limi
 
 Two hard constraints shape our version differently:
 
-1. **No LLM-generated numbers** (`feedback_llm_training_cutoff_numerical_data_2026_05_17`, CLAUDE.md). Every price level is computed in Python from authoritative data BEFORE the LLM call. The LLM writes only the per-level prose rationale over injected facts.
+1. **No LLM-generated numbers** (`fb_llm_cutoff_260517`, CLAUDE.md). Every price level is computed in Python from authoritative data BEFORE the LLM call. The LLM writes only the per-level prose rationale over injected facts.
 2. **No edge claim.** This is decision-support augmentation, not a validated signal. The empirical literature (§2) is clear that technical levels carry no short-horizon predictive edge after data-snooping correction. Our differentiator vs the friend's hype-bot is **honesty**: levels are labelled as coordination/reference points, allocations are shown alongside fill-probabilities, and partial exits are labelled as drawdown-management, not return enhancement.
 
 ---

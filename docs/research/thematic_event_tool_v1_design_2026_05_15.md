@@ -478,8 +478,8 @@ SimFin Start tier ($25/mo already paid) NIE jest news source. Backbone dla Layer
 |---|---|
 | `docs/research/thematic_event_tool_v1_design_2026_05_15.md` (TEN memo) | Pełna architektura + 7 decyzji + handoff |
 | `~/.claude/projects/.../memory/project_thematic_tool_pivot_2026_05_16.md` | Project state, validated paradigm scorer inventory |
-| `~/.claude/projects/.../memory/feedback_adversarial_reviewer_bias_2026_05_16.md` | Reviewer bias context (don't deferr to "be brutal" verdicts) |
-| `~/.claude/projects/.../memory/feedback_validated_paradigm_scorer_reuse_2026_05_16.md` | Reuse taxonomy: form-4 + FCFF YES, IM NO |
+| `~/.claude/projects/.../memory/fb_reviewer_bias_260516.md` | Reviewer bias context (don't deferr to "be brutal" verdicts) |
+| `~/.claude/projects/.../memory/fb_scorer_reuse_260516.md` | Reuse taxonomy: form-4 + FCFF YES, IM NO |
 | `alphalens/screeners/insider_activity/` | Cohen-Malloy reuse infrastructure (paradigm #11) |
 | `alphalens/screeners/ev_fcff_yield/scorer.py` | FCFF pure functions (paradigm #13) |
 | `alphalens/data/store/simfin.py` | SimFin store infrastructure |
@@ -512,7 +512,7 @@ from alphalens.data.store.simfin import SimFinFundamentalsStore
 from alphalens.screeners._common import winsorize, rank_zscore
 ```
 
-**Paradigm reuse policy** (per `feedback_validated_paradigm_scorer_reuse_2026_05_16.md`):
+**Paradigm reuse policy** (per `fb_scorer_reuse_260516.md`):
 - ✅ Reuse paradigm #11 (Cohen-Malloy) — gross αt 2.71 validated
 - ✅ Reuse paradigm #13 (FCFF yield) — αt 1.18 every-phase positive validated
 - ❌ DO NOT reuse paradigm #15 IM — IS αt 0.02 noise; whole price_factor_search class dead
@@ -547,6 +547,6 @@ from alphalens.screeners._common import winsorize, rank_zscore
 ### Status after lock
 
 - Phase A engineering authorized.
-- No mandatory zen+Perplexity "be brutal" review (per `feedback_adversarial_reviewer_bias_2026_05_16.md`; reviewer good for technical critique post-engineering, BAD for go/no-go on uncertain projects).
+- No mandatory zen+Perplexity "be brutal" review (per `fb_reviewer_bias_260516.md`; reviewer good for technical critique post-engineering, BAD for go/no-go on uncertain projects).
 - Optional balanced zen review on §1-7 architecture available but not blocking.
 - Phase A first action: inventory existing Polygon news / SEC EDGAR / RSS infrastructure → identify reuse vs net-new before writing code.

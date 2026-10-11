@@ -11,7 +11,7 @@
 
 Every Bonferroni-clear EDGE separator on the thematic list is an AVOID signal (ATR, MA50-extension, press-gate); the list's baseline car_10 is negative and the best in-sample avoid-filter lifts the retained cohort only to ~+1% (CI straddles 0). The only signals in the programme's history that approached the bar are informed-trader flows measured on a universe (Cohen-Malloy opportunistic insiders, alpha_t +2.71/+2.69), and those are structurally too sparse as a downstream attribute (8/202 episodes). The alpha, if any, has to enter at the SOURCE.
 
-The thematic engine's failure mode is attention: candidates are selected because the press is already writing about them, so entries land on extended names that fade. A source whose trigger is a **structured, dateable filing** inverts that: the document is the trigger, and the news engine's job shrinks to verifying facts about it — the one task where our LLM instrument is reliable (fact extraction kappa ~0.68 vs judgment kappa ~0.21, `reference_llm_verification_literature_2026_08_05`).
+The thematic engine's failure mode is attention: candidates are selected because the press is already writing about them, so entries land on extended names that fade. A source whose trigger is a **structured, dateable filing** inverts that: the document is the trigger, and the news engine's job shrinks to verifying facts about it — the one task where our LLM instrument is reliable (fact extraction kappa ~0.68 vs judgment kappa ~0.21, `ref_llm_verify_lit_260805`).
 
 ## 2. Goal
 
@@ -37,7 +37,7 @@ Rejected for this lane (literature, 2010+): PEAD (dead for >= $500M since ~2006)
 
 - **Event timestamp** = EDGAR acceptance time of the filing (first public dissemination). After-close filings map to the NEXT session; intraday filings to the same session with entry no earlier than the post-filing price.
 - **Arrival session** = first session at which a follower could trade after the timestamp. **Anchor price** = first realistically obtainable price (next-session open or post-filing VWAP), never the close of day 0. This differs from the thematic `previous_trading_day(arrival)` anchor and must be a separate outcome column (`car_20_event`, `car_40_event`) so the two lanes are never pooled.
-- **Entry TTL** = the live 7-session rule (`window_end` in the entry-watch journal); **maximum hold** = 42 sessions; the ladder's tranche/stop mechanics apply unchanged (the lane changes WHICH names arrive, never how the broker manages them — symmetric separation, `feedback_execution_tooling_no_selection_filter_2026_08_03`).
+- **Entry TTL** = the live 7-session rule (`window_end` in the entry-watch journal); **maximum hold** = 42 sessions; the ladder's tranche/stop mechanics apply unchanged (the lane changes WHICH names arrive, never how the broker manages them — symmetric separation, `fb_exec_no_filter_260803`).
 - **13D:** issuer CIK -> ticker via the detector's company-tickers map; filer identity from the reporting-person block; Item 4 text extracted from the primary document.
 - **Insider cluster:** from the Form-4 store, `transaction_code == "P"`, `acquired_disposed == "A"`, `is_officer or is_director`, `is_amendment == False`, `filed_date` as the PIT clock (the store's `filter_records` uses `transaction_date`; the lane must key on `filed_date`).
 

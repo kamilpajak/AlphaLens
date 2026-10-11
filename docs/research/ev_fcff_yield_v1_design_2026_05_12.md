@@ -41,7 +41,7 @@ The honest framing: this is **a value factor of the FCF-yield family**, tested o
 | Sales (TTM, for imputation) | SimFin `us-income-quarterly`, TTM `Revenue` | `PUBLISH_DATE ≤ asof_t − 1 day` |
 | 5y FCF margin (median, for imputation) | rolling 20-quarter window from `us-cashflow-quarterly`, `(OCF + Capex)/Revenue` | `PUBLISH_DATE ≤ asof_t − 1 day` |
 
-The 1-day buffer (`PUBLISH_DATE ≤ asof_t − 1 day`) ensures the same trading day as the publication is not used (8-K preliminaries may precede the 10-Q publication; this is the SimFin documented caveat — see `reference_pit_fundamentals_vendors_2026_05_12.md`).
+The 1-day buffer (`PUBLISH_DATE ≤ asof_t − 1 day`) ensures the same trading day as the publication is not used (8-K preliminaries may precede the 10-Q publication; this is the SimFin documented caveat — see `ref_pit_vendors_260512.md`).
 
 ## 4. Signal definition
 
