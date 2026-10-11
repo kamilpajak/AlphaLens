@@ -190,7 +190,9 @@ STATE_FILTER_ALL = "all"
 
 # The one ``never_filled`` reason that is NOT terminal: no entry tier has
 # expired or been cancelled yet, so the ladder was still resting when the
-# report was taken (#1755).
+# report was taken (#1755). ``_never_filled_reason``'s other arms --
+# ``refused``, ``disarmed``, ``expired``, ``cancelled`` -- each say the pick
+# can no longer come back to life, which is what makes them comparable.
 REASON_PENDING = "pending"
 
 STATE_REASONS: tuple[str, ...] = (
@@ -2973,8 +2975,17 @@ def _replay_exclusions(
     values. ``open``/``unresolved`` have no final outcome, and neither does
     ``never_filled`` with reason ``pending``: the ladder was still resting at
     the report's ``now`` while the replay walks to its deadline (#1755). The
-    other ``never_filled`` reasons are terminal and stay comparable. A manual
-    close or an unknown exit has no replay event. A now-bracket tier is
+    other ``never_filled`` reasons are terminal and stay comparable -- with a
+    caveat worth stating, because it is NOT the same claim. ``disarmed`` and
+    ``refused`` freeze the record, but the replay still walks to the deadline,
+    so it models a counterfactual with an unobserved tail: the span between the
+    operator's intervention and the ladder's own expiry. On the LIVE journals of
+    2026-10-03 that tail is 196.3 h, 148.3 h and 173.6 h for the three disarmed
+    picks, and the comparison converges only because NO bar reaches their
+    declared limit inside it (measured: 0 of each). ``pending`` is different in
+    kind rather than in degree -- the pick was still live, so a fill in the tail
+    is one the daemon might still have taken, which is why that one is excluded
+    and these are not. A manual close or an unknown exit has no replay event. A now-bracket tier is
     ``entry_mode: immediate``, which the replay refuses, and a percent-sized
     plan is a legacy shape it refuses too."""
     found: set[str] = set()
