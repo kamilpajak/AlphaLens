@@ -68,10 +68,12 @@ __all__ = [
     "BuiltBars",
     "DeadlineCoverage",
     "DroppedBar",
+    "EntryTrailUnknownError",
     "ExitTimeUnknownError",
     "GriddedSeries",
     "OffGridBar",
     "ReplayInputs",
+    "ReportUnreadableError",
     "SessionBounds",
     "StatedFacts",
     "authored_document",
@@ -1846,6 +1848,34 @@ def replay_inputs(trade: Mapping[str, Any], *, entry_trail_bps: int | None) -> R
     )
 
 
+class EntryTrailUnknownError(ValueError):
+    """The pick's entry-trail distance cannot be read off the journal.
+
+    A typed exception rather than prose, because ``entry_trail_unknown``
+    reported one ``reason`` for causes that ask the operator for different
+    things, and "state it with ``--entry-trail-bps``" is the right answer to
+    only one of them.
+
+    ``reason`` is the MODE. ``no_watch_open_line``: the journal holds no
+    ``watch_open`` line for this pick, so the distance is absent and stating it
+    is the remedy. ``tiers_disagree``: two tiers of one pick journalled two
+    distances, so the journal contradicts itself and a stated distance would
+    paper that over instead of answering it. ``watch_open_unusable``: a line is
+    there and is not a pick and a distance, which is not the same as a pick
+    having no line.
+    """
+
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
+# The reason an arrival that is not an ``EntryTrailUnknownError`` gets: an
+# ``OSError`` on the journal path itself. The distance is unknown for a reason
+# that is about the FILE, so it borrows none of the three modes above.
+_TRAIL_JOURNAL_UNREADABLE = "journal_unreadable"
+
+
 def entry_trail_bps_by_pick(lines: Iterable[str]) -> dict[str, int | None]:
     """The trail distance each pick's own ``watch_open`` line journalled.
 
@@ -1873,16 +1903,18 @@ def entry_trail_bps_by_pick(lines: Iterable[str]) -> dict[str, int | None]:
         pick = record.get("pick_key")
         distance = record.get("d_bps")
         if not isinstance(pick, str) or isinstance(distance, bool) or not isinstance(distance, int):
-            raise ValueError(
+            raise EntryTrailUnknownError(
+                "watch_open_unusable",
                 f"watch_open {state.crid}: pick_key {pick!r} and d_bps {distance!r} are not a "
                 "pick and a distance; the line is there and unusable, which is not the same as "
-                "a pick having no line"
+                "a pick having no line",
             )
         earlier = distances.get(pick)
         if earlier is not None and earlier != distance:
-            raise ValueError(
+            raise EntryTrailUnknownError(
+                "tiers_disagree",
                 f"{pick}: its tiers journalled two trail distances ({earlier} and "
-                f"{distance}); no single value is this run's"
+                f"{distance}); no single value is this run's",
             )
         distances[pick] = distance
     return {pick: distance or None for pick, distance in distances.items()}
@@ -1970,16 +2002,47 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+class ReportUnreadableError(ValueError):
+    """The named file cannot be read as a ``broker trades`` report.
+
+    A typed exception rather than prose, because ``report_unreadable`` reported
+    one ``reason`` for two causes that send a reader to different places: the
+    wrong file, and a malformed row inside the right one.
+
+    ``reason`` is the MODE. ``not_a_trades_report``: the file is not the report
+    at all -- unopenable, not JSON, or JSON with no ``trades`` array -- so the
+    reader goes back to the command that was meant to produce it.
+    ``row_without_pick_key``: it IS a report and one of its rows carries no
+    identity, so the reader goes to that row.
+    """
+
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
+# The reason an arrival that is not a ``ReportUnreadableError`` gets: an
+# ``OSError`` on the path, or a ``JSONDecodeError`` on its bytes. Both say the
+# same thing as an absent ``trades`` array -- this is not the report.
+_REPORT_NOT_THE_REPORT = "not_a_trades_report"
+
+
 def _report_trades(source: str) -> tuple[str, dict[str, Mapping[str, Any]]]:
     text = sys.stdin.read() if source == "-" else pathlib.Path(source).read_text()
     report = json.loads(text)
     trades = report.get("trades")
     if not isinstance(trades, list):
-        raise ValueError(f"{source}: not a `broker trades` report (no `trades` array)")
+        raise ReportUnreadableError(
+            _REPORT_NOT_THE_REPORT,
+            f"{source}: not a `broker trades` report (no `trades` array)",
+        )
     try:
         picks = {trade["pick_key"]: trade for trade in trades}
     except (KeyError, TypeError) as exc:
-        raise ValueError(f"{source}: a row of `trades` carries no `pick_key`") from exc
+        raise ReportUnreadableError(
+            "row_without_pick_key",
+            f"{source}: a row of `trades` carries no `pick_key`",
+        ) from exc
     return report.get("env") or "live", picks
 
 
@@ -1992,15 +2055,21 @@ def _trail_distance(
     An absent line is REFUSED rather than read as OFF. A run with the wrong
     entry policy answers a different question, and the ladder and the trail are
     different policies -- not a present and an absent setting.
+
+    A stated distance answers outright, so the journal is not even opened: this
+    is reached on every run, and a run that states the distance owes nothing to
+    a journal it is not reading. The refusal names WHICH journal fact failed,
+    out of :class:`EntryTrailUnknownError`'s vocabulary.
     """
     if stated is not None:
         return stated or None
     lines = journal.read_text().splitlines() if journal.exists() else []
     distances = entry_trail_bps_by_pick(lines)
     if pick not in distances:
-        raise ValueError(
+        raise EntryTrailUnknownError(
+            "no_watch_open_line",
             f"{pick}: {journal} holds no watch_open line for it, so the entry-trail "
-            f"distance is unknown (env={env}); state it with --entry-trail-bps (0 = OFF)"
+            f"distance is unknown (env={env}); state it with --entry-trail-bps (0 = OFF)",
         )
     return distances[pick]
 
@@ -2203,7 +2272,7 @@ def main(
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return _fail(
             "report_unreadable",
-            "not_a_trades_report",
+            exc.reason if isinstance(exc, ReportUnreadableError) else _REPORT_NOT_THE_REPORT,
             str(exc),
             2,
             fmt=args.format,
@@ -2224,8 +2293,9 @@ def main(
 
     journal = pathlib.Path(args.entry_trails) if args.entry_trails else entry_trails_path(env)
     # Three refusals, not one: comparability is the report's own verdict, an
-    # unknown trail distance is a journal gap, and the mapping's own failures
-    # are neither. One `except` could only report the first of the three.
+    # unknown trail distance is something the journal did or did not say, and
+    # the mapping's own failures are neither. One `except` could only report
+    # the first of the three.
     try:
         _assert_comparable(trade)
     except (OSError, ValueError) as exc:
@@ -2245,7 +2315,7 @@ def main(
     except (OSError, ValueError) as exc:
         return _fail(
             "entry_trail_unknown",
-            "unknown_distance",
+            exc.reason if isinstance(exc, EntryTrailUnknownError) else _TRAIL_JOURNAL_UNREADABLE,
             str(exc),
             1,
             fmt=args.format,

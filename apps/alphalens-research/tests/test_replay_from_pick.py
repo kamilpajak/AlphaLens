@@ -41,6 +41,7 @@ from intent_replay.walk import walk
 from scripts.replay_from_pick import (
     GRID_PREDICATE,
     BarRefusal,
+    EntryTrailUnknownError,
     ExitTimeUnknownError,
     _parser,
     _served_short_message,
@@ -596,8 +597,9 @@ class TheTrailDistanceComesFromTheDrainSOwnLineTest(unittest.TestCase):
             {k: v for k, v in dict(first, crid="corrupt-3").items() if k != "pick_key"},
         ):
             with self.subTest(d_bps=broken.get("d_bps"), pick=broken.get("pick_key")):
-                with self.assertRaises(ValueError) as caught:
+                with self.assertRaises(EntryTrailUnknownError) as caught:
                     entry_trail_bps_by_pick([*self.lines, json.dumps(broken)])
+                self.assertEqual(caught.exception.reason, "watch_open_unusable")
                 self.assertIn(broken["crid"], str(caught.exception))
 
     def test_tiers_that_disagree_on_the_distance_are_refused(self) -> None:
@@ -607,8 +609,9 @@ class TheTrailDistanceComesFromTheDrainSOwnLineTest(unittest.TestCase):
         rows = [json.loads(line) for line in self.lines]
         first = next(r for r in rows if r.get("kind") == "watch_open")
         clash = dict(first, crid=first["crid"] + "-x", d_bps=first["d_bps"] + 10)
-        with self.assertRaises(ValueError) as caught:
+        with self.assertRaises(EntryTrailUnknownError) as caught:
             entry_trail_bps_by_pick([*self.lines, json.dumps(clash)])
+        self.assertEqual(caught.exception.reason, "tiers_disagree")
         self.assertIn(first["pick_key"], str(caught.exception))
 
 
@@ -1478,6 +1481,165 @@ class EveryRefusalCarriesOneEnvelopeTest(_CommandTestCase):
                     self.assertTrue(envelope["reason"])
                     self.assertTrue(envelope["message"])
                     self.assertFalse(envelope["retryable"])
+
+
+class EachRefusalReasonNamesExactlyOneCauseTest(_CommandTestCase):
+    """`report_unreadable` and `entry_trail_unknown` each answered ONE `reason`
+    for two causes that send a reader to different places, so the prose of the
+    message was the only thing telling them apart.
+
+    The CODES stay as they are -- one code per failure MODE is the shape the
+    broker contract publishes -- and the `reason` carries which cause it was,
+    out of a closed vocabulary with one name per cause.
+    """
+
+    def _refusal(self, *argv: str) -> tuple[int, str, str]:
+        """One invocation's status, published `reason` and human message."""
+        status, out, err = self._run(*argv, "--format", "json")
+        self.assertEqual(out, "")
+        envelope = json.loads(err.strip().splitlines()[-1])
+        return status, envelope["reason"], envelope["message"]
+
+    def test_a_wrong_file_and_a_row_with_no_pick_key_are_two_reasons(self) -> None:
+        """A file that is not a `broker trades` report sends a reader back to
+        the command that produced it; a row inside a real report that carries
+        no `pick_key` sends them to that row. One reason named neither."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            wrong = directory / "wrong.json"
+            wrong.write_text(json.dumps({"env": "live"}))
+            rowless = directory / "rowless.json"
+            rowless.write_text(json.dumps({"env": "live", "trades": [{"ticker": "VST"}]}))
+
+            status, reason, message = self._refusal(
+                str(wrong), "VST:2026-09-21", "--out", str(directory)
+            )
+            self.assertEqual((status, reason), (2, "not_a_trades_report"))
+            self.assertIn("no `trades` array", message)
+
+            status, reason, message = self._refusal(
+                str(rowless), "VST:2026-09-21", "--out", str(directory)
+            )
+            self.assertEqual((status, reason), (2, "row_without_pick_key"))
+            self.assertIn("carries no `pick_key`", message)
+
+    def test_a_missing_line_and_tiers_that_disagree_are_two_reasons(self) -> None:
+        """A journal holding no line for the pick is a gap the operator closes
+        by stating the distance. A journal whose tiers journalled two
+        distances contradicts itself, and a stated distance would paper over
+        that rather than answer it -- so the two causes do not share a remedy,
+        and they cannot share a reason either."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            report = str(self._report(directory))
+            empty = directory / "empty.jsonl"
+            empty.write_text("")
+            lines = _JOURNAL.read_text().splitlines()
+            rows = [json.loads(line) for line in lines]
+            first = next(row for row in rows if row.get("kind") == "watch_open")
+            clash = dict(first, crid=first["crid"] + "-x", d_bps=first["d_bps"] + 10)
+            disagreeing = directory / "disagreeing.jsonl"
+            disagreeing.write_text("\n".join([*lines, json.dumps(clash)]))
+
+            absent = self._refusal(
+                report, "VST:2026-09-21", "--out", str(directory), "--entry-trails", str(empty)
+            )
+            conflicting = self._refusal(
+                report,
+                "VST:2026-09-21",
+                "--out",
+                str(directory),
+                "--entry-trails",
+                str(disagreeing),
+            )
+
+            self.assertEqual((absent[1], conflicting[1]), ("no_watch_open_line", "tiers_disagree"))
+            self.assertEqual((absent[0], conflicting[0]), (1, 1))
+            # The remedy travels with the cause that has one.
+            self.assertIn("--entry-trail-bps", absent[2])
+            self.assertNotIn("--entry-trail-bps", conflicting[2])
+            self.assertIn(first["pick_key"], conflicting[2])
+
+    def test_a_line_that_is_there_and_unusable_is_not_a_pick_with_no_line(self) -> None:
+        """`entry_trail_bps_by_pick` refuses a corrupt `watch_open` instead of
+        skipping it, because skipping reported the pick as having NO line. The
+        published reason has to keep the distinction that raise exists for: a
+        reader sent to look for a line that is missing never finds the one
+        that is there and wrong."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            lines = _JOURNAL.read_text().splitlines()
+            rows = [json.loads(line) for line in lines]
+            first = next(row for row in rows if row.get("kind") == "watch_open")
+            corrupt = dict(first, crid="corrupt-1", d_bps="50")
+            journal = directory / "corrupt.jsonl"
+            journal.write_text("\n".join([*lines, json.dumps(corrupt)]))
+
+            status, reason, message = self._refusal(
+                str(self._report(directory)),
+                "VST:2026-09-21",
+                "--out",
+                str(directory),
+                "--entry-trails",
+                str(journal),
+            )
+
+            self.assertEqual((status, reason), (1, "watch_open_unusable"))
+            self.assertIn("corrupt-1", message)
+            self.assertNotIn("--entry-trail-bps", message)
+
+    def test_a_journal_the_command_cannot_read_is_not_a_missing_line(self) -> None:
+        """An `OSError` on the journal path arrives at this same refusal, and
+        it is a fact about the FILE rather than about this pick's line.
+        Borrowing `no_watch_open_line` for it would send the operator to state
+        a distance for a journal nothing had read."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            # A directory: `exists()` answers true and `read_text()` raises
+            # `IsADirectoryError`, with no reliance on file modes or on the
+            # user the suite runs as.
+            unreadable = directory / "journal-dir"
+            unreadable.mkdir()
+
+            status, reason, _ = self._refusal(
+                str(self._report(directory)),
+                "VST:2026-09-21",
+                "--out",
+                str(directory),
+                "--entry-trails",
+                str(unreadable),
+            )
+
+            self.assertEqual((status, reason), (1, "journal_unreadable"))
+
+    def test_a_stated_distance_asks_the_journal_nothing(self) -> None:
+        """The distance lookup is reached on EVERY run, including the ones that
+        state the distance, so a stated one has to answer the question outright
+        -- none of the reasons above can fire. The journal here is a directory
+        the command could not read if it tried."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            unreadable = directory / "journal-dir"
+            unreadable.mkdir()
+
+            status, out, err = self._run(
+                str(self._report(directory)),
+                "VST:2026-09-21",
+                "--out",
+                str(directory),
+                "--entry-trails",
+                str(unreadable),
+                "--entry-trail-bps",
+                "50",
+                "--bar-cache",
+                str(directory / "cache"),
+                "--format",
+                "json",
+                **self._seams(),
+            )
+
+            self.assertEqual(status, 0, err)
+            self.assertEqual(json.loads(out)["configuration"]["entry_trail_bps"], 50)
 
 
 class TheBarCacheRootIsStatedOrDerivedNeverJoinedTest(_CommandTestCase):

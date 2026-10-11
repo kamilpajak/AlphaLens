@@ -816,6 +816,15 @@ All refusals print nothing on stdout. In `--format human` (the default) the mess
 
 The **four** existing print-and-return sites (`replay_from_pick.py:491-496`, `:499-501`, `:504-509`, `:518-520`) are routed through one `_fail(code, reason, message, status, **details)` helper and gain codes (`usage`, `report_unreadable`, `pick_not_in_report`, `not_comparable`, `entry_trail_unknown`), so the envelope is uniform. Their human wording is unchanged apart from the code prefix. The existing tests assert with `assertIn` at `:584`, `:585`, `:602`, `:620`, `:635`, `:652`, `:665` and `:685`, and with one `assertNotIn("--entry-trail-bps", err)` at `:666` — so the prefix changes no meaning, and the new messages must keep `--entry-trail-bps` out of the not-comparable refusal. Argparse's own errors keep their own text and status 2.
 
+Two of those existing codes carry a closed `reason` vocabulary of their own, because each of them is reached by causes that send a reader to different places. One reason for all of them left the message prose as the only thing telling them apart:
+
+| code | reasons | exit | retryable | details |
+|---|---|---|---|---|
+| `report_unreadable` | `not_a_trades_report` (unopenable path, not JSON, or no `trades` array — the wrong file), `row_without_pick_key` (it IS a report and one row has no identity) | 2 | no | `path` |
+| `entry_trail_unknown` | `no_watch_open_line` (the journal holds no line for this pick; stating the distance is the remedy), `tiers_disagree` (two tiers journalled two distances, so the journal contradicts itself and a stated distance would paper over it), `watch_open_unusable` (a line is there and is not a pick and a distance), `journal_unreadable` (an `OSError` on the path itself) | 1 | no | `pick`, `path` |
+
+Both read their reason off a typed exception (`ReportUnreadableError`, `EntryTrailUnknownError`), the shape `ExitTimeUnknownError` already used, so classification comes from the taxonomy and not from the call site.
+
 New codes, one per failure MODE with a closed `reason` vocabulary — the shape `broker arm` uses, because fifteen top-level codes for six modes is a worse table to read:
 
 | code | reasons | exit | retryable | details |
