@@ -139,6 +139,13 @@ _REFUSAL_FACTORIES = ("_fail", "BarRefusal")
 #
 # ``TheWalkCanRefuteTheModuleTest`` pins that every entry still produces
 # something, so a renamed source cannot quietly empty its half of the gate.
+#
+# EVERY NEW INDIRECTION FEEDING A CODE NEEDS A ROW HERE. That is the gate's one
+# hole and it is declared rather than hidden: a new helper returning a reason
+# for a code this table ALREADY names has its literals read by nothing, and the
+# author gets the runtime warning instead of a red test. Registering the new
+# reason is what turns ``test_every_registered_reason_is_one_a_site_can_publish``
+# red until the row exists.
 _INDIRECT_REASON_SOURCES = {
     "EntryTrailUnknownError": "entry_trail_unknown",
     "ExitTimeUnknownError": "exit_time_unknown",

@@ -1969,7 +1969,10 @@ EXIT CODES
   `replay_from_pick: <code>: <message>` under `--format human`, and under
   `--format json` one object -- the last stderr line -- carrying `code`,
   `reason`, `message`, `retryable`, `details` and `suggestions`. Branch on
-  `code`; `reason` narrows it inside that one failure mode. The codes:
+  `code`; `reason` narrows it inside that one failure mode. Each code's reasons
+  are a closed set, and `_REFUSAL_REASONS` in this module is where that set is
+  authoritative -- not published here, because 29 reasons across 15 modes would
+  make this block unreadable. The codes:
     bars_corporate_action, bars_fetch_failed, bars_off_grid, bars_unreadable,
     bars_unusable, bars_window_unservable, bars_wrong_granularity,
     corporate_actions_unanswered, entry_trail_unknown, exit_time_unknown,
