@@ -44,6 +44,7 @@ from scripts.replay_from_pick import (
     ExitTimeUnknownError,
     _parser,
     _served_short_message,
+    _unservable_message,
     authored_document,
     bar_cache_root,
     bar_window,
@@ -891,6 +892,36 @@ class TheRightEdgeIsAskedOfTheSeriesNotTheWindowEndTest(unittest.TestCase):
         self.assertIn("2026-10-08T19:59:00.000Z", message)
         self.assertIn("2026-10-09T20:00:00.000Z", message)
         self.assertIn("2026-10-12", message)
+
+    def test_neither_message_promises_an_empty_trace_for_a_pick_that_filled(self) -> None:
+        """A short run publishes whatever outcome its own bars produce, and a
+        pick whose ladder filled before the deadline publishes `open` with a
+        non-empty trace.
+
+        So the unconditional sentence is false about exactly the runs an
+        operator is most likely to be debugging. The warning is worth keeping
+        -- the two outputs really are indistinguishable for a pick that never
+        filled -- so the sentence has to carry its condition.
+        """
+        window = bar_window(
+            walk_start=dt.datetime(2026, 9, 30, 13, 30, tzinfo=dt.UTC),
+            entry_deadline=self._DEADLINE,
+            exit_instant=None,
+            mic="XNAS",
+            now=dt.datetime(2026, 10, 1, 8, 0, tzinfo=dt.UTC),
+        )
+        coverage = deadline_coverage(
+            self._bars(dt.datetime(2026, 10, 8, 19, 59, tzinfo=dt.UTC)),
+            entry_deadline=self._DEADLINE,
+        )
+
+        for message in (
+            _served_short_message("SYM:2026-09-30", window, coverage),
+            _unservable_message("SYM:2026-09-30", window),
+        ):
+            with self.subTest(message=message[:40]):
+                self.assertNotIn("would publish outcome no_fill", message)
+                self.assertIn("never filled", message)
 
 
 def _bars_at(*instants: dt.datetime) -> list[dict[str, Any]]:

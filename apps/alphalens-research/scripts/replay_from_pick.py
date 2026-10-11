@@ -538,7 +538,8 @@ def bar_window(
     expires the ladder on the first bar at or after ``entry_deadline``
     (``walk.py:171``), under this grid no bar carries that instant, so the
     first bar that can fire it is the NEXT session's open. A window ending at
-    the deadline session publishes ``no_fill`` with an empty trace instead.
+    the deadline session publishes an outcome taken before the expiry could be
+    observed -- for a pick that never filled, ``no_fill`` with an empty trace.
 
     ``exit_instant`` is ``None`` for a pick that never filled.
     """
@@ -627,6 +628,12 @@ def _unservable_message(pick: str, window: BarWindow) -> str:
     vendor is behind" when the real reason is that the expiry is a session
     later, and it names what the short run WOULD have published, because that
     output is indistinguishable from a ladder that genuinely expired.
+
+    The indistinguishability is CONDITIONAL and the sentence says so: a short
+    run publishes whatever outcome its own bars produce, so a pick whose
+    ladder filled before the deadline publishes ``open`` with a non-empty
+    trace. Claiming ``no_fill`` unconditionally would be false about exactly
+    the runs an operator is most likely to be debugging.
     """
     return (
         f"{pick}'s entry ladder was live through session {window.entry_deadline_session} "
@@ -637,7 +644,8 @@ def _unservable_message(pick: str, window: BarWindow) -> str:
         f"calendar days. The last session it can serve today is "
         f"{window.last_servable_session} (close {format_time(window.servable_end)}). "
         f"Re-run on {window.servable_from} or later. Replaying the short window would "
-        f"publish outcome no_fill with an empty trace, which is what a ladder that "
+        f"publish an outcome taken before the expiry could be observed; for a pick that "
+        f"never filled that is no_fill with an empty trace, which is what a ladder that "
         f"genuinely expired also publishes."
     )
 
@@ -661,8 +669,9 @@ def _served_short_message(pick: str, window: BarWindow, coverage: DeadlineCovera
         f"expiry. The session grid is half-open at the close, so observing it needs a bar "
         f"from session {window.expiry_observable_session} (close "
         f"{format_time(window.required_end)}). Replaying the short series would publish "
-        f"outcome no_fill with an empty trace, which is what a ladder that genuinely "
-        f"expired also publishes."
+        f"an outcome taken before the expiry could be observed; for a pick that never "
+        f"filled that is no_fill with an empty trace, which is what a ladder that "
+        f"genuinely expired also publishes."
     )
 
 
@@ -1664,8 +1673,9 @@ def _gates(
     # The right edge, asked of the SERIES. The pre-fetch check predicted what
     # the vendor would serve; this measures what it did -- and it fires on a
     # supplied file for the same reason, which is where it is worth most: a
-    # hand-built file that stops before the deadline publishes a `no_fill` with
-    # an empty trace, which reads exactly like a pick that never filled.
+    # hand-built file that stops before the deadline publishes, for a pick that
+    # never filled, a `no_fill` with an empty trace that reads exactly like a
+    # ladder which genuinely expired.
     coverage = deadline_coverage(gridded.kept, entry_deadline=window.entry_deadline)
     if not coverage.reaches:
         return BarRefusal(
