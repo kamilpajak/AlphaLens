@@ -82,6 +82,7 @@ __all__ = [
     "build_bars",
     "deadline_coverage",
     "entry_trail_bps_by_pick",
+    "entry_trail_journal",
     "exit_instant",
     "filter_to_grid",
     "main",
@@ -2046,9 +2047,23 @@ def _report_trades(source: str) -> tuple[str, dict[str, Mapping[str, Any]]]:
     return report.get("env") or "live", picks
 
 
-def _trail_distance(
-    pick: str, *, stated: int | None, journal: pathlib.Path, env: str
-) -> int | None:
+def entry_trail_journal(stated: str | None, env: str) -> pathlib.Path:
+    """The entry-trail journal: the stated path, else ``env``'s own.
+
+    Derived through ``state_paths.entry_trails_path`` so the default is the one
+    the daemon writes, which also puts it behind the ``_alphalens_home()`` seam
+    the #1696 operator-state guard wraps.
+
+    Resolved LAZILY, at the point the journal is READ, for the reason
+    :func:`bar_cache_root` is: resolving the operator's home ahead of the
+    question made every run pay for a path only one branch uses, and under that
+    guard the payment is an ``OperatorStateReadError`` -- so a run that states
+    the distance could not get as far as its own refusals.
+    """
+    return pathlib.Path(stated) if stated else entry_trails_path(env)
+
+
+def _trail_distance(pick: str, *, stated: int | None, journal: str | None, env: str) -> int | None:
     """The distance for ``pick``: stated if the caller stated one, else the
     pick's own ``watch_open`` line.
 
@@ -2056,19 +2071,21 @@ def _trail_distance(
     entry policy answers a different question, and the ladder and the trail are
     different policies -- not a present and an absent setting.
 
-    A stated distance answers outright, so the journal is not even opened: this
-    is reached on every run, and a run that states the distance owes nothing to
-    a journal it is not reading. The refusal names WHICH journal fact failed,
-    out of :class:`EntryTrailUnknownError`'s vocabulary.
+    A stated distance answers outright, so the journal is neither opened nor
+    even RESOLVED: this is reached on every run, and a run that states the
+    distance owes nothing to a journal it is not reading. The refusal names
+    WHICH journal fact failed, out of :class:`EntryTrailUnknownError`'s
+    vocabulary.
     """
     if stated is not None:
         return stated or None
-    lines = journal.read_text().splitlines() if journal.exists() else []
+    path = entry_trail_journal(journal, env)
+    lines = path.read_text().splitlines() if path.exists() else []
     distances = entry_trail_bps_by_pick(lines)
     if pick not in distances:
         raise EntryTrailUnknownError(
             "no_watch_open_line",
-            f"{pick}: {journal} holds no watch_open line for it, so the entry-trail "
+            f"{pick}: {path} holds no watch_open line for it, so the entry-trail "
             f"distance is unknown (env={env}); state it with --entry-trail-bps (0 = OFF)",
         )
     return distances[pick]
@@ -2291,7 +2308,6 @@ def main(
             env=env,
         )
 
-    journal = pathlib.Path(args.entry_trails) if args.entry_trails else entry_trails_path(env)
     # Three refusals, not one: comparability is the report's own verdict, an
     # unknown trail distance is something the journal did or did not say, and
     # the mapping's own failures are neither. One `except` could only report
@@ -2310,7 +2326,7 @@ def main(
         )
     try:
         distance = _trail_distance(
-            args.pick_key, stated=args.entry_trail_bps, journal=journal, env=env
+            args.pick_key, stated=args.entry_trail_bps, journal=args.entry_trails, env=env
         )
     except (OSError, ValueError) as exc:
         return _fail(
@@ -2320,7 +2336,11 @@ def main(
             1,
             fmt=args.format,
             pick=args.pick_key,
-            path=str(journal),
+            # Resolved HERE and nowhere earlier. This handler is the only place
+            # `main` needs the path, and it is reachable only from the branch
+            # that read the journal -- so `entry_trail_journal` has already
+            # answered once, and answers the same pure join again.
+            path=str(entry_trail_journal(args.entry_trails, env)),
         )
     try:
         last_exit = exit_instant(trade)

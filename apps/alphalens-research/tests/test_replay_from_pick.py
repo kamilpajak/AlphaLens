@@ -53,6 +53,7 @@ from scripts.replay_from_pick import (
     build_bars,
     deadline_coverage,
     entry_trail_bps_by_pick,
+    entry_trail_journal,
     exit_instant,
     filter_to_grid,
     main,
@@ -1640,6 +1641,76 @@ class EachRefusalReasonNamesExactlyOneCauseTest(_CommandTestCase):
 
             self.assertEqual(status, 0, err)
             self.assertEqual(json.loads(out)["configuration"]["entry_trail_bps"], 50)
+
+
+class TheEntryTrailJournalIsResolvedOnlyWhenItIsReadTest(_CommandTestCase):
+    """`main` used to resolve the journal's DEFAULT path before asking whether
+    it needed it, so a run that stated the distance still reached
+    `entry_trails_path`, which resolves the operator's home. Under the #1696
+    operator-state guard that resolution is an `OperatorStateReadError`, so
+    every test had to pass `--entry-trails` even when it stated the distance
+    and no journal would ever be opened.
+    """
+
+    def test_a_run_that_states_the_distance_needs_no_journal_path(self) -> None:
+        """The witness: no `--entry-trails`, a stated distance, and the run
+        completes. It used to raise `OperatorStateReadError` out of `main`
+        before any refusal could fire."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+
+            status, out, err = self._run(
+                str(self._report(directory)),
+                "VST:2026-09-21",
+                "--out",
+                str(directory),
+                "--entry-trail-bps",
+                "50",
+                "--bar-cache",
+                str(directory / "cache"),
+                "--format",
+                "json",
+                **self._seams(),
+            )
+
+            self.assertEqual(status, 0, err)
+            self.assertEqual(json.loads(out)["configuration"]["entry_trail_bps"], 50)
+
+    def test_the_default_journal_is_the_reports_own_env(self) -> None:
+        """Derived through `state_paths.entry_trails_path`, so the default is
+        the journal the daemon writes for THAT env -- a resolver that ignored
+        the env would read the SIM journal to answer a LIVE replay, and the
+        two hold different picks."""
+        with TemporaryDirectory() as tmp:
+            home = pathlib.Path(tmp) / "alphalens-home"
+
+            with mock.patch.object(state_paths, "_alphalens_home", return_value=home):
+                live = entry_trail_journal(None, "live")
+                sim = entry_trail_journal(None, "sim")
+
+            orders = home / "broker_orders"
+            self.assertEqual(
+                (live, sim),
+                (
+                    orders / "live" / "entry_trails.jsonl",
+                    orders / "sim" / "entry_trails.jsonl",
+                ),
+            )
+
+    def test_a_stated_journal_path_wins_over_the_env_default(self) -> None:
+        """`--entry-trails` names a file outright, and a resolver that reached
+        past it would read the env's journal instead of the one the caller
+        named. The home is redirected here so that a resolver which ignored
+        the stated path returns the env default and is caught by THIS
+        assertion, rather than by the #1696 guard raising out of the call."""
+        with TemporaryDirectory() as tmp:
+            stated = pathlib.Path(tmp) / "elsewhere.jsonl"
+            home = pathlib.Path(tmp) / "alphalens-home"
+
+            with mock.patch.object(state_paths, "_alphalens_home", return_value=home):
+                resolved = entry_trail_journal(str(stated), "live")
+
+            self.assertEqual(resolved, stated)
 
 
 class TheBarCacheRootIsStatedOrDerivedNeverJoinedTest(_CommandTestCase):
