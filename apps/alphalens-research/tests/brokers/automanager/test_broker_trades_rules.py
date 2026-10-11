@@ -871,6 +871,59 @@ class ReplayExclusions(_TradesCase):
             with self.subTest(pick=key):
                 self.assertEqual(set(trade(report, key)["replay_exclusions"]), expected)
 
+    def test_a_never_filled_pick_whose_entry_ladder_was_still_live_is_not_final(self) -> None:
+        """#1755 memo §2: a ``never_filled`` record whose ``state_reason`` is
+        ``pending`` has no final outcome either -- its ladder was still resting
+        when the report was taken -- so it carries ``not_final`` the way
+        ``open`` and ``unresolved`` do.
+
+        The error this stops: the record said ``never_filled`` on 2026-10-03
+        while the replay walked to the ladder's deadline and reported
+        ``open``, with the first bar below VCYT's declared 44.01 limit landing
+        on 2026-10-07 -- four days after the report's own ``now``.
+        """
+        report = self.build()
+        for key in (
+            "BE:2026-09-30",
+            "OSCR:2026-09-30",
+            "PLTR:2026-09-29",
+            "SYM:2026-09-30",
+            "VCYT:2026-09-29",
+        ):
+            with self.subTest(pick=key):
+                record = trade(report, key)
+                self.assertEqual(
+                    (record["state"], record["state_reason"]), ("never_filled", "pending")
+                )
+                self.assertEqual(record["replay_exclusions"], ["not_final"])
+
+    def test_a_never_filled_pick_that_a_disarm_or_time_ended_stays_comparable(self) -> None:
+        """The other half of the same rule: a ``never_filled`` record IS
+        terminal when its reason is ``disarmed``, ``expired``, ``cancelled`` or
+        ``refused`` -- nothing more can happen to it, and the replay's
+        ``entry_expired`` is the same claim.
+
+        The error this stops: excluding on the state alone, which would drop
+        the three never-filled picks the #1755 panel measures (BE:2026-09-29,
+        DAVE:2026-09-25, QBTS:2026-09-21) and read as the replay having
+        nothing to compare.
+        """
+        report = self.build()
+        terminal = {
+            "BE:2026-09-29": "disarmed",
+            "DAVE:2026-09-25": "disarmed",
+            "QBTS:2026-09-21": "disarmed",
+            "CIEN:2026-09-04": "expired",
+            "NVAX:2026-08-10": "refused",
+        }
+        for key, reason in terminal.items():
+            with self.subTest(pick=key):
+                record = trade(report, key)
+                self.assertEqual(
+                    (record["state"], record["state_reason"]), ("never_filled", reason)
+                )
+                self.assertNotIn("not_final", record["replay_exclusions"])
+
     def test_a_pick_first_placed_after_its_day1_close_is_not_comparable(self) -> None:
         # #1734: a pick that waited for capital is placed late. The replay
         # walks the plan from day 1, so it would fill tiers on days the keeper

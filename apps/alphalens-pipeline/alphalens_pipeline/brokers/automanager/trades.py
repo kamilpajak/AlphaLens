@@ -188,12 +188,17 @@ STATE_UNRESOLVED = "unresolved"
 STATES: tuple[str, ...] = (STATE_CLOSED, STATE_OPEN, STATE_NEVER_FILLED, STATE_UNRESOLVED)
 STATE_FILTER_ALL = "all"
 
+# The one ``never_filled`` reason that is NOT terminal: no entry tier has
+# expired or been cancelled yet, so the ladder was still resting when the
+# report was taken (#1755).
+REASON_PENDING = "pending"
+
 STATE_REASONS: tuple[str, ...] = (
     "refused",
     "disarmed",
     "expired",
     "cancelled",
-    "pending",
+    REASON_PENDING,
     NULL_COMPACTED,
     NULL_NOT_JOURNALED,
     NULL_AMBIGUOUS,
@@ -2426,12 +2431,12 @@ def _never_filled_reason(pick: _Pick) -> str:
         return "expired"
     terminals = [tier.terminal for tier in pick.tiers]
     if not terminals or TERMINAL_OPEN in terminals:
-        return "pending"
+        return REASON_PENDING
     if all(t == TERMINAL_EXPIRED for t in terminals):
         return "expired"
     if all(t == TERMINAL_CANCELLED for t in terminals):
         return "cancelled"
-    return terminals[-1] if terminals[-1] in ("expired", "cancelled") else "pending"
+    return terminals[-1] if terminals[-1] in ("expired", "cancelled") else REASON_PENDING
 
 
 # --- Outcome (§5) -------------------------------------------------------------
@@ -2907,7 +2912,7 @@ def _record(
         ],
         "exits": [exit_.to_dict() for exit_ in exits_sorted],
         "outcome": outcome,
-        "replay_exclusions": _replay_exclusions(pick, state, offline=offline),
+        "replay_exclusions": _replay_exclusions(pick, state, state_reason, offline=offline),
         "warnings": list(pick.warnings),
     }
 
@@ -2959,18 +2964,25 @@ def _check_take_profit_levels(pick: _Pick, venue: _Venue | None) -> None:
             )
 
 
-def _replay_exclusions(pick: _Pick, state: str, *, offline: bool) -> list[str]:
+def _replay_exclusions(
+    pick: _Pick, state: str, state_reason: str | None, *, offline: bool
+) -> list[str]:
     """Why this record cannot stand beside a replay of its plan (empty: it can).
 
     Offline the venue was not read, so prices and exit reasons are journal
-    values. ``open``/``unresolved`` have no final outcome. A manual close or an
-    unknown exit has no replay event. A now-bracket tier is ``entry_mode:
-    immediate``, which the replay refuses, and a percent-sized plan is a legacy
-    shape it refuses too."""
+    values. ``open``/``unresolved`` have no final outcome, and neither does
+    ``never_filled`` with reason ``pending``: the ladder was still resting at
+    the report's ``now`` while the replay walks to its deadline (#1755). The
+    other ``never_filled`` reasons are terminal and stay comparable. A manual
+    close or an unknown exit has no replay event. A now-bracket tier is
+    ``entry_mode: immediate``, which the replay refuses, and a percent-sized
+    plan is a legacy shape it refuses too."""
     found: set[str] = set()
     if offline:
         found.add(EXCLUDE_OFFLINE)
-    if state in (STATE_OPEN, STATE_UNRESOLVED):
+    if state in (STATE_OPEN, STATE_UNRESOLVED) or (
+        state == STATE_NEVER_FILLED and state_reason == REASON_PENDING
+    ):
         found.add(EXCLUDE_NOT_FINAL)
     for exit_ in pick.exits:
         if exit_.reason == REASON_MANUAL_CLOSE:
