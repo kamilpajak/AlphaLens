@@ -388,6 +388,8 @@ This is a deliberate tightening, not an oversight. Replaying a pre-market print 
 exit_instant   = exits[-1].venue_time.value       (absent -> the pick never filled)
 anchor         = max(entry_deadline, exit_instant)
 anchor_session = session_on_or_after(anchor.date(), mic)
+if anchor > session_close_utc(anchor_session, mic):                   # see the note below
+    anchor_session = advance_trading_sessions(anchor_session, 1, mic)
 deadline_sess  = session_on_or_after(entry_deadline.date(), mic)
 
 required_end   = session_close_utc(advance_trading_sessions(deadline_sess, 1, mic), mic)
@@ -402,6 +404,8 @@ window_end     = min(desired_end, servable_end)
 ```
 
 One function computes both the filled and the never-filled case, because a module that computes one quantity on two sides and does it twice ends up describing two different panels.
+
+The roll on `anchor_session` is there because `session_on_or_after` takes a DATE: an anchor past its own session's close resolves back to that session, and the margin would then spend one of its two sessions on a session the anchor is already past. It is compared against the session's CLOSE and not against its date, because a session can open on the previous UTC day — XASX's 2026-10-12 session opens 2026-10-11T23:00:00Z — so a date comparison would push every such anchor one session too far. The comparison is strict, so the common real case of an anchor exactly AT a session close does not roll: the two margin sessions are already the two after it. Only the SOFT margin is affected; `required_end` comes from the entry deadline. Latent in today's data: of the 12 comparable records (**M7**), none exits after its own session's close, so the witness is a constructed instant.
 
 `required_end` is the one line the half-open grid changed, and §6.3 is why.
 
@@ -699,7 +703,9 @@ File: `<out>/<stem>.bars.provenance.json`, beside `<stem>.bars.json`. Written on
     "from_utc": "2026-09-23T13:30:00.000Z",
     "to_utc": "2026-10-06T20:00:00.000Z",
     "from_formula": "config.walk_start (session_open_utc(2026-09-23, XNAS))",
-    "to_formula": "min(session_close_utc(advance_trading_sessions(max(entry_deadline, exits[-1].venue_time).date(), 2, XNAS), XNAS), session_close_utc(last_servable_session, XNAS))",
+    "to_formula": "min(session_close_utc(advance_trading_sessions(anchor_session, 2, XNAS), XNAS), session_close_utc(last_servable_session, XNAS))",
+    "anchor_session": "2026-10-02",
+    "anchor_session_formula": "session_on_or_after(max(entry_deadline, exits[-1].venue_time).date(), XNAS), advanced one session when the anchor instant is past that session's close — the close and not the date, because a session can open on the previous UTC day",
     "required_end_t": 1791230400000,
     "required_end_formula": "session_close_utc(advance_trading_sessions(entry_deadline_session, 1, XNAS), XNAS) — the grid is half-open, so the ladder's expiry is first observable on the next session",
     "entry_deadline_t": 1790971200000,
@@ -810,6 +816,15 @@ All refusals print nothing on stdout. In `--format human` (the default) the mess
 
 The **four** existing print-and-return sites (`replay_from_pick.py:491-496`, `:499-501`, `:504-509`, `:518-520`) are routed through one `_fail(code, reason, message, status, **details)` helper and gain codes (`usage`, `report_unreadable`, `pick_not_in_report`, `not_comparable`, `entry_trail_unknown`), so the envelope is uniform. Their human wording is unchanged apart from the code prefix. The existing tests assert with `assertIn` at `:584`, `:585`, `:602`, `:620`, `:635`, `:652`, `:665` and `:685`, and with one `assertNotIn("--entry-trail-bps", err)` at `:666` — so the prefix changes no meaning, and the new messages must keep `--entry-trail-bps` out of the not-comparable refusal. Argparse's own errors keep their own text and status 2.
 
+Two of those existing codes carry a closed `reason` vocabulary of their own, because each of them is reached by causes that send a reader to different places. One reason for all of them left the message prose as the only thing telling them apart:
+
+| code | reasons | exit | retryable | details |
+|---|---|---|---|---|
+| `report_unreadable` | `not_a_trades_report` (unopenable path, not JSON, or no `trades` array — the wrong file), `row_without_pick_key` (it IS a report and one row has no identity) | 2 | no | `path` |
+| `entry_trail_unknown` | `no_watch_open_line` (the journal holds no line for this pick; stating the distance is the remedy), `tiers_disagree` (two tiers journalled two distances, so the journal contradicts itself and a stated distance would paper over it), `watch_open_unusable` (a line is there and is not a pick and a distance), `journal_unreadable` (an `OSError` on the path itself) | 1 | no | `pick`, `path` |
+
+Both read their reason off a typed exception (`ReportUnreadableError`, `EntryTrailUnknownError`), the shape `ExitTimeUnknownError` already used, so classification comes from the taxonomy and not from the call site.
+
 New codes, one per failure MODE with a closed `reason` vocabulary — the shape `broker arm` uses, because fifteen top-level codes for six modes is a worse table to read:
 
 | code | reasons | exit | retryable | details |
@@ -851,6 +866,8 @@ Four notes on the shape of this table:
 ## 12. The test plan
 
 All tests live in `apps/alphalens-research/tests/test_replay_from_pick.py` (704 lines today), as `unittest.TestCase` classes in the file's existing style: sentence-shaped class names ending in `Test` with a docstring naming the error they stop, and sentence-shaped method names. They reuse the file's own helpers `_trades()` (`:45-58`), `_report` (`:529-532`) and `_run` (`:534-538`) — **after `_run` is widened to forward the three seams**, which it cannot do today (`:534-538` is `main(list(args))` with no keywords). Every fetch-path test injects a fake `BarFetch` and a fake `now`; a test that forgets is caught by the no-live-network guard (`tests/_net_guard.py`, installed at `tests/__init__.py:8-10`), not by Polygon. Every test passes `--bar-cache` into a `TemporaryDirectory`, the same discipline the existing tests apply to `--entry-trails`.
+
+One correction to that last sentence, made while building: a test only needs `--entry-trails` when the run actually READS the journal. `main` used to resolve the journal's default path (`state_paths.entry_trails_path`, see D3) before asking whether it needed it, so a run that stated `--entry-trail-bps` still resolved the operator's home — and under the #1696 operator-state guard that resolution is an `OperatorStateReadError`, which left the command unable to reach its own refusals. The default is now resolved by `entry_trail_journal(stated, env)`, called inside the `stated is None` branch of `_trail_distance` and nowhere earlier, exactly as `bar_cache_root` is resolved at its call rather than on the parser. The published refusal ORDER is unchanged: the resolution emits no refusal of its own, and the two codes reachable without a journal flag (`usage`, `report_unreadable`) already fired ahead of it.
 
 ### Class A — `TheBarsAreFetchedNotHandBuiltTest` (fake `BarFetch`)
 
