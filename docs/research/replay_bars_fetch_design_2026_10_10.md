@@ -39,7 +39,7 @@ So the operator reads the placeholder `<BARS.json>` off the human renderer (`rep
 
 On 2026-10-08 a hand-built minute-bar file for `SMMT:2026-09-23` carried a bar stamped `2026-09-28 21:30:00Z` — ninety minutes after that session's XNAS close of `2026-09-28T20:00:00Z` (**M2**). The walk fired the take-profit on it. Nothing refused it.
 
-**No existing check could have caught it**, for a reason the engine's own spec states. `docs/superpowers/specs/2026-09-23-intent-replay-design.md:411-414`, §4.1 "The leaf knows no calendar": "The replay knows nothing about sessions, exchanges or trading hours. It walks exactly the bars it is given." The engine's published bar refusals (`apps/intent-replay/README.md:499-502` and `:510`) are `bars_empty`, `bars_unordered`, `bars_invalid`, `window_too_short` and `bars_malformed`, over the closed reason vocabulary at `bars.py:45-70`: `decreasing`, `duplicate`, `numeric_not_finite`, `ends_before_walk_start`, `begins_after_walk_start`, `not_a_list`, `wrong_type`, `missing_key`, `unknown_key`, `incoherent`. Not one is session-aware. A bar ninety minutes after the close is a well-formed bar.
+**No existing check could have caught it**, for a reason the engine's own spec states. `docs/superpowers/specs/2026-09-23-intent-replay-design.md:411-414`, §4.1 "The leaf knows no calendar": "The replay knows nothing about sessions, exchanges or trading hours. It walks exactly the bars it is given." The engine's published bar refusals (`apps/intent-replay/README.md:499-502` and `:510`) are `bars_empty`, `bars_unordered`, `bars_invalid`, `window_too_short` and `bars_malformed`, over the closed reason vocabulary at `bars.py:45-70`: `decreasing`, `duplicate`, `numeric_not_finite`, `ends_before_walk_start`, `begins_after_walk_start`, `not_a_list`, `wrong_type`, `missing_key`, `unknown_key`, `incoherent`. Not one is session-aware. A bar ninety minutes after the close is a well-formed bar. **§17/A2 (2026-10-11): those two citations are stale by 62 lines — the rows sit at `:561-564` and `:572` at today's HEAD.**
 
 The run was published as a finding ("the replay is pessimistic on take-profit exits by 1.05%"). The venue audit then showed the real take-profit sold 58 seconds after the NEXT session's open: the fixture's own record for `SMMT:2026-09-23` carries `exits[-1].venue_time.value = 2026-09-29T13:30:58.853Z` against an XNAS open of `13:30:00Z` (**M3**).
 
@@ -333,7 +333,7 @@ bars_wrong_granularity / not_one_minute
   refuse a kept series of two or more bars whose modal t-spacing is not 60 000 ms
 ```
 
-**It must be the WHOLE series, not per session, and that is measured.** **M13** (`r10_modal.py`), over the real store: a per-SESSION modal-spacing rule would over-fire on **26 of 17 163 pairs (0.15%)** — sparse sessions whose commonest gap is 2, 3, 4 or 9 minutes. The same rule over the whole kept series of each file fires on **0 of 881 real windows**: every one has a modal spacing of exactly 60 000 ms. A series of fewer than two bars has no spacing to measure and is exempt, which keeps the one-bar-at-`walk_start` case legal.
+**It must be the WHOLE series, not per session, and that is measured.** **M13** (`r10_modal.py`), over the real store: a per-SESSION modal-spacing rule would over-fire on **26 of 17 163 pairs (0.15%)** — sparse sessions whose commonest gap is 2, 3, 4 or 9 minutes. The same rule over the whole kept series of each file fires on **0 of 881 real windows**: every one has a modal spacing of exactly 60 000 ms. A series of fewer than two bars has no spacing to measure and is exempt, which keeps the one-bar-at-`walk_start` case legal. **§17/A1 (2026-10-11): exempt from THIS gate, and refused all the same at §6.6's right edge.**
 
 The grid itself stays count-blind and completeness-blind. **M1**: across all 17 163 pairs, **zero** carry fewer than two kept bars under the half-open grid, and the bars per pair run 13 (floor) / 359 (median) / 390 (max). A 390-bar completeness check would refuse **13 700 of 17 163 pairs (79.8%)** under this grid — a check that fires on four fifths of real data, which is why there is none. `validate_sequence` refuses only an empty sequence (`bars.py:236-244`), and a single bar at `walk_start` covers the window on both sides (`bars.py:266-296`).
 
@@ -364,7 +364,7 @@ A guard that over-fires is worse than none, so each row has a test in §12.
 | another venue, e.g. XWAR | yes | the grid asks `session_close_utc` per session instead of adding 390 minutes; without that XWAR loses 90 minutes and XETR 120, while XSHG gains 60 and XTAI 120 (**M2**) |
 | a half-day | yes | `exchange_calendars` stores the actual per-session close, so XNAS 2026-11-27 grids to `14:30Z-18:00Z` with the last kept minute at `17:59:00Z`, no special case (**M2**) |
 | a window spanning a DST change | yes | the grid is built per session: XNAS 2026-10-30 grids `13:30Z-20:00Z` (last kept `19:59Z`), 2026-11-02 grids `14:30Z-21:00Z` (last kept `20:59Z`) (**M2**); nothing is a fixed offset from the window start |
-| a one-bar series at `walk_start` | yes | one bar; it has no spacing, so the granularity gate is exempt by construction |
+| a one-bar series at `walk_start` | yes | one bar; it has no spacing, so the granularity gate is exempt by construction — **§17/A1 (2026-10-11): true of the granularity gate, false of the run** |
 | a sparse session | yes | no completeness check, and the granularity rule reads the whole series, not the session: a per-session rule would refuse 26 real pairs (**M13**) |
 | a daily series stamped at each session's OPEN | **no, by granularity** | the grid KEEPS all of it (**M13**: 10 of 10); the modal spacing is 86 400 000 ms, so `bars_wrong_granularity/not_one_minute` refuses it |
 | a daily series stamped at each session's CLOSE | **no, by emptiness** | the grid keeps nothing (**M8**: 0 of 497 real daily files contribute a bar), so `bars_unusable/empty_window` refuses first; this is NOT the granularity gate and must not be mistaken for it |
@@ -882,7 +882,7 @@ All tests live in `apps/alphalens-research/tests/test_replay_from_pick.py` (704 
 | `test_a_bar_in_the_first_hour_of_an_XASX_session_is_KEPT` | a bar at 2026-10-11T23:30:00Z survives on XASX, although 2026-10-11 is not itself a trading day | bucketing by UTC date, which drops the first hour of every XASX session |
 | `test_a_sparse_session_is_not_refused` | 13 bars for one session still produce a run (status 0) | any completeness or minimum-count check |
 | `test_a_sparse_session_whose_commonest_gap_is_two_minutes_is_not_refused` | a session whose modal gap is 120 000 ms inside a window whose whole-series modal gap is 60 000 ms runs | phrasing the granularity gate per session, which refuses 26 real pairs (**M13**) |
-| `test_a_one_bar_series_at_walk_start_is_not_refused` | a single bar at `walk_start` produces a run | a `len(bars) > 1` guard, or a granularity gate that does not exempt a series with no spacing |
+| `test_a_one_bar_series_at_walk_start_is_not_refused` | a single bar at `walk_start` produces a run — **§17/A1 (2026-10-11): it is refused instead, and the test asserts only the exemption** | a `len(bars) > 1` guard, or a granularity gate that does not exempt a series with no spacing |
 | `test_a_daily_series_stamped_at_each_open_is_refused_by_granularity` | one bar per session at that session's own open over 3 sessions: the grid keeps all three (**M13**: 10 of 10) and `bars_wrong_granularity/not_one_minute` refuses, `details.modal_spacing_ms` 86 400 000 | relying on the grid to refuse daily bars, which this shape shows it does not |
 | `test_a_daily_series_stamped_at_each_close_is_refused_as_empty_not_as_coarse` | one bar per session at that session's close — what `grouped_daily_history` holds (**M8**: 492 of 497 files) — refuses with `bars_unusable/empty_window` and NOT with `not_one_minute` | reporting `not_one_minute` for an empty kept series, which tells the operator the wrong thing to fix, or reading the modal spacing of a series with no bars |
 | `test_an_hourly_series_is_refused_too` | 7 bars per session over 10 sessions: status 1, `not_one_minute`, `modal_spacing_ms` 3 600 000 | a one-bar-per-session rule, which is silent on hourly, 30-minute and 5-minute series (**M13**) |
@@ -1028,7 +1028,7 @@ The AST gate of §12 class I. A separate file because it walks the source rather
 
 ### `apps/intent-replay/README.md`
 
-**No change.** It specifies the bar file's shape (`:69-86`) and the refusal table (`:499-510`) and says nothing about where bars come from; `grep -i "polygon\|vendor\|replay_from_pick"` returns nothing relevant. Adding provenance there would make a client-agnostic leaf describe one client. Its `walked` section (`:298-309`) already documents the reader-side signal §6.8 relies on.
+**No change.** It specifies the bar file's shape (`:69-86`) and the refusal table (`:499-510`) and says nothing about where bars come from; `grep -i "polygon\|vendor\|replay_from_pick"` returns nothing relevant. Adding provenance there would make a client-agnostic leaf describe one client. Its `walked` section (`:298-309`) already documents the reader-side signal §6.8 relies on. **§17/A2 (2026-10-11): `:499-510` is stale by 62 lines — the refusal table is at `:561-572` at today's HEAD, while `:69-86` and `:298-309` still resolve.**
 
 ### Repo gates that notice
 
@@ -1163,3 +1163,36 @@ Does the owner want both fixed plus a recompute of the affected rows, either one
 **Q2 — where the laboratory's rigour sits on a cold corporate-action cache.** §8 refuses a run whose corporate-action question cannot be answered, including on the `--bars` path, with exit 7 and "re-run when the vendor is reachable". The lookup is cached FOUND-forever and NONE-FOUND for 14 days (`corporate_actions.py:95`, `:258`), so the cost is one online run per (ticker, window) and every later run of that pick is fully offline. But on a **cold** cache a genuinely air-gapped operator cannot run at all — which is most of what `--bars` exists for under D1. Two coherent answers: refuse, as designed, so no written run ever has an unchecked basis; or let `--bars` proceed with a cold lookup cache and a sidecar stating `verdict: "not_asked"`, accepting that such a run can cross a split and not say so. The first is designed here because the incident this memo exists for was exactly a published number whose basis could not be reconstructed, but the second is a defensible reading of what an offline override is for, and the choice is the owner's.
 
 **Q3 — whether the pre-fetch window refusal should be advisory, now that it refuses twice as often.** §6.6 refuses before fetching when `servable_end < required_end`, on a premise §6.5 marks **GAP** (the vendor's day-boundary timezone), while also shipping the post-fetch `vendor_served_short` check and arguing that "predicting the vendor's day boundary is a claim; checking the series is a measurement". By that argument the pre-fetch gate *is* the claim. The half-open grid sharpens the question rather than changing it: because `required_end` is now one session later, the gate blocks **6 of 12** fixture records at `now = 2026-10-09T08:14Z` where the inclusive rule blocked 3, to save one metered Polygon call (**M7**; the verdicts are identical at 08:14Z and 21:00Z, 3 remain at 2026-10-12 and none at 2026-10-13). Two coherent answers: keep the hard refusal, so no run is ever launched that cannot answer the question, and accept that half the comparable records cannot be replayed on the day their ladder expired; or demote it to a warning and let the post-fetch measurement decide, accepting one wasted vendor call per such run. The first is designed here because the refusal's message names the session to wait for and the wait is at most two calendar days, but the asymmetry with §6.5's own stated reasoning is real, the 6-of-12 is twice what the owner saw when this question was first put, and the owner has not ruled on it.
+---
+
+## 17. Amendment, 2026-10-11
+
+This memo stays **LOCKED** and §1-§16 are not rewritten. Two claims in them are now known to be wrong, and they are recorded here rather than edited out of the prose: a memo whose errors are deleted teaches nothing about how they got in. Each affected site above carries a one-line pointer to this section. Nothing here reopens a decision, and §16's Q1, Q2 and Q3 are untouched.
+
+### A1 — the one-bar series: §5.7 reads one gate's verdict as the whole run's
+
+§5.7's table lists "a one-bar series at `walk_start`" under **passes: yes**, on the grounds that a series of fewer than two bars has no spacing, so §5.5's granularity gate is exempt by construction — which §5.5 states in the same words at its end. §12 class B turns that row into `test_a_one_bar_series_at_walk_start_is_not_refused`, whose asserted outcome is "a single bar at `walk_start` produces a run", that is status 0.
+
+**Status 0 is unreachable, and §6.6 is why.** It requires the kept series to *carry* a bar at or after `entry_deadline`, asked again after the fetch and on the `--bars` path too. One bar at `walk_start` cannot satisfy it: `walk_start` is day 1's session open (§4 block 3 and §5.2, `replay_from_pick.py:210-216`), while `entry_deadline` is the close of the ladder's last live session, so the single bar sits at the far left of the window and the right edge refuses it.
+
+The two sections therefore contradict each other. **The rules do not** — the error is in the table, which reads one gate's verdict as the run's. §5.7's claim is true **of the granularity gate** and false of the run as a whole, and holding those two apart is the whole of this amendment.
+
+**What the implementation did, because it had to choose.** The one-bar input is REFUSED, with §11's own `bars_window_unservable` / `vendor_served_short` (exit 7, retryable). The test asserts only the narrower thing that is true: that the granularity gate is exempt, measured on the spacing helper itself rather than on a run's status. So an operator who hands in such a series is told the tape stops before the ladder's expiry is observable — the fact that actually stops the run — and not that the bars are too coarse.
+
+### A2 — three README line citations are stale by 62 lines
+
+§1 cites `apps/intent-replay/README.md:499-502` and `:510` for the engine's published bar-refusal table, and §13 cites the range `:499-510` for the same table. Commit `fdd10940` (#1749) — the tip this amendment's branch sits on — inserted 62 lines at `README.md:484`, which is above all three (`git show --stat fdd10940 -- apps/intent-replay/README.md`: one file, 62 insertions, no deletions; the README is 552 lines at `29427293`, the HEAD this memo was written against, and 614 lines today).
+
+Re-read at today's HEAD in this worktree, and against `git show 29427293:apps/intent-replay/README.md` for the old numbering:
+
+| cited as | the rows it cites | at today's HEAD |
+|---|---|---|
+| `:499-502` | `bars_empty`, `bars_unordered`, `bars_invalid`, `window_too_short` | **`:561-564`** |
+| `:510` | `bars_malformed` | **`:572`** |
+| `:499-510` | that whole block of the failure table | **`:561-572`** |
+
+`:499-510` at HEAD holds the "what the model does NOT carry" exit-leg divergence table `fdd10940` added, so the stale citations do not land a few rows off inside the right table — they land in unrelated prose.
+
+The memo's three other `README.md` citations sit above the insertion point at `:484` and **still resolve**: `:69-86` (§13) is the `--bars` shape paragraph, `:298-309` (§6.8, §13) is the `walked` section, and `:223` (§6.8, §15.2) is the `walked` row of the envelope-key table.
+
+**The part that outlives these three numbers.** A line citation into a file another branch is editing the same week is a measurement with a date on it: this memo was written against `29427293` and `fdd10940` moved the lines two commits later. The numbers in the table above are correct as of 2026-10-11 and no later.
