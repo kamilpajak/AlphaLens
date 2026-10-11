@@ -36,6 +36,8 @@ from alphalens_pipeline.feedback.corporate_actions import (
 from broker_contract.trade_intent.codec import supplied_derived_paths
 from intent_replay.bars import check_window_covers, parse_bars, validate_sequence
 from intent_replay.config import RunConfig
+from intent_replay.interpreter import PendingEntry, Plan
+from intent_replay.walk import walk
 from scripts.replay_from_pick import (
     GRID_PREDICATE,
     BarRefusal,
@@ -59,6 +61,7 @@ from scripts.replay_from_pick import (
 )
 
 from tests.brokers.automanager.trades_fixture import NOW, FakeFillHistory, install_journals
+from tests.intent_replay.test_config import ACCOUNT_CURRENCY, SAME_CURRENCY
 
 _JOURNAL = (
     pathlib.Path(__file__).parent
@@ -2161,6 +2164,101 @@ class TheCloseStampedBarIsNotPartOfTheSessionTest(_FetchingTestCase):
             with self.subTest(session=bounds.session):
                 on_it = [bar for bar in gridded.kept if bounds.member(bar["t"])]
                 self.assertEqual(len(on_it), 13)
+
+    def test_a_post_market_excursion_cannot_fire_a_take_profit_the_session_never_reached(
+        self,
+    ) -> None:
+        """Section 5.3's third measurement, asserted on the engine's own
+        outcome rather than on the written series: keeping the close-stamped bar
+        flipped a real CRSR outcome from `open` to `closed_tp`.
+
+        The witness is two-sided on purpose. The written series is walked, and
+        then the SAME series with the dropped bar put back, so the test names
+        which bar carries the flip instead of only showing that the kept series
+        does not fire. An assertion that the bar is absent cannot say that, and
+        a one-sided assertion stays green if the take-profit becomes
+        unreachable for some other reason.
+        """
+        window = bar_window(
+            walk_start=self.WALK_START,
+            entry_deadline=dt.datetime(2026, 9, 30, 20, 0, tzinfo=dt.UTC),
+            exit_instant=dt.datetime(2026, 10, 1, 13, 59, 21, tzinfo=dt.UTC),
+            mic="XNYS",
+            now=self.NOW,
+        )
+        # The real CRSR 2026-08-06 quadruple. Its high ran 1457.5 bps past the
+        # official daily one, and no bar INSIDE the session reaches 12.00.
+        crsr = {"t": _epoch_ms(self._CLOSE), "o": 10.89, "h": 12.80, "l": 10.61, "c": 12.79}
+        payload = [
+            *_aggs(self.WALK_START, 3),
+            *_aggs(self._CLOSE - dt.timedelta(minutes=1), 1, price=11.0),
+            crsr,
+            *_aggs(self.AFTER_DEADLINE, 3, price=11.0),
+        ]
+        with TemporaryDirectory() as tmp:
+            built = build_bars(
+                pick=self._PICK,
+                ticker="VST",
+                mic="XNYS",
+                window=window,
+                bar_fetch=lambda ticker, start, end: payload,
+                cache_root=pathlib.Path(tmp),
+                now=self.NOW,
+                offline_argv=[],
+            )
+        self.assertNotIsInstance(built, BarRefusal)
+
+        take_profit = 12.0
+        # Built from the literal above, not from the drop list, so the two
+        # outcome assertions below do not depend on the drop having happened --
+        # otherwise an inclusive grid kills this test with an IndexError during
+        # setup and the flip it exists to measure is never reached.
+        excursion = {
+            "t": _epoch_ms(self._CLOSE),
+            "open": crsr["o"],
+            "high": crsr["h"],
+            "low": crsr["l"],
+            "close": crsr["c"],
+        }
+        restored = sorted([*built.series, excursion], key=lambda bar: bar["t"])
+        # The gap the whole test turns on: unreachable inside the session,
+        # reachable only from the minute stamped at its close.
+        self.assertLess(max(bar["high"] for bar in built.series), take_profit)
+        self.assertGreater(excursion["high"], take_profit)
+
+        plan = Plan(
+            entries=(PendingEntry(tier_index=0, limit_price=10.0, notional=1000.0),),
+            notional=1000.0,
+            sizing_notional=1000.0,
+            account_currency=ACCOUNT_CURRENCY,
+            declared_floor=9.0,
+            declared_stop=None,
+            declared_take_profit=take_profit,
+            declared_tranches=(),
+            reaction=None,
+            read=frozenset(),
+        )
+        config = RunConfig.from_jsonable(
+            {
+                **SAME_CURRENCY,
+                "walk_start": {
+                    **SAME_CURRENCY["walk_start"],
+                    "value": _epoch_ms(self.WALK_START),
+                },
+                "entry_deadline": {
+                    **SAME_CURRENCY["entry_deadline"],
+                    "value": _epoch_ms(dt.datetime(2026, 9, 30, 20, 0, tzinfo=dt.UTC)),
+                },
+            },
+            account_currency=ACCOUNT_CURRENCY,
+        )
+
+        kept_outcome = walk(plan, config, parse_bars(list(built.series))).outcome
+        restored_outcome = walk(plan, config, parse_bars(restored)).outcome
+
+        self.assertEqual(kept_outcome, "open")
+        self.assertEqual(restored_outcome, "closed_tp")
+        self.assertEqual([drop.t for drop in built.grid.dropped_at_close], [_epoch_ms(self._CLOSE)])
 
 
 class TheGranularityGateReadsTheWholeKeptSeriesTest(_FetchingTestCase):
