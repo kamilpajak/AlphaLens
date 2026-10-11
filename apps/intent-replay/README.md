@@ -484,6 +484,68 @@ deployment will make. The absent bound is about the POLICY: a value so wide it
 cannot become a float is refused all the same, because the walk multiplies the
 distance by a price and that conversion would raise.
 
+### The exit legs
+
+Two legs close a position, and the model treats them differently because the
+deployments do. The stop RESTS at the broker, so a bar that opens through it
+executes at the open. The take-profit does NOT rest: it fills AT its declared
+level, and the distance between that and where a live fill lands is the
+`take_profit_observation_time` divergence the envelope prints whenever the
+resolved take-profit ladder is not empty.
+
+**What the model does NOT carry.** Same membership rule as the entry-trail table
+above: each row names a fact the replay lacks rather than a setting it could be
+handed. The two marked FLATTERS move the modelled exit PRICE above the real one.
+Neither is one-signed on the ANSWER, which is a separate claim and a weaker one
+— see the paragraph after the table.
+
+| | |
+|---|---|
+| the trail ratchets from a BAR HIGH, not from a poll | **FLATTERS.** The walk hands `decide_stop` the bar's high as `last_price`, so the level is the one the daemon's own ratchet would have kept had every bar high been one of its polls. The daemon polls about every 45 s and can miss the high, so the modelled level sits at or ABOVE the real one. Measured above it on all three stop exits on record |
+| the slippage a resting stop pays | **FLATTERS.** The model takes the level unless the bar gapped through it. Live, every comparable stop fill on record executed BELOW the level its order carried |
+| the take-profit tranche is closed with a MARKET order | The model fills at the declared level. Live the daemon notices the level, amends the stop quantity, then market-sells the freed tranche (`live_exit_engine.py`), so the fill is whatever the book gives after that round trip and carries no price protection. The divergence entry names the TIMING; the order type is why the gap has no bound in EITHER direction — a price that ran past the level between polls sells ABOVE the model, one that came back sells below |
+| the exit-region refusal, the cash floor at fire, partial fills | live gates that change WHETHER a tranche closes, as on the entry side. None is modelled |
+
+**A better exit price is not a better answer.** A tighter trail books more on the
+bar it fires AND can fire a bar earlier, and the second channel cuts a move the
+looser stop would have kept. The two channels are an order of magnitude larger
+than their sum: measured over the burnt panel at our live setting, −0.644 R
+across 91 cut winners against +1.175 R across 43 saved losers, with the net
+inside its cluster-bootstrap interval. That measurement is the 2026-10-08/10 row
+of the section 4.1 annex in `docs/research/edge_hypothesis_budget_2026_07.md`.
+So the FLATTERS marks above are claims about the exit price on the runs checked,
+not a correction anyone may apply to an R figure.
+
+**The gap splits, and one field separates the halves.** The difference between
+the modelled exit price and the real one is not one error. Part is the LEVEL —
+the modelled stop sat higher than the level the live order carried — and part is
+the SLIPPAGE the live fill paid against that level. Both readings produce the
+same total, so a total cannot tell them apart. `stop_level_at_fill` can, because
+it is the level the order carried at the moment it filled; `alphalens broker
+trades` reports it beside the fill, from `venue.audit`.
+
+Measured on the three comparable closed LIVE picks, one minute-bar run each.
+`level` is `(modelled − carried) / carried`, `slippage` is
+`(fill − carried) / carried`, `total` is `(modelled − fill) / fill`, in basis
+points; `level share` is `level / total`:
+
+| pick | modelled | carried | real fill | level | slippage | total | level share | modelled exit fires |
+|---|---|---|---|---|---|---|---|---|
+| `VST:2026-09-21` | 139.52322 | 138.8200 | 138.6600 | +50.7 | −11.5 | +62.3 | 81% | 13 min earlier |
+| `ASTS:2026-09-23` | 63.08442 | 62.4200 | 62.3700 | +106.4 | −8.0 | +114.5 | 93% | 2 min earlier |
+| `EWTX:2026-09-25` | 40.84984 | 40.8200 | 40.7071 | +7.3 | −27.7 | +35.1 | 21% | 107 min earlier |
+
+Read the magnitudes as HINTS, never as constants. Three picks is the whole
+comparable set. A fourth, `SMMT:2026-09-23`, was run and DISCARDED for an input
+defect of ours rather than a tool one: its bar file ended at `20:00:00Z` where
+the other three end at `19:59:00Z`, and the walk then read a take-profit 90
+minutes after the venue's close. The same report carries seven stop fills in
+all, and the four the replay excludes slipped 0.0 to 1.5 bps against their
+level, so the MAGNITUDE of the slippage half does not generalise from these
+three. What the three do establish is the direction of the level half and that
+the split is worth taking apart at all: the level carries 21% to 93% of the
+total, so neither half stands in for the other.
+
 ## Refusal codes
 
 One code per failure mode, with a closed `details.reason` vocabulary where a
