@@ -12,13 +12,14 @@ which is why it lives in the laboratory rather than in the engine.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import json
 import math
 import pathlib
 import re
 import sys
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -28,6 +29,7 @@ from alphalens_pipeline.brokers.automanager.costs import fee_card_for
 from alphalens_pipeline.brokers.automanager.entry_trails import fold_entry_trail_lines
 from alphalens_pipeline.brokers.automanager.pick_window import effective_ttl_days, pick_window
 from alphalens_pipeline.brokers.automanager.state_paths import entry_trails_path
+from alphalens_pipeline.brokers.automanager.trades import format_time
 from alphalens_pipeline.feedback.bar_window import BarFetch, default_bar_fetch
 from alphalens_pipeline.feedback.corporate_actions import (
     CachedCorporateActionsLookup,
@@ -36,6 +38,9 @@ from alphalens_pipeline.feedback.corporate_actions import (
 )
 from alphalens_pipeline.market.calendar import (
     advance_trading_sessions,
+    previous_trading_day,
+    session_close_utc,
+    session_on_or_after,
     session_open_utc,
 )
 from broker_contract.trade_intent.codec import supplied_derived_paths
@@ -43,11 +48,17 @@ from intent_replay import units
 from intent_replay.fx import Fx
 
 __all__ = [
+    "BarWindow",
+    "DeadlineCoverage",
+    "ExitTimeUnknownError",
     "ReplayInputs",
     "StatedFacts",
     "authored_document",
     "bar_cache_root",
+    "bar_window",
+    "deadline_coverage",
     "entry_trail_bps_by_pick",
+    "exit_instant",
     "main",
     "replay_inputs",
     "run_configuration",
@@ -108,6 +119,12 @@ def _remove(document: Any, path: str) -> None:
 
 def _epoch_ms(moment: dt.datetime) -> int:
     return int(moment.timestamp() * 1000)
+
+
+def _instant(epoch_ms: int) -> dt.datetime:
+    """The inverse of :func:`_epoch_ms`: the configuration states its two
+    anchors as epochs, and the calendar is asked in instants."""
+    return dt.datetime.fromtimestamp(epoch_ms / 1000, dt.UTC)
 
 
 def authored_document(plan: Mapping[str, Any]) -> dict[str, Any]:
@@ -347,6 +364,325 @@ def stated_facts(trade: Mapping[str, Any]) -> StatedFacts:
         fx_rate_source=_measured_text(sizing_fx["source"], "sizing_fx.source"),
         instrument_currency=instrument_currency,
     )
+
+
+_EXIT_INSTANT_PATH = "exits[-1].venue_time"
+
+
+class ExitTimeUnknownError(ValueError):
+    """The pick's last exit carries no instant the window can be anchored on.
+
+    A typed exception rather than prose, because the refusal publishes a closed
+    ``reason`` vocabulary and the record's own ``null_reason`` beside it, and
+    parsing either back out of a message is how one code comes to mean two
+    different things.
+
+    ``reason`` is the MODE: ``not_journaled`` when the record states no instant
+    at all, ``non_finite`` when it states one that cannot be read as an
+    instant. WHICH hole the first of those was stays the record's own word, in
+    ``null_reason`` -- "the daemon never journalled it" and "the fill could not
+    be attributed" send a reader to different places, and neither earns a
+    top-level reason of its own.
+    """
+
+    def __init__(self, reason: str, message: str, *, null_reason: Any) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.null_reason = null_reason
+        self.path = _EXIT_INSTANT_PATH
+
+
+def exit_instant(trade: Mapping[str, Any]) -> dt.datetime | None:
+    """When the pick's LAST exit filled, or ``None`` when it never filled.
+
+    The LAST, because a record's exits arrive in ascending fill order and a
+    two-exit pick's window has to reach the second one; ``exits[0]`` would
+    anchor it on the first partial.
+
+    An exit WITH a null ``venue_time`` is REFUSED rather than read as absent:
+    "the pick never filled" and "the record does not say when it filled" are
+    different facts, and only the first of them is a window anchored on the
+    entry deadline alone.
+    """
+    exits = trade.get("exits") or []
+    if not exits:
+        return None
+    node = exits[-1].get("venue_time") or {}
+    value = node.get("value")
+    if value is None:
+        raise ExitTimeUnknownError(
+            "not_journaled",
+            f"{trade.get('pick_key')}: {_EXIT_INSTANT_PATH} carries no instant "
+            f"({node.get('null_reason')}), so the window has no exit to reach",
+            null_reason=node.get("null_reason"),
+        )
+    moment = None
+    if isinstance(value, str):
+        with contextlib.suppress(ValueError):
+            moment = dt.datetime.fromisoformat(value)
+    if moment is None or moment.tzinfo is None:
+        raise ExitTimeUnknownError(
+            "non_finite",
+            f"{trade.get('pick_key')}: {_EXIT_INSTANT_PATH} is not an instant with a "
+            f"zone ({value!r}); comparing it against the entry deadline would raise "
+            "rather than refuse",
+            null_reason=node.get("null_reason"),
+        )
+    return moment
+
+
+# How far past the window's anchor the bars are asked for. A count of
+# sessions, and the only number this join adds: the grid itself adds none, and
+# the two edges are comparisons against instants the calendar supplies.
+#
+# The margin is SOFT. The replay can enter later than reality -- that is the
+# divergence a trailing-entry question is about -- so its own exit can fall
+# later than the real one. Truncating it is safe because it is VISIBLE: a
+# never-filled run has already published ``entry_expired``, and a filled one
+# publishes the terminal state ``open`` ("the bars ran out with the position
+# still open"), which reads as "re-run with more bars".
+_WINDOW_MARGIN_SESSIONS = 2
+
+
+@dataclass(frozen=True, slots=True)
+class BarWindow:
+    """The bar window for one pick, with the provenance of both its edges.
+
+    ONE function computes it for the filled and the never-filled case, because
+    a module that computes one quantity on two sides ends up describing two
+    different panels.
+
+    The two edges are not the same kind of fact. ``required_end`` is HARD: the
+    entry ladder was legally alive through ``entry_deadline``, and whether the
+    replay fills is the run's OUTPUT, so the requirement cannot be made
+    conditional on it. ``end`` is soft, and is the margin ``min``'d against
+    what the vendor can serve -- a shortened margin is stated
+    (``margin_sessions_served``) rather than inferred.
+    """
+
+    start: dt.datetime
+    end: dt.datetime
+    required_end: dt.datetime
+    entry_deadline: dt.datetime
+    entry_deadline_session: dt.date
+    expiry_observable_session: dt.date
+    anchor: dt.datetime
+    last_servable_session: dt.date
+    servable_end: dt.datetime
+    margin_sessions_requested: int
+    margin_sessions_served: int
+
+    @property
+    def servable(self) -> bool:
+        """Whether the vendor can serve a window that reaches ``required_end``.
+
+        Asked of the REQUIREMENT and never of ``end``: ``end`` is already
+        capped at what the vendor serves, so asking it would always answer yes
+        and the short window would run.
+        """
+        return self.servable_end >= self.required_end
+
+    @property
+    def servable_from(self) -> dt.date:
+        """The first calendar day on which the vendor can serve this window.
+
+        The day AFTER the session the expiry is observable on, because the
+        restriction is a calendar-day one: once that session's day is past,
+        ``previous_trading_day`` of the session on-or-after today reaches it.
+        It is a calendar date and not a session, so a Saturday is a correct
+        answer -- the weekend run resolves forward to Monday and then back to
+        the Friday it needs.
+        """
+        return self.expiry_observable_session + dt.timedelta(days=1)
+
+
+def bar_window(
+    *,
+    walk_start: dt.datetime,
+    entry_deadline: dt.datetime,
+    exit_instant: dt.datetime | None,
+    mic: str,
+    now: dt.datetime,
+) -> BarWindow:
+    """The window the kept series has to cover for this pick.
+
+    ``required_end`` is the close of the session AFTER the deadline session,
+    and that is the whole of the half-open grid's effect here: the engine
+    expires the ladder on the first bar at or after ``entry_deadline``
+    (``walk.py:171``), under this grid no bar carries that instant, so the
+    first bar that can fire it is the NEXT session's open. A window ending at
+    the deadline session publishes ``no_fill`` with an empty trace instead.
+
+    ``exit_instant`` is ``None`` for a pick that never filled.
+    """
+    deadline_session = session_on_or_after(entry_deadline.date(), exchange=mic)
+    expiry_observable_session = advance_trading_sessions(deadline_session, 1, exchange=mic)
+    required_end = session_close_utc(expiry_observable_session, exchange=mic)
+
+    # The LATER of the two, because each alone truncates real picks: of the
+    # four comparable closed picks, VST exited after its deadline and the other
+    # three before theirs. The deadline alone would cut VST while the position
+    # was still open; the exit alone would cut the other three while their
+    # entry ladder was still live.
+    anchor = max(entry_deadline, exit_instant) if exit_instant else entry_deadline
+    anchor_session = session_on_or_after(anchor.date(), exchange=mic)
+    desired_end = session_close_utc(
+        advance_trading_sessions(anchor_session, _WINDOW_MARGIN_SESSIONS, exchange=mic),
+        exchange=mic,
+    )
+
+    # The cap is the vendor's CALENDAR DAY, not the last closed session: the
+    # free plan serves only past-day minute aggregates, so a cap built on
+    # ``session_not_closed`` would cross into the current calendar day after
+    # the close and ask for a session the vendor will not serve.
+    last_servable_session = previous_trading_day(
+        session_on_or_after(now.date(), exchange=mic), exchange=mic
+    )
+    servable_end = session_close_utc(last_servable_session, exchange=mic)
+
+    # The margin is capped at what the vendor can serve; the REQUIREMENT is
+    # not, and is checked by the caller instead. A ``min`` over both would
+    # silently run a window that cannot observe the ladder's expiry.
+    end = min(desired_end, servable_end)
+    return BarWindow(
+        start=walk_start,
+        end=end,
+        required_end=required_end,
+        entry_deadline=entry_deadline,
+        entry_deadline_session=deadline_session,
+        expiry_observable_session=expiry_observable_session,
+        anchor=anchor,
+        last_servable_session=last_servable_session,
+        servable_end=servable_end,
+        margin_sessions_requested=_WINDOW_MARGIN_SESSIONS,
+        margin_sessions_served=_margin_served(anchor_session, end, mic=mic),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class DeadlineCoverage:
+    """Whether a kept series reaches the entry deadline, and where it stops.
+
+    Both facts from one traversal, because a refusal that names a last bar the
+    verdict was not taken from describes a different series than the one it
+    refused.
+    """
+
+    reaches: bool
+    last_bar_t: int | None
+
+
+def deadline_coverage(
+    bars: Sequence[Mapping[str, Any]], *, entry_deadline: dt.datetime
+) -> DeadlineCoverage:
+    """Does this kept series carry a bar at or after ``entry_deadline``?
+
+    Asked of the series' GREATEST ``t`` rather than of its final element: the
+    engine refuses a mis-ordered series (``bars_unordered``) and does so after
+    this check, so reading the last element would let a shuffled file decide
+    the right edge with a bar that is not its latest.
+
+    Total on an empty series, which the empty-window refusal reaches first:
+    raising here would turn that refusal into a traceback the day the two
+    steps are reordered.
+    """
+    stamps = [bar["t"] for bar in bars]
+    if not stamps:
+        return DeadlineCoverage(reaches=False, last_bar_t=None)
+    last = max(stamps)
+    return DeadlineCoverage(reaches=last >= _epoch_ms(entry_deadline), last_bar_t=last)
+
+
+def _unservable_message(pick: str, window: BarWindow) -> str:
+    """Why this window cannot be run yet, and when it can be.
+
+    It names both sessions, because naming only the deadline reads as "the
+    vendor is behind" when the real reason is that the expiry is a session
+    later, and it names what the short run WOULD have published, because that
+    output is indistinguishable from a ladder that genuinely expired.
+    """
+    return (
+        f"{pick}'s entry ladder was live through session {window.entry_deadline_session} "
+        f"(entry_deadline {format_time(window.entry_deadline)}). The session grid is "
+        f"half-open at the close, so the ladder's expiry is only observable on the NEXT "
+        f"session, {window.expiry_observable_session} (close "
+        f"{format_time(window.required_end)}), and the price vendor serves only past "
+        f"calendar days. The last session it can serve today is "
+        f"{window.last_servable_session} (close {format_time(window.servable_end)}). "
+        f"Re-run on {window.servable_from} or later. Replaying the short window would "
+        f"publish outcome no_fill with an empty trace, which is what a ladder that "
+        f"genuinely expired also publishes."
+    )
+
+
+def _served_short_message(pick: str, window: BarWindow, coverage: DeadlineCoverage) -> str:
+    """Why a series that was fetched, or supplied, is still too short.
+
+    The post-fetch half of the same requirement. It names no vendor, because
+    the identical refusal fires on a supplied ``--bars`` file, and it states
+    the deadline beside the last bar: "the series is short" is only readable
+    against the instant it had to reach.
+    """
+    reached = (
+        f"ends at {format_time(_instant(coverage.last_bar_t))}"
+        if coverage.last_bar_t is not None
+        else "carries no bar"
+    )
+    return (
+        f"{pick}: the kept series {reached}, before the entry deadline "
+        f"{format_time(window.entry_deadline)}, so this run cannot observe the ladder's "
+        f"expiry. The session grid is half-open at the close, so observing it needs a bar "
+        f"from session {window.expiry_observable_session} (close "
+        f"{format_time(window.required_end)}). Replaying the short series would publish "
+        f"outcome no_fill with an empty trace, which is what a ladder that genuinely "
+        f"expired also publishes."
+    )
+
+
+def _window_details(
+    pick: str,
+    window: BarWindow,
+    *,
+    mic: str,
+    now: dt.datetime,
+    last_bar_t: int | None = None,
+) -> dict[str, Any]:
+    """The refusal's machine-readable half, for both of its reasons.
+
+    One builder for the pre-fetch and the post-fetch refusal, so a caller
+    branching on ``code`` reads the same keys either way. ``last_bar_t`` is the
+    one that only the post-fetch reason can state.
+    """
+    details: dict[str, Any] = {
+        "pick": pick,
+        "exchange": mic,
+        "entry_deadline_t": _epoch_ms(window.entry_deadline),
+        "entry_deadline_session": window.entry_deadline_session.isoformat(),
+        "expiry_observable_session": window.expiry_observable_session.isoformat(),
+        "required_end_t": _epoch_ms(window.required_end),
+        "last_servable_session": window.last_servable_session.isoformat(),
+        "last_servable_end_t": _epoch_ms(window.servable_end),
+        "servable_from_date": window.servable_from.isoformat(),
+        "now": format_time(now),
+    }
+    if last_bar_t is not None:
+        details["last_bar_t"] = last_bar_t
+    return details
+
+
+def _margin_served(anchor_session: dt.date, end: dt.datetime, *, mic: str) -> int:
+    """How many of the requested margin sessions ``end`` actually covers.
+
+    Counted from the window's own end rather than tracked alongside it, so the
+    number and the edge it describes cannot disagree.
+    """
+    served = 0
+    for step in range(1, _WINDOW_MARGIN_SESSIONS + 1):
+        session = advance_trading_sessions(anchor_session, step, exchange=mic)
+        if session_close_utc(session, exchange=mic) > end:
+            break
+        served = step
+    return served
 
 
 def _assert_comparable(trade: Mapping[str, Any]) -> None:
@@ -675,6 +1011,19 @@ def main(
             path=str(journal),
         )
     try:
+        last_exit = exit_instant(trade)
+    except ExitTimeUnknownError as exc:
+        return _fail(
+            "exit_time_unknown",
+            exc.reason,
+            str(exc),
+            1,
+            fmt=args.format,
+            pick_key=args.pick_key,
+            null_reason=exc.null_reason,
+            path=exc.path,
+        )
+    try:
         inputs = replay_inputs(trade, entry_trail_bps=distance)
     except (OSError, ValueError) as exc:
         return _fail(
@@ -684,6 +1033,41 @@ def main(
             1,
             fmt=args.format,
             pick=args.pick_key,
+        )
+
+    mic = inputs.document["instrument"]["mic"]
+    # Asked ONCE: a clock is a seam, and two calls can straddle a session's
+    # close, which is exactly the boundary the servable cap is about.
+    moment = now()
+    window = bar_window(
+        walk_start=_instant(inputs.configuration["walk_start"]["value"]),
+        entry_deadline=_instant(inputs.configuration["entry_deadline"]["value"]),
+        exit_instant=last_exit,
+        mic=mic,
+        now=moment,
+    )
+    # Before any vendor call, so an unanswerable window spends no quota.
+    if not window.servable:
+        return _fail(
+            "bars_window_unservable",
+            "deadline_not_yet_servable",
+            _unservable_message(args.pick_key, window),
+            _EXIT_TRANSIENT,
+            fmt=args.format,
+            suggestions=[
+                {
+                    "argv": [
+                        sys.executable,
+                        "-m",
+                        "scripts.replay_from_pick",
+                        args.trades_json,
+                        args.pick_key,
+                        "--out",
+                        args.out,
+                    ]
+                }
+            ],
+            **_window_details(args.pick_key, window, mic=mic, now=moment),
         )
 
     out = pathlib.Path(args.out)
