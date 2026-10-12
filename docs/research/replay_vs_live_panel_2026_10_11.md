@@ -118,5 +118,45 @@ Three picks refused with `bars_window_unservable` / `deadline_not_yet_servable`,
 
 ## 7. Two things worth changing, neither done here
 
+**§8 (2026-10-12): both landed — #1756 and #1757. The amendment also carries one measurement this section provoked.**
+
 1. **`_replay_exclusions` should treat `never_filled` plus `state_reason: pending` as not comparable**, the way it already treats `open` and `unresolved`. Five of twelve records on this panel carry that shape, and replaying one compares two different horizons. The fix belongs beside the existing `not_final` branch at `trades.py:2973`.
 2. **The script's refusal codes and reason vocabularies are published only as prose**, in the bar-fetch design's section 11. The broker contract keeps its table and its registries in step with `tests/brokers/test_broker_failure_codes_published.py`; nothing does that here, so a reason added in code turns no document red.
+
+---
+
+## 8. Amendment, 2026-10-12
+
+Section 7 named two changes and said neither was done. Both are now on `main`, and the review of the first produced a measurement that belongs beside the panel rather than only in a pull request.
+
+### Item 1 landed as #1756, and it is sharper than section 7 asked for
+
+`_replay_exclusions` now adds `not_final` for a `never_filled` record whose `state_reason` is `pending`. The reason is threaded in from `_state`, which already derives it, so the predicate and the producer cannot drift. `EXCLUDE_NOT_FINAL` is reused: the published nine-string `REPLAY_EXCLUSIONS` tuple did not grow, because "it has no final outcome" is one failure mode and the record already carries `state` and `state_reason` for a caller that needs to know which.
+
+The fixture's comparable set is now the seven records section 3 measured, and the five of section 2 carry `not_final` themselves. So the narrowing this memo had to do by hand is now the report's own verdict.
+
+**What the review added, and it is a new measurement.** Asked whether `disarmed` is the same horizon mismatch as `pending` — in both, the ladder's own window never ran out — the answer turned out to need data rather than reasoning. Each disarmed pick leaves an unobserved tail between the operator's intervention and the ladder's expiry:
+
+| pick | disarmed at | entry deadline | unobserved tail | bars at or below the declared limit inside it |
+|---|---|---|---:|---:|
+| `BE:2026-09-29` | 2026-09-30T15:42:20Z | 2026-10-08T20:00Z | 196.3 h | **0** |
+| `DAVE:2026-09-25` | 2026-09-30T15:42:21Z | 2026-10-06T20:00Z | 148.3 h | **0** |
+| `QBTS:2026-09-21` | 2026-09-23T14:22:52Z | 2026-09-30T20:00Z | 173.6 h | **0** |
+
+The replay walks those tails while the record is frozen, so the comparison on these three converges **because no bar reached the rung inside them** — data, not construction. That is why they stay comparable while `pending` does not: a disarmed pick cannot come back to life, so its replay is a counterfactual; a pending pick was still live, so a fill in its tail is one the daemon might still have taken. The distinction is now written into `_replay_exclusions`' own docstring with these figures.
+
+Section 3's never-filled paragraph measured zero touches over each pick's whole entry window; this table is the same check narrowed to the part of that window the record could not see. Both readings agree, which is the point: the earlier number already covered the tail.
+
+### Item 2 landed as #1757
+
+The command's 15 codes and 29 reasons now live in one registry, `_REFUSAL_REASONS`, which the refusal renderer reads; an unregistered pair prints a warning before the envelope and still refuses, so the "one JSON object as the last stderr line" contract holds even on a bad pair. An AST walk over the module makes four things CI failures: a site naming an unregistered code, a site stating a reason outside that code's set, a registered code the help text omits, and a code the help text names that the registry does not define.
+
+**The published surface is the command's own `--help`, deliberately NOT section 11 of the bar-fetch design.** That memo is a dated record marked LOCKED, so pinning live code to it would make a historical document a contract. And it could not serve as the gated surface anyway, measured: its section 11 table carries **11 rows against the registry's 15 codes**, describing the four pre-existing refusals in prose instead. A reader sent there for `usage`'s reasons would find no row. `--help` therefore publishes the codes, and names the registry itself as authoritative for the reasons.
+
+### One residual this amendment exists to keep findable
+
+No issue was filed for it, so it is recorded here. `_action_reason` returns `split` for any corporate-action detail that does not begin with `special dividend`. It is total today — the lookup writes exactly two detail shapes, which its own docstring states — but a third shape would be **published as `split` rather than refused**. And measured rather than reasoned, the fallthrough is wider than a third shape: the expression is `detail and detail.startswith("special dividend")`, so a `found` answer whose `detail` is `None` also publishes `split`, and `CorporateActionsAnswer.detail` is typed `str | None`. The new gate cannot see this: it reads the literals the function returns, not whether its branches are exhaustive. Fixing it means refusing an unknown detail, or adding a sentinel reason, or making the lookup's detail an enum that is total by construction — each a behaviour change needing its own tests and its own check of whether a third shape exists in the wild.
+
+### What this amendment does not change
+
+Every figure in sections 1 to 6 was measured on 2026-10-11 against the report as it behaved before #1756, and stands as measured. Re-running today yields the same seven terminal records; what differs is that the report now marks the other five itself instead of leaving the narrowing to the reader.
