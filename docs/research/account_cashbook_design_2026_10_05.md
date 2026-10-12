@@ -1,6 +1,6 @@
 # Design: the account cash book — what the money actually did (#1689)
 
-Status: DRAFT r2, 2026-10-06. r2 adds §1.6, the results of the Phase 0 LIVE probes run GET-only on 2026-10-05, and settles three of the four open questions in §8. Still DRAFT, not LOCKED: probe 3 has not run, and §1.6 records four caveats that the probes did not close.
+Status: DRAFT r3, 2026-10-12. r2 added §1.6, the Phase 0 LIVE probe results from 2026-10-05, and settled three of the four open questions in §8. r3 adds §1.7: probe 3 ran, twice, across the trade dates 2026-10-07 and 2026-10-08. It closes §8 question 5 and the first two of §1.6's four caveats, and it changes the cadence rule in §5(c) and §7 Phase 4. Still DRAFT, not LOCKED: §8 questions 2 and 3 are open, §1.6 caveats 3 and 4 stand, and §1.7 lists four things probe 3 did not settle — the restatement shape §9 hoped it would answer cheapest among them.
 
 Code facts in §1 come from `origin/main` at `96d32966` and were re-checked against `7b1927a6`. Every broker number in §1 was measured **offline**, on the redacted LIVE capture committed at `apps/alphalens-research/tests/brokers/automanager/fixtures/trades/live_2026_10_03/venue.json` (read GET-only on 2026-10-03: 249 audit rows, 41 trades-report rows, 104 bookings rows). §1.6 is the only section built from live reads.
 
@@ -165,14 +165,89 @@ The 3 unlinked fills are **two closes and one open** — LULU and QUBT sold, UBE
 
 ### What these probes did NOT settle
 
-Four things, each stated because the probes could have closed them and did not.
+Four things, each stated because the probes could have closed them and did not. Two were later closed by probe 3 and are marked.
 
-1. **The balance cross-check passed in the only condition where it cannot fail.** The window was quiet — last fill 2026-10-01, everything long booked — so no trade was in flight and the `Date` versus `ValueDate` basis could not diverge. The balances body carries `TransactionsNotBooked`, so the broker tracks precisely the state that breaks the check. "It reconciles" is true today and untested where it matters.
-2. **Probe 3 has not run.** It needs a session day on which something actually executed, a read a few hours after the close and a repeat the next morning. It remains the only probe that puts the cross-check in a condition where it can fail, which makes it more important than its original "refine the cadence" framing.
+1. **The balance cross-check passed in the only condition where it cannot fail.** The window was quiet — last fill 2026-10-01, everything long booked — so no trade was in flight and the `Date` versus `ValueDate` basis could not diverge. The balances body carries `TransactionsNotBooked`, so the broker tracks precisely the state that breaks the check. "It reconciles" is true today and untested where it matters. **CLOSED by probe 3 (§1.7 P8):** the check was exercised with three trades in flight and `TransactionsNotBooked` at −4 319.07, and it held exactly. §1.7 P7 adds the hazard this caveat invites and gets wrong — `TransactionsNotBooked` clears with the cash, about 19 minutes before any report row exists, so it is not a completeness gate.
+2. ~~**Probe 3 has not run.**~~ **RUN 2026-10-07 and 2026-10-08; results in §1.7.** It was the only probe that put the cross-check in a condition where it can fail, and it changed the cadence question rather than merely refining it (§1.7 P5, P7).
 3. **Paging is still untested, not fine.** 249 activities came back; whether that was one page or several is not observable from the caller, because the client folds pages itself. The sweep's first run is the largest read this layer will ever make.
 4. **Single-currency is strong evidence, not proof.** Every `Share Amount` row carries its own `ConversionRate`, so each leg converts at execution and non-PLN cash should never accumulate. But the absence of a per-currency field in the response is not proof that non-PLN cash cannot exist.
 
 One measurement is reported and then discarded, so a later reader does not mistake it for a finding: a direct call to the audit endpoint in the second probe script returned 0 rows for every window, while `list_fill_history` returned 249 in the same run. The direct call was wrong, not the account empty. Nothing is concluded from it.
+
+## 1.7 Probe 3 (run 2026-10-07 and 2026-10-08 on LIVE, GET-only, results)
+
+Probe 3 ran twice, on the two consecutive trade dates that produced fills. The first run sampled every 5 to 15 minutes across 2026-10-07 into the next morning (180 samples, one fill); the second sampled every 2 minutes from 22:30 to 01:30 UTC across 2026-10-08 into 2026-10-09 (132 samples, no failed sample, three fills). Both ran on the VPS under the attended unlock, GET-only.
+
+The second run is the one with resolving power, because three fills settle in one batch and a 2-minute grid separates events a 15-minute grid folds together. Its predictions were written down before it ran: the cash would land on 12 812.52, the report would hold six rows, and the stamps would read `Date=2026-10-08`. All three held.
+
+### P5. The settlement is a nightly batch at a fixed clock time, not a lag after the fill
+
+The three fills were at 13:41:05, 15:27:57 and 16:54:46 UTC on 2026-10-08. The cash moved once, for all three at once:
+
+| UTC | `CashBalance` | `TransactionsNotBooked` | trades rows | bookings rows |
+|---|---|---|---|---|
+| 23:46:52 | 17 131.59 | −4 319.07 | 0 | 0 |
+| **23:48:55** | **12 812.52** | **0** | 0 | 0 |
+| 00:08:08 | 12 812.52 | 0 | 0 | 0 |
+| **00:10:11** | 12 812.52 | 0 | **3** | 0 |
+| **00:12:14** | 12 812.52 | 0 | 3 | **4** |
+| **00:14:17** | 12 812.52 | 0 | 3 | **6** |
+
+The first run bounds the same moment from the other side: at 23:48:04 its cash was still the pre-settlement 19 178.77, and by 00:03:08 it was the post-settlement 17 131.59. So across two nights the cash moved inside **23:48:04–23:48:55 UTC**, a 51-second intersection.
+
+This retires the framing both this memo and the probe list used. "Report lag" described an interval measured from the fill, and the two nights give wildly different intervals for that reading — about 10 hours from the earliest fill on the second night, under 7 hours from the only fill on the first. They are the same event. What is fixed is the wall clock, and the apparent lag is only the distance from the fill to the next batch.
+
+Two nights is two samples. The clock time is consistent across both and the intersection is tight, but nothing here excludes a batch that drifts.
+
+### P6. The money settles about 26 minutes before the report that explains it
+
+Reading the table above in order: the cash is final and `TransactionsNotBooked` is back to zero at 23:48:55, while both reports are still empty. The trades report gains its three rows between 00:08:08 and 00:10:11 — **19 to 23 minutes after the cash moved**. The bookings report follows two to six minutes later.
+
+This also corrects a number recorded earlier in this arc. A first reading of the 15-minute run put the gap at "up to 15 minutes"; that was the grid speaking, not the account. The first run's data in fact permits anything from 0 to 30 minutes, and the 2-minute run pins it at 19 to 23.
+
+### P7. Two completeness signals that do not mean what they look like
+
+Both are new hazards for §5(c), and both were invisible to the first run.
+
+**`TransactionsNotBooked == 0` is not a completeness signal.** It returned to zero at 23:48:55, nineteen minutes before any report row existed. §1.6 named this field as the one that "tracks precisely the state that breaks the check", which invites reading it as a gate. It clears with the cash, not with the report.
+
+**The bookings report can be read mid-write.** At 00:12:14 it held four of its six rows — the BE and HUT pairs, with the FLY pair missing — and at 00:14:17 it held all six. A caller that polls once inside that window sums 2 668.37 PLN against a cash movement of 4 319.07 and has nothing in the response saying the set is partial. The 1 650.70 it is missing is exactly the FLY pair. The row count is self-consistent; it is simply not final.
+
+Together these bound the sweep's cadence. A sweep run the same evening, which is the cadence §7 Phase 4 assumed, always runs before the batch. A sweep run between 23:48 and roughly 00:15 UTC reports `reconciles: false` with a difference of up to a whole day's trading, correctly by its own definition and meaninglessly. Measured, the first safe moment for trade date D is about **00:30 UTC on D+1**, and the only sound completeness test is the reconciliation itself: the stored rows must account for the observed cash movement.
+
+### P8. The cross-check now holds where it could fail, and the #1728 identity holds on three trades
+
+§1.6 recorded that the balance cross-check had only been exercised in a quiet window, "the one condition in which it cannot fail". The second run put it in the failing condition: three trades in flight and `TransactionsNotBooked` at −4 319.07. The six rows that settled, all stamped `Date=2026-10-08` and `ValueDate=2026-10-09`:
+
+| Instrument | `Share Amount` | `Commission` |
+|---|---|---|
+| BE:xnys | −1 056.86 | −3.92 |
+| FLY:xnas | −1 646.78 | −3.92 |
+| HUT:xnas | −1 603.67 | −3.92 |
+| **sum** | **−4 307.31** | **−11.76** |
+
+Their total is **−4 319.07**, which is exactly the cash movement (17 131.59 to 12 812.52) and exactly the `TransactionsNotBooked` parked before the batch. That is the #1728 identity confirmed a fourth time, and the first time on more than one trade at once.
+
+### P9. The date basis is stated by the venue, on every row
+
+Open question 4 and the §1.6 caveat both turned on which date field an incremental sum should use. The rows answer it directly rather than by inference: `Date` carries the **trade date** and `ValueDate` carries the next day, on all six rows of the second night and both rows of the first. The settlement crosses midnight UTC, so a reader inferring the basis from the observation time would have got 2026-10-09; the field says 2026-10-08.
+
+So the incremental sum keys on `Date`, and the earlier worry that the basis "could diverge" while a trade is in flight does not arise: the stamp is fixed at the trade date before the row is first visible.
+
+### P10. No restatement was observed, so a restatement's shape is still unknown
+
+§9 proposed that probe 3 could settle the restatement shape "for free by diffing the id sets across two days". It was diffed. Across all 132 samples of the second run, spanning 2026-10-08T17:51 to 2026-10-09T02:57, the two 2026-10-07 rows were compared against a baseline captured on the first sample: both amounts were unchanged, no id appeared, and no id disappeared. The first run saw the same stability over its own window.
+
+This is a non-answer, and is recorded as one. Zero observed restatements over two trade dates does not establish that a correction arrives as a rewrite rather than as a new offsetting id, which is the failure the fold's "latest line wins per `BkAmountId`" rule would miss. It establishes only that none occurred here. The risk in §9 stands untouched.
+
+### What probe 3 did NOT settle
+
+1. **The restatement shape**, per P10 — the one thing §9 hoped it would answer cheaply.
+2. **Whether the batch time is stable.** Two nights agree to within a minute. Two nights are two samples.
+3. **What a non-trading day does.** Both runs covered trade dates with fills. A batch that fires on a day with nothing to settle, or does not fire, is unobserved, and Phase 4's note about weekend false pages still rests on the zero-row reads of 2026-10-02 and 10-03.
+4. **Paging and single-currency**, which probe 3 did not address; §1.6 items 3 and 4 stand as written.
+
+Nothing here touches §1.3. The FX conversion charge was already settled offline on 41 rows at 0.248–0.254 %; the four freshly booked rows seen here sit at 0.249–0.250 % and add a live confirmation to a question that was not open.
 
 ## 2. Source of truth
 
@@ -199,7 +274,7 @@ A new root, not inside `broker_orders/<env>/`: that root is the daemon's live mo
 
 **Append-only JSONL, folded by key, latest line wins**, through the existing appender (`brokers/journal.py:78-128`: one write, flush, fsync, torn-predecessor repair), so the registered `queue_write_failed` code applies unchanged. The reader mirrors `read_pick_fold` (`brokers/automanager/picks.py:262-309`), which counts malformed lines rather than dropping them.
 
-The reason it is a journal and not a parquet: the bookings report lags, bounded only at "at most two days; a shorter bound was not measured". A number computed today can legitimately change tomorrow. A parquet overwrite replaces yesterday's number silently; the journal keeps both and reports `restated: N`. **A number that changed must be visible as having changed.**
+The reason it is a journal and not a parquet. *Rewritten in r3, because probe 3 removed the original reason.* The first argument was the report lag, "bounded only at at most two days", so a number computed today could legitimately change tomorrow. Measured, the report completes the same night, about 26 minutes after the settlement batch (§1.7 P6), so that argument is gone. The second argument, restatement, is also unsupported by observation: zero restatements over two trade dates (§1.7 P10). What survives is narrower, and it is why the form stays. A restatement's shape on the wire is unknown (§9); the fold's "latest line wins per `BkAmountId`" rule would silently double count one shape of it; and this store is the only thing that could ever detect either. A parquet overwrite replaces yesterday's number silently; the journal keeps both and reports `restated: N`. **A number that changed must be visible as having changed** — and on current evidence that is a precaution against an unmeasured failure, not a response to a measured one.
 
 **This journal is never compacted.** Compaction today touches `standalone_stops` and `entry_trails` only, and it is what destroyed `trailed`, `reanchored`, `stop_filled` and `tranche_fired` lines before the first snapshot-taking boot. A restatement history that gets compacted is not a restatement history.
 
@@ -229,9 +304,11 @@ This is what the issue exists for. Three mechanisms, all arithmetic rather than 
 
 **(c) The balance cross-check.** Each sweep stores a balance snapshot; the next asserts that the change in the account's cash equals the sum of cash events settling in the interval. A disagreement is content, not a crash: the total reports `reconciles: false` with the difference as a number.
 
-*Updated 2026-10-06 (§1.6).* Whether the account's cash is separable from unrealized marks is settled: `CashBalance` and `TotalValue` decompose exactly, and the whole account reconciles to the cent. Which date field the incremental sum uses is NOT settled and needs probe 3.
+*Updated 2026-10-06 (§1.6), again 2026-10-12 (§1.7).* Whether the account's cash is separable from unrealized marks is settled: `CashBalance` and `TotalValue` decompose exactly, and the whole account reconciles to the cent. The date field the incremental sum uses is settled too: `Date`, which the venue stamps with the trade date on every row (§1.7 P9).
 
 Two versions, and the difference matters more than it looks. The **cumulative** check — cash book since `history_begins` against today's `CashBalance` — is known to hold. The **incremental** check — the change between two sweeps against the events settling between them — is the one that catches a late restatement, which is the entire reason the store is an append-only journal. A cumulative check that only ever says yes cannot detect a correction to an old row. So if the two ship separately, the cumulative one carries on its face that it cannot see a restatement; otherwise it reads as proof the history is intact, which it is not.
+
+**The cross-check has a window in which it is guaranteed to disagree.** Measured (§1.7 P5–P7): the cash settles in a nightly batch at about 23:48 UTC, and the bookings report is complete about 26 minutes later. A sweep inside that window sees the whole day's cash movement with none, or only some, of the rows that explain it, and reports `reconciles: false` with a difference of up to a full day's trading — correctly by its own definition, and meaninglessly. Two rules follow. The sweep for trade date D runs no earlier than about 00:30 UTC on D+1. And completeness is established by the reconciliation itself, never by a row count and never by `TransactionsNotBooked == 0`, which clears with the cash rather than with the report.
 
 **(d) `totals` is structurally inseparable from `totals.basis`.** `basis` is an object, not prose: episodes summed, episodes excluded, exclusions by reason, currency, windows clipped. The schema makes it a required sibling of every total. The human render prints the basis above the number and the currency on the number, per the repo's rule that a number beside a threshold in a different unit reads as a comfortable pass.
 
@@ -243,7 +320,7 @@ Two versions, and the difference matters more than it looks. The **cumulative** 
 | A position still open | not realized | state `open`, excluded; cost basis reported separately |
 | Quantity that will not pair | partial close outside the window, overlapping round trips | state `imbalanced`, a first-class state, excluded, counted |
 | A corporate action in kind (split, spin-off) | quantity changes with no trade row | needs a second source; until then the episode cannot flag it and §9 says so |
-| Money settled but not yet reported | report lag ≤ 2 days, lower bound unmeasured | the sweep records what it asked for and what came back |
+| Money settled but not yet reported | measured: the report completes about 26 min after the ~23:48 UTC batch (§1.7 P6) | the sweep records what it asked for and what came back; the cadence bound is in §5(c) |
 | Money before the first sweep, or aged out of retention | the store keeps only what a read returned | `history_begins` on every total; a `--since` before it answers `before_first_sweep`, never a smaller number |
 | Anything on SIM | canned rows from other accounts | the sweep refuses; the total is null with `sim_reports_unusable`, never `0.0` |
 | Which pick an old episode belongs to | compaction destroyed journal lines before 2026-10-01 | `picks: []` with a reason, stated as saying nothing about the money, which comes from the venue |
@@ -290,11 +367,11 @@ This is a **read, not a derivation** (§1.2), which is the whole point: the deri
 
 Gates: `trades_schema.py` plus the regenerated committed schema; the published vocabulary table in `apps/alphalens-broker-contract/README.md`, gated both ways; and the `trades.py` size baseline raised in the same commit, since the file sits exactly on it.
 
-### Phase 0 — probes, before Phase 2 and after Phase 1 — **DONE except probe 3**
+### Phase 0 — probes, before Phase 2 and after Phase 1 — **DONE**
 
-Three read-only reads were planned. Two ran on 2026-10-05 and their results are §1.6: the whole-account sweep and the `/port/v1/balances` body. Five further questions from the original probe list were settled offline in §1 and correctly did not spend a LIVE read.
+Three read-only reads were planned. Two ran on 2026-10-05 and their results are §1.6: the whole-account sweep and the `/port/v1/balances` body. The third ran on 2026-10-07 and again on 2026-10-08, and its results are §1.7. Five further questions from the original probe list were settled offline in §1 and correctly did not spend a LIVE read.
 
-**Probe 3 has not run and now gates more than it did.** It is the report lag together with the `Date`-versus-`ValueDate` question, and it needs a session day on which something actually executed, a read a few hours after that close, and a repeat the next morning. §1.6 shows why it matters more than its original framing: the balance cross-check has only been exercised in a quiet window, which is the one condition in which it cannot fail.
+**Probe 3 ran, and gated more than it was expected to.** It answered the report lag and the `Date`-versus-`ValueDate` question, exercised the balance cross-check in the condition where it can fail, and replaced the "report lag" framing with a fixed nightly batch (§1.7 P5). It did not answer the restatement shape, which §9 had hoped it would get for free.
 
 Phase 0 needed no authorization decision after all — ADR 0017 preserves ADR 0015's attended unlock verbatim for probes (§8.3). The host constraint stands and was honoured: the LIVE token store has a single-refresher invariant, so the probes ran on the VPS, never from the Mac.
 
@@ -310,7 +387,7 @@ The store, the codec, the sweep and a `sync` command. `--dry-run` reads and repo
 
 The episode derivation and the report: the bucket identity, the coverage partition, the balance cross-check, the `history_begins` and `swept_through` watermarks. A golden test over the LIVE fixture pins the bucket sums in §1.1, with a second fixture row carrying a different value in each column the test claims to read, because a fixture uniform in the tested column cannot prove a read.
 
-**No timer in this phase.** A hand-run sweep answers the owner's complaint. A timer brings three systemd gates, and the Prometheus rule-unit parity gate is bidirectional: a unit carrying the metrics hook with no staleness rule is red, so the "ship the alert in a later PR" lesson does not apply to a unit file, which is itself the emitter. On top of that the reports returned zero rows on 2026-10-02 and 10-03, so a daily staleness rule on this job is a weekend and holiday false-page candidate. If a timer is wanted later it ships with both rules in one PR and with a cadence chosen against measured report lag.
+**No timer in this phase.** A hand-run sweep answers the owner's complaint. A timer brings three systemd gates, and the Prometheus rule-unit parity gate is bidirectional: a unit carrying the metrics hook with no staleness rule is red, so the "ship the alert in a later PR" lesson does not apply to a unit file, which is itself the emitter. On top of that the reports returned zero rows on 2026-10-02 and 10-03, so a daily staleness rule on this job is a weekend and holiday false-page candidate. If a timer is wanted later it ships with both rules in one PR, and the cadence is now measured rather than open: no earlier than about 00:30 UTC for the preceding trade date (§1.7 P5–P7).
 
 ### Phase 5 — the second path, only if a Phase 0 probe returned rows
 
@@ -329,9 +406,9 @@ Explicitly its own route and its own Django app, never a tab under `/edge`, for 
 1. ~~**The command group's name.**~~ **DECIDED 2026-10-06: `cashbook`.** `ledger` was taken by the pre-registration ledger (§6) and `account` collides in the ear with `broker account`.
 2. **Does Phase 1 ship on its own?** It is three gates for a small change, and it gives a net figure per pick immediately. Against: the account-level net supersedes it for the account question — but not for the per-pick question, which the episode-level number cannot answer.
 3. **Does a second unattended LIVE-reading process get a standing grant?** **Answered for probes, open for a timer.** ADR 0017's own header says it extends ADR 0015 and that "the attended day-bound unlock survives verbatim for probes", and its Consequences repeat it; so an attended probe needed no decision and §1.6 ran under it. An unattended sweep is still a decision, and three facts bound it. The grant is account-bound (`ALPHALENS_SAXO_LIVE_STANDING` must equal `SAXO_LIVE_ACCOUNT_KEY`), so a boolean arm or a half-copied unit is inert. The LIVE-capable surface is one factory plus one keyword, and that factory calls `assert_live_rails()` first, so a second process built through it inherits the whole order-placement rail set even though it only reads — a read-only sweep would have to pin `DAILY_LOSS_LIMIT_R` and `MAX_PICK_NOTIONAL` to boot. And there is no precedent: the grant has exactly one production caller (`saxo/broker.py:2406`); `stream_handles.py` looks like a second one and is the opposite, an explicitly SIM-rail client that a LIVE instance is structurally refused. A read-only LIVE client built WITHOUT the broker factory would skip the order rails entirely, but ADR 0017 point 2 names the factory as the only caller of that keyword, so that route needs an ADR amendment rather than code. Recommendation: run the sweep attended, or timed on the VPS, and only amend the ADR if it must run unattended — a reader should not inherit a placement rail set.
-4. ~~**Is the balance cross-check in scope for the first version?**~~ **DECIDED 2026-10-06: yes, in scope.** Not because it passed — it passed in the one condition where it cannot fail (§1.6) — but because the cash field is unambiguous and the decomposition is exact. The date basis for the incremental version still needs probe 3, so the cumulative version ships first, carrying the statement that it cannot detect a restatement (§5(c)).
+4. ~~**Is the balance cross-check in scope for the first version?**~~ **DECIDED 2026-10-06: yes, in scope.** Not because it passed — it passed in the one condition where it cannot fail (§1.6) — but because the cash field is unambiguous and the decomposition is exact. The date basis for the incremental version is settled as `Date` by probe 3 (§1.7 P9), so the argument for shipping the cumulative version first is now about scope only, not about a missing measurement; whichever ships first still carries the statement that a cumulative check cannot detect a restatement (§5(c)).
 
-5. **Open, and newly the most load-bearing: probe 3.** It is the only check that puts the cross-check in a condition where it can fail, and it needs a session day on which something executed.
+5. ~~**Open, and newly the most load-bearing: probe 3.**~~ **DONE 2026-10-07 and 2026-10-08: §1.7.** It put the cross-check in the failing condition and the check held. What it did not close is listed at the end of §1.7; the restatement shape matters most and stays open under §9.
 
 ## 9. Risks
 
@@ -341,9 +418,9 @@ Explicitly its own route and its own Django app, never a tab under `/edge`, for 
 
 **A missing fee read as zero.** If any fee member is null and the summer treats it as `0.0`, the net looks better than reality — the worst direction for a money error. The rule is that a record contributes all of its money or none of it, and the test must mutate exactly that `or 0.0`.
 
-**`restated` could become the normal case.** If the report lag is routinely two days and the sweep runs the same evening, nearly every episode is born incomplete and restated later, which turns a signal into noise. Probe 3 settles the cadence.
+**~~`restated` could become the normal case.~~ Retired by probe 3.** The worry was a routine two-day lag against a same-evening sweep, which would have made nearly every episode born incomplete and restated later. Measured, the report completes the same night, about 26 minutes after the batch (§1.7 P6); the sweep has only to run after it, and §5(c) states the bound. What replaces this risk is narrower and lives in §5(c): a sweep run inside that 26-minute window disagrees by construction.
 
-**A restatement's shape on the wire is unknown.** The fold rests on "latest line wins per `BkAmountId`". Nobody has seen Saxo correct a booking. If a correction arrives as a new id carrying an offsetting amount rather than a rewrite, the fold double counts while `restated` stays 0 — the exact failure the store exists to prevent. Probe 3 can answer it for free by diffing the id sets across two days.
+**A restatement's shape on the wire is unknown.** The fold rests on "latest line wins per `BkAmountId`". Nobody has seen Saxo correct a booking. If a correction arrives as a new id carrying an offsetting amount rather than a rewrite, the fold double counts while `restated` stays 0 — the exact failure the store exists to prevent. Probe 3 diffed the id sets as proposed and found no restatement at all over two trade dates (§1.7 P10). The risk is therefore unchanged: still nobody has seen Saxo correct a booking, and the cheap route to the answer is now known not to work on an account where nothing gets corrected.
 
 **Paging has never been exercised on the reports.** Every probe response so far fit in one page, and the sweep's first run is the largest read this layer will make. A dropped page makes the total silently smaller, and the bucket identity cannot see it, because the identity is over rows the read returned. *Still open after §1.6, and sharpened: the client folds pages itself, so a caller cannot tell from a result whether one page or several were fetched. "No paging problem surfaced" is not evidence that paging works.* The backfill is now known to span two months rather than two years (§1.6 P3), which lowers the chance of paging without testing it.
 
@@ -376,4 +453,4 @@ Traced, not run, so this is a code-path reading rather than a measured fact. The
 
 If it holds, the rail never fires on LIVE. It needs its own ticket and its own measurement against the running daemon.
 
-**Do not repair it from this store.** This store is up to two days stale and an intraday rail needs intraday truth. A stale number feeding a money-path rail is a worse bug than a dead rail, because a dead rail is at least honest.
+**Do not repair it from this store.** This store is a night behind — the money for trade date D is readable from about 00:30 UTC on D+1 (§1.7 P5–P7) — and an intraday rail needs intraday truth. A stale number feeding a money-path rail is a worse bug than a dead rail, because a dead rail is at least honest.
