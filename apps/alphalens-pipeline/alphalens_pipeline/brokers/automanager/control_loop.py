@@ -788,6 +788,87 @@ def _live_exits_orders_allowed() -> bool:
     return os.environ.get(safety.ALLOW_ORDERS_ENV) == "1"
 
 
+def _journaled_stop_floor(
+    uic: int,
+    stop_price: float,
+    trailed_level: float | None,
+    reanchored_level: float | None,
+    announced: dict[int, float] | None,
+) -> float:
+    """The managed exit's stop: the plan stop raised to the higher of the
+    journaled trailed and reanchored levels, when either sits above it.
+
+    ``announced`` is ``_build_managed_exits``'s uic -> last announced raised
+    stop, so a raise is logged once per uic and level instead of on every
+    tick while it holds; without it every raise is logged.
+
+    All three numeric inputs arrive FINITE-FILTERED, and that is what makes
+    the chain below safe: ``trailed_level`` from
+    :func:`_fold_trailed_since_latest_plan` (#1673), ``reanchored_level`` from
+    :func:`_fold_reanchored_stop_levels`, which also drops a non-positive
+    level, and ``stop_price`` from ``stop_journal._parse_tranche_plan_line``,
+    which skips the whole ladder line rather than yield a non-finite stop.
+
+    Two consequences, because the composition here is deliberately NOT
+    :func:`broker_contract.stop_decision.compose_ratchet_floor`. A ``>``
+    against a running accumulator drops a ``NaN`` by construction and in
+    either order, so the asymmetry of ``max`` that #1673 was about cannot
+    arise here. An ``inf`` is the opposite case: it is NOT dropped, because
+    ``inf > x`` is True, and an infinite floor means something different at
+    this site than it does in a ratchet -- there it vetoes every proposal and
+    is inert, here it is the level actually placed, which for a long position
+    is a sell stop above the market. So the finite gate belongs at the folds,
+    and removing one of them is not a local change."""
+    raises: list[tuple[str, tuple[object, ...]]] = []
+    if trailed_level is not None and trailed_level > stop_price:
+        # The journaled ratchet floor outranks the plan's disaster stop, so
+        # THIS is the level that gets placed. Announced because #1324 made
+        # the marker survive every boot: the level may have been earned by
+        # an EARLIER fill on this uic (the fold only resets on a
+        # new-generation tranche_plan), and nothing else on the trail path
+        # writes a log line — which is why nobody could tell whether
+        # trailing had ever fired. Logged only when it actually raises, so
+        # a steady state stays quiet.
+        raises.append(
+            (
+                "uic %s: managed-exit stop raised by the journaled trailed level "
+                "%.4f (plan stop %.4f)",
+                (uic, trailed_level, stop_price),
+            )
+        )
+        stop_price = trailed_level
+    # #1518: the re-anchor's own floor. Same job as the trailed level, from
+    # the other arm of the declared-policy split — and until this landed it
+    # had nowhere to go, so a confirmed re-anchor raised the resting stop
+    # and then `execute_tranche_exit` wrote this stale one back on the
+    # first tranche fire. The HIGHER of the two wins, never the newer: both
+    # folds are journal-lifetime and a uic can carry both, and a stop floor
+    # that can fall is not a floor.
+    if reanchored_level is not None and reanchored_level > stop_price:
+        raises.append(
+            (
+                "uic %s: managed-exit stop raised by the journaled reanchored level "
+                "%.4f (previous %.4f, from the %s)",
+                (
+                    uic,
+                    reanchored_level,
+                    stop_price,
+                    "trailed level" if trailed_level is not None else "plan stop",
+                ),
+            )
+        )
+        stop_price = reanchored_level
+    if raises and (announced is None or announced.get(uic) != stop_price):
+        for message, args in raises:
+            logger.info(message, *args)
+    if announced is not None:
+        if raises:
+            announced[uic] = stop_price
+        else:
+            announced.pop(uic, None)
+    return stop_price
+
+
 def _build_managed_exits(
     *,
     long_positions: Iterable[Position],
@@ -840,55 +921,9 @@ def _build_managed_exits(
             # is a separate resting order this engine never touches.
             skipped += 1
             continue
-        trailed_level = trailed.get(uic)
-        raises: list[tuple[str, tuple[object, ...]]] = []
-        if trailed_level is not None and trailed_level > stop_price:
-            # The journaled ratchet floor outranks the plan's disaster stop, so
-            # THIS is the level that gets placed. Announced because #1324 made
-            # the marker survive every boot: the level may have been earned by
-            # an EARLIER fill on this uic (the fold only resets on a
-            # new-generation tranche_plan), and nothing else on the trail path
-            # writes a log line — which is why nobody could tell whether
-            # trailing had ever fired. Logged only when it actually raises, so
-            # a steady state stays quiet.
-            raises.append(
-                (
-                    "uic %s: managed-exit stop raised by the journaled trailed level "
-                    "%.4f (plan stop %.4f)",
-                    (uic, trailed_level, stop_price),
-                )
-            )
-            stop_price = trailed_level
-        # #1518: the re-anchor's own floor. Same job as the trailed level, from
-        # the other arm of the declared-policy split — and until this landed it
-        # had nowhere to go, so a confirmed re-anchor raised the resting stop
-        # and then `execute_tranche_exit` wrote this stale one back on the
-        # first tranche fire. The HIGHER of the two wins, never the newer: both
-        # folds are journal-lifetime and a uic can carry both, and a stop floor
-        # that can fall is not a floor.
-        reanchored_level = (reanchored or {}).get(uic)
-        if reanchored_level is not None and reanchored_level > stop_price:
-            raises.append(
-                (
-                    "uic %s: managed-exit stop raised by the journaled reanchored level "
-                    "%.4f (previous %.4f, from the %s)",
-                    (
-                        uic,
-                        reanchored_level,
-                        stop_price,
-                        "trailed level" if trailed_level is not None else "plan stop",
-                    ),
-                )
-            )
-            stop_price = reanchored_level
-        if raises and (announced is None or announced.get(uic) != stop_price):
-            for message, args in raises:
-                logger.info(message, *args)
-        if announced is not None:
-            if raises:
-                announced[uic] = stop_price
-            else:
-                announced.pop(uic, None)
+        stop_price = _journaled_stop_floor(
+            uic, stop_price, trailed.get(uic), (reanchored or {}).get(uic), announced
+        )
         instrument_ccy, sizing_ccy, exchange_mic = (plan_currencies or {}).get(
             uic, (None, None, None)
         )
@@ -5642,7 +5677,6 @@ def _handle_now_tranche(
     *,
     now_tier: Any,
     records: Sequence[Mapping[str, Any]],
-    spec: Any,
     exit_spec: Any,
     alert_throttled: Callable[[str, str], bool] | None,
     now_entry_scope: _NowEntryScope | None,
@@ -6204,7 +6238,6 @@ def _place_pick(
         plan,
         trade_date=trade_date,
         records=records,
-        spec=spec,
         exit_spec=exit_spec,
         alert_throttled=alert_throttled,
         now_entry_scope=now_entry_scope,
@@ -6301,7 +6334,6 @@ def _route_now_tranche(
     *,
     trade_date: dt.date,
     records: Sequence[Mapping[str, Any]],
-    spec: Any,
     exit_spec: Any,
     alert_throttled: Callable[[str, str], bool] | None,
     now_entry_scope: _NowEntryScope | None,
@@ -6322,7 +6354,6 @@ def _route_now_tranche(
         plan,
         now_tier=now_tiers[0],
         records=records,
-        spec=spec,
         exit_spec=exit_spec,
         alert_throttled=alert_throttled,
         now_entry_scope=now_entry_scope,
