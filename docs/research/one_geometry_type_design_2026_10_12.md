@@ -1,6 +1,6 @@
 # Design: one geometry type — the brief emits the unsized trade, and `intent-replay` becomes the only what-if engine
 
-Status: **DRAFT**, 2026-10-12. Epic #1761. Code facts come from `24c725b8`; every claim below carries the `file:line` or the command that produced it, and where a fact is missing rather than known the word is **GAP**. Nothing in the repository was modified while this was written.
+Status: **REJECTED**, 2026-10-12. Epic #1761. The proposal in this memo — splitting `size` out of `TradeSpec` so the brief emits a shared geometry type — was refused by the adversarial review in section 9, on three grounds this memo's own measurements support. Sections 1 to 8 are kept as written, because the survey in them is what made the refusal possible and is reusable by whatever replaces it. **What survives is the destination, not the mechanism**: the brief's geometry should be validated, and the duplicate what-if engine should be retired. Section 9 names the three smaller, orthogonal changes that get both. Code facts come from `24c725b8`; every claim below carries the `file:line` or the command that produced it, and where a fact is missing rather than known the word is **GAP**. Nothing in the repository was modified while this was written.
 
 The proposal in one paragraph. `TradeSpec` has seven fields: six describe the chart and one, `size`, describes the account. Its own docstring calls it `compute_setup_plan`'s UNSIZED input. Split `size` out, leaving an account-free geometry type. The brief then emits that geometry instead of its own parallel `brief_trade_setup` shape; arming composes geometry plus size, instrument and meta into a `TradeIntent` unchanged on the wire it places from; and a what-if states the size as a declared run value. The deprecated `/edge` what-if lenses and their engine are then replaceable by `intent-replay` with no translation layer, because the brief already speaks the engine's language.
 
@@ -1296,3 +1296,105 @@ Today the contract is explicit that the two existing fields are one dial, not tw
 - **(from section 5)** `broker_contract/sizing.py:140-143` justifies a `__post_init__` refusal by claiming a brief's `tranche_pct` is "LLM-authored and range-checked nowhere (`paper.sizing` parses a bare `float(raw.get("tranche_pct", 0.0))`)". Both halves are now wrong: the trade setup is computed deterministically and the LLM composes only narrative (`thematic/argumentation/schema.py:5-11`), and `paper/sizing.py` no longer contains that parse — it went with the brief producer in #1552. The refusal is still correct; its stated reason is stale. If the epic touches that file, the comment should be corrected rather than carried forward as evidence.
 - **(from section 5)** The proposal says the deprecated lenses and their engine "can be replaced" once the brief speaks the engine's language. One of the nine variants cannot be replaced by a single document: `atr_bracket_1p5` under the realised anchor derives its bracket from walk-1's fill set (`ladder_replay.py:842-871`). The memo should say eight of nine, or name the two-pass harness as in scope.
 - **(from section 5)** ADR 0013 R4 charges the multiplicity budget for every registered lens "including retired ones" (`0013-trade-side-layer-architecture.md:110-112`), and the 2026-09-25 amendment charges the CLAIM rather than the tool (`:119-126`). Replacing the lenses therefore does not free budget, and re-running the same nine policies through a new engine and quoting the result is a fresh set of charged looks unless it is recorded as exploratory under the three stated conditions. The memo should not present the migration as budget-neutral without that sentence.
+
+---
+
+## 9. Adversarial review, 2026-10-12 — the proposal is refused
+
+This repository reviews a design memo adversarially before any code. The review was run on the
+argument above, with the 28 objections of section 8 handed over as already known so the reviewer
+spent its effort on what the memo had NOT doubted. Its verdict was to abandon the type split. Each
+load-bearing claim below was then checked against the code rather than accepted.
+
+### 9.1 The repository already paid for this exact coupling, and recorded the price
+
+`broker_contract/sizing.py:114-127`, the docstring of `TpTranchePlan.tranche_frac`:
+
+> `tranche_frac` is a FRACTION of the position (0-1), deliberately NOT the same unit as the
+> brief-shaped `TpTrancheSpec.tranche_pct`, which is a PERCENTAGE (0-100). The two names differ
+> because the units do; **sharing one name is what let a live sizer and a fee estimator read the same
+> number 100x apart.**
+
+That is a measured, in-repo incident of the failure mode this proposal invites, and the remedy
+chosen at the time was to NOT share the name. It happened inside ONE bounded context. This proposal
+would share a type across two that the project separates on purpose, and across the boundary where
+the brief is LLM-authored and validated nowhere while the contract is behind four gates.
+
+So the translation step the proposal removes is not waste. It is an anti-corruption layer, and the
+100x line is what it was built from.
+
+### 9.2 The seam is an artifact of one field, not a principle
+
+The proposal cuts on "account-bound versus chart-bound" and moves exactly one field. But `TradeSpec`
+carries two more fields with no chart meaning, and the proposal leaves both:
+
+| field | what it is | default |
+|---|---|---|
+| `size` | the account's budget | none (and section 3 insists it must stay that way) |
+| `side` | `Literal["long"]`, "a barrier against the client-side Sell->Buy footgun" (`schema.py:257-261`) | `"long"` |
+| `order_ttl_days` | sessions of `instrument.mic` — a venue fact, and section 1 already records that the spec cannot self-complete it (`schema.py:248-255`) | `DEFAULT_ORDER_TTL_DAYS` |
+
+Two observations follow, and the second is the sharper one. A principled cut is **levels versus
+policy**: `entry_tiers`, `disaster_stop` and `tp_tranches` need only the tape, while `size`, `side`
+and `order_ttl_days` each need something off the intent — the account, the direction convention, the
+venue. And the decode-at-default hazard section 3 raises for a new `size` field applies identically
+to the two policy fields that already carry defaults; the cut removes one instance of that hazard
+and leaves two standing.
+
+### 9.3 The stated payoff does not need the change — this is the one that decides it
+
+The memo's main justification is that retiring the duplicate what-if engine needs no translation
+layer once the brief speaks the engine's language. That is circular, for a reason the memo's own
+section 2 establishes.
+
+A population run needs one `TradeIntent` per candidate. Composing one requires `size`, `instrument`
+and `meta` whatever shape the brief emits, so a brief-to-intent generator exists in both designs.
+And "the brief already speaks the engine's language" is false at the field-name level today —
+`limit` against `limit_price`, `target` against `price`, with `atr_distance` and `label`
+unrepresented. A completed split therefore does not remove the adapter; it shortens it.
+
+The engine is retired by producing `TradeIntent`s and calling the real backtester. The split neither
+enables nor requires that. Its unique contribution is a shorter adapter, which is a line count and
+not an architecture.
+
+### 9.4 The cheap alternative, and it is cheap
+
+Validate `brief_trade_setup` in place: a brief-side clone of the arming door's third gate — a JSON
+Schema generated from the dataclass the payload already is, validated on write, plus a codec
+round-trip that refuses any key the brief's own decoder would drop. That last half is the important
+one, because section 1 records that the published input schema sets no `additionalProperties`, so a
+typo arrives as an extra key and is caught by the fixed point rather than by the schema.
+
+Checked for feasibility rather than assumed: the payload is already a frozen dataclass with a
+`to_dict` (`alphalens_pipeline/thematic/trade_setup/model.py:67-126`), and `contract_field` is
+importable outside the contract package — a research test already imports it
+(`tests/trade_intent/test_contract_metadata.py:23`). So the machinery exists on both sides.
+
+What it gives up is the "brief speaks the engine's language" property, which section 9.3 shows is
+false today and unnecessary for the retirement.
+
+### 9.5 What this memo recommends instead
+
+1. **Validate `brief_trade_setup` in place**, with the gate-3 clone of 9.4. One file plus its test.
+2. **Retire the duplicate what-if engine behind a brief-to-intent adapter**, and point
+   `intent-replay` at the population. Measure, after that lands, whether anything the split would
+   have bought still remains.
+3. **Fix the docstring.** `TradeSpec` calls itself UNSIZED while carrying `size`, and that sentence
+   is also the `description` of `properties.spec` in the published schema, so a third-party producer
+   reads it. One sentence, not a migration.
+
+And if the split is revived despite 9.1 to 9.3, it must move `order_ttl_days` and `side` out with
+`size` under the levels/policy cut, or state in writing why a seam that leaves two policy fields on
+an account-free type is tolerated.
+
+### 9.6 What the review did not change
+
+The destination stands. Silent typos in an unvalidated brief are a real defect; the duplicate
+engine's slippage-free fill model is a worse instrument than the backtester; and the measurements in
+sections 1 to 4 — the field mapping, the 43/26/14/30 site counts, the basis change, the seven open
+questions — are reusable by the three changes above. The error was the coupling mechanism, not the
+goal.
+
+**GAP:** a second review, by an agent reading this memo against the repository rather than reasoning
+on its argument, was still running when this section was written. If it raises a finding that
+changes 9.1 to 9.5, that belongs in a further dated section rather than an edit to this one.
