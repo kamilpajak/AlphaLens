@@ -800,7 +800,25 @@ def _journaled_stop_floor(
 
     ``announced`` is ``_build_managed_exits``'s uic -> last announced raised
     stop, so a raise is logged once per uic and level instead of on every
-    tick while it holds; without it every raise is logged."""
+    tick while it holds; without it every raise is logged.
+
+    All three numeric inputs arrive FINITE-FILTERED, and that is what makes
+    the chain below safe: ``trailed_level`` from
+    :func:`_fold_trailed_since_latest_plan` (#1673), ``reanchored_level`` from
+    :func:`_fold_reanchored_stop_levels`, which also drops a non-positive
+    level, and ``stop_price`` from ``stop_journal._parse_tranche_plan_line``,
+    which skips the whole ladder line rather than yield a non-finite stop.
+
+    Two consequences, because the composition here is deliberately NOT
+    :func:`broker_contract.stop_decision.compose_ratchet_floor`. A ``>``
+    against a running accumulator drops a ``NaN`` by construction and in
+    either order, so the asymmetry of ``max`` that #1673 was about cannot
+    arise here. An ``inf`` is the opposite case: it is NOT dropped, because
+    ``inf > x`` is True, and an infinite floor means something different at
+    this site than it does in a ratchet -- there it vetoes every proposal and
+    is inert, here it is the level actually placed, which for a long position
+    is a sell stop above the market. So the finite gate belongs at the folds,
+    and removing one of them is not a local change."""
     raises: list[tuple[str, tuple[object, ...]]] = []
     if trailed_level is not None and trailed_level > stop_price:
         # The journaled ratchet floor outranks the plan's disaster stop, so

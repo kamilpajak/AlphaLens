@@ -6481,6 +6481,7 @@ class TestFoldReanchoredStopLevels(IsolatedHomeTestCase):
 
 
 _INHERITED_TRAIL_MARKER = "raised by the journaled trailed level"
+_REANCHORED_RAISE_MARKER = "raised by the journaled reanchored level"
 
 
 class TestManagedExitAnnouncesInheritedTrailedLevel(IsolatedHomeTestCase):
@@ -6559,6 +6560,64 @@ class TestManagedExitAnnouncesARaiseOncePerLevel(IsolatedHomeTestCase):
             long_positions=[], tranche_plans={}, fired={}, trailed={}, announced=announced
         )
         self.assertEqual(announced, {})
+
+
+class TestManagedExitAnnouncesBothJournaledFloors(IsolatedHomeTestCase):
+    """The two raise announcements are ordered and each names what it beat, and
+    until this class existed nothing asserted the reanchored one: mutating its
+    message, swapping the two blocks, or relaxing the trailed ``>`` to ``>=``
+    all left the whole broker suite green. The level itself is a commutative
+    maximum, so the ORDER is load-bearing for the operator-facing log rather
+    than for the stop that reaches the broker -- which is precisely why only a
+    log assertion can pin it."""
+
+    def _raise_lines(
+        self, *, trailed: dict[int, float], reanchored: dict[int, float]
+    ) -> tuple[float, list[str]]:
+        lines = [_tranche_plan_line(333, pick_key="OLN:2026-08-14")]
+        with self.assertLogs(cl.logger, level="INFO") as captured:
+            cl.logger.info("probe")  # floor so assertLogs never raises on silence
+            managed = cl._build_managed_exits(
+                long_positions=[_pos(10.0, 333)],
+                tranche_plans=sj.fold_tranche_plans(lines),
+                fired=sj._fold_fired_since_latest_plan(lines),
+                trailed=trailed,
+                reanchored=reanchored,
+            )
+        self.assertEqual(len(managed), 1)
+        markers = (_INHERITED_TRAIL_MARKER, _REANCHORED_RAISE_MARKER)
+        return managed[0].stop_price, [
+            line for line in captured.output if any(m in line for m in markers)
+        ]
+
+    def test_both_floors_raising_announces_the_trailed_one_first(self) -> None:
+        # Plan stop 9.0, trailed 14.0, reanchored 15.0: both raise, so both are
+        # announced, and the second reports the value it beat -- the trailed
+        # level, not the plan stop.
+        stop, logs = self._raise_lines(trailed={333: 14.0}, reanchored={333: 15.0})
+        self.assertAlmostEqual(stop, 15.0)
+        self.assertEqual(len(logs), 2, msg=f"one line per floor that raised; got {logs}")
+        self.assertIn(_INHERITED_TRAIL_MARKER, logs[0])
+        self.assertIn("14.0000 (plan stop 9.0000)", logs[0])
+        self.assertIn(_REANCHORED_RAISE_MARKER, logs[1])
+        self.assertIn("15.0000 (previous 14.0000, from the trailed level)", logs[1])
+
+    def test_the_reanchored_floor_alone_says_it_beat_the_plan_stop(self) -> None:
+        # No journaled trailed level at all, so the re-anchor raises the plan
+        # stop directly and the message names that.
+        stop, logs = self._raise_lines(trailed={}, reanchored={333: 15.0})
+        self.assertAlmostEqual(stop, 15.0)
+        self.assertEqual(len(logs), 1, msg=f"only the re-anchor raised; got {logs}")
+        self.assertIn("15.0000 (previous 9.0000, from the plan stop)", logs[0])
+
+    def test_a_floor_exactly_AT_the_plan_stop_raises_nothing(self) -> None:
+        # The boundary, which separates ``>`` from ``>=``: a level equal to the
+        # stop already resting is not a raise, so it is neither placed nor
+        # announced. A line on every tick for a level that changed nothing is
+        # the noise #1324's announcement exists to avoid.
+        stop, logs = self._raise_lines(trailed={333: 9.0}, reanchored={})
+        self.assertAlmostEqual(stop, 9.0)
+        self.assertEqual(logs, [])
 
 
 class TestCompactorKeepsReanchoredLatch(IsolatedHomeTestCase):
