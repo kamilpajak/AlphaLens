@@ -768,12 +768,14 @@ compares realized trades with the replay filters on `replay_exclusions == []`,
 then strips what the door derives from `plan` (`intent_id`, `meta.armed_ts`,
 `spec.tp_tranches[].r_multiple`; the jq recipe under "Writing a manual pick")
 and keeps `meta.trade_date`. On the LIVE journals of 2026-10-03 that leaves
-EWTX, ASTS, SMMT and VST.
+seven records: the four closed picks EWTX, ASTS, SMMT and VST, and the three
+`never_filled` picks a disarm ended (BE:2026-09-29, DAVE:2026-09-25,
+QBTS:2026-09-21), whose replay answers `no_fill`.
 
 | exclusion | meaning |
 |---|---|
 | `offline` | the record was built `--offline`: prices and exit reasons are journal values, not the venue's |
-| `not_final` | the state is `open` or `unresolved`, so there is no final outcome |
+| `not_final` | there is no final outcome: the state is `open` or `unresolved`, or it is `never_filled` with `state_reason: pending`, which means no entry tier had expired or been cancelled and the ladder was still resting at the report's `now` (#1755). The other `never_filled` reasons -- `disarmed`, `expired`, `cancelled`, `refused` -- are terminal and stay comparable |
 | `manual_close` | an exit is a `manual_close`; the replay has no such event |
 | `unknown_exit` | an exit's reason is `unknown` |
 | `exit_reason_null` | an exit's reason is null (offline, the stop's moves cannot be known) |

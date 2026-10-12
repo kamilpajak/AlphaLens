@@ -1804,11 +1804,18 @@ class TheUnservableWindowRefusesBeforeAnyVendorCallTest(_CommandTestCase):
         )
         return status, out, err, calls
 
-    def test_the_refusal_fires_on_six_of_the_twelve_comparable_records(self) -> None:
+    def test_the_refusal_fires_on_one_of_the_seven_comparable_records(self) -> None:
         """The measured cost of the half-open grid on the window, at the memo's
-        own `now`: six of the twelve comparable fixture records cannot be served
-        on 2026-10-09, where three could not under an inclusive close. Each of
-        the six clears within two further calendar days with no code change.
+        own `now`: ONE of the seven comparable fixture records cannot be served
+        on 2026-10-09, and it clears on 2026-10-10 with no code change.
+
+        Seven and not twelve since #1755: the five records the report used to
+        offer with `state: never_filled` and `state_reason: pending` carry
+        `not_final` now, and four of them were in the six this test counted.
+        Their ladders were still resting at the report's own `now`, so the
+        window could not serve them either -- but the window was the second
+        gate to say so, and the cost of the grid is what it refuses among the
+        records the command will actually replay.
 
         Counted by CODE and not by a non-zero status: the recording fake hands
         every run an empty tape, so the six servable picks go on to refuse
@@ -1823,34 +1830,27 @@ class TheUnservableWindowRefusesBeforeAnyVendorCallTest(_CommandTestCase):
                 if "bars_window_unservable" in err:
                     refused[pick] = (status, err)
 
-            self.assertEqual(len(self._comparable()), 12)
-            self.assertEqual(
-                sorted(refused),
-                [
-                    "BE:2026-09-29",
-                    "BE:2026-09-30",
-                    "OSCR:2026-09-30",
-                    "PLTR:2026-09-29",
-                    "SYM:2026-09-30",
-                    "VCYT:2026-09-29",
-                ],
-            )
+            self.assertEqual(len(self._comparable()), 7)
+            self.assertEqual(sorted(refused), ["BE:2026-09-29"])
             for pick, (status, err) in refused.items():
                 with self.subTest(pick=pick):
                     self.assertEqual(status, 7)
                     self.assertIn("bars_window_unservable", err)
 
     def test_the_servable_cap_does_not_move_after_the_session_close(self) -> None:
-        """The cap is the vendor's CALENDAR DAY, not the last closed session:
-        `session_not_closed` answers 2026-10-12 at 21:00Z, which would read the
-        cap as 2026-10-09 and run a window the vendor does not serve. So the
-        verdict has to be the same at 08:14Z and at 21:00Z."""
+        """The cap is the vendor's CALENDAR DAY, not the last closed session.
+
+        `BE:2026-09-29` needs session 2026-10-09 (close 20:00Z), and at 21:00Z
+        on 2026-10-09 that session HAS closed -- so a cap read off the last
+        closed session would run a window the vendor does not serve, the
+        calendar day 2026-10-09 not being past yet. The verdict has to be the
+        same at 08:14Z and at 21:00Z."""
         with TemporaryDirectory() as tmp:
             directory = pathlib.Path(tmp)
 
             status, out, err, _ = self._replay(
                 directory,
-                "SYM:2026-09-30",
+                "BE:2026-09-29",
                 now=dt.datetime(2026, 10, 9, 21, 0, tzinfo=dt.UTC),
                 fmt="json",
             )
@@ -1865,20 +1865,20 @@ class TheUnservableWindowRefusesBeforeAnyVendorCallTest(_CommandTestCase):
     def test_the_refusal_names_both_sessions_and_the_date_to_re_run_on(self) -> None:
         """Naming the deadline session alone reads as "the vendor is behind",
         where the reason is that the expiry is a session later. So the prose
-        carries the deadline session 2026-10-09, the session the expiry is
-        observable on 2026-10-12, and the earliest run 2026-10-13."""
+        carries `BE:2026-09-29`'s deadline session 2026-10-08, the session the
+        expiry is observable on 2026-10-09, and the earliest run 2026-10-10."""
         with TemporaryDirectory() as tmp:
             directory = pathlib.Path(tmp)
 
-            status, out, err, calls = self._replay(directory, "SYM:2026-09-30")
+            status, out, err, calls = self._replay(directory, "BE:2026-09-29")
 
             self.assertEqual(status, 7)
             self.assertEqual(out, "")
-            for date in ("2026-10-09", "2026-10-12", "2026-10-13"):
+            for date in ("2026-10-08", "2026-10-09", "2026-10-10"):
                 with self.subTest(date=date):
                     self.assertIn(date, err)
             self.assertEqual(calls, [], "an unanswerable window spends no vendor quota")
-            self.assertEqual(sorted(p.name for p in directory.glob("SYM_*")), [])
+            self.assertEqual(sorted(p.name for p in directory.glob("BE_*")), [])
 
 
 class _FetchingTestCase(_CommandTestCase):
