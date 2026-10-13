@@ -127,7 +127,7 @@ class LadderOutcome(models.Model):
     sector_excess_return = models.FloatField(null=True, blank=True)
     outcome_benchmark_version = models.CharField(max_length=64, blank=True, default="")
 
-    # Sequence + ratchet what-if.
+    # Ordered crossing sequence (the policy-free substrate layer).
     sequence_str = models.CharField(max_length=256, blank=True, default="")
 
     # Pre-computed ladder-chart payload (PR-1): the JSON projection the pipeline
