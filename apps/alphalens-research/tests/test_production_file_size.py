@@ -150,7 +150,10 @@ BASELINE: dict[str, int] = {
     # one both grew the file from 7254, so the merged length is 7554
     # rather than either branch's own number. Counted with ``wc -l`` on the
     # merged file, not added up from the two diffs.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7554,
+    #
+    # 5 more to correct the #1621 comment's cadence: it quoted the SIM
+    # daemon's tick rate for the LIVE one, and names the measured mechanism.
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7559,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3302,
