@@ -180,6 +180,20 @@ def kill_active_metric(job: str) -> str:
 # hold for this many consecutive protection ticks, the driver pages ONCE (throttled).
 _OCO_LAG_ALERT_TICKS = 5
 
+# Throttle keys for the three failure alerts that used to page on EVERY tick
+# (#1621 part 4) — the LIVE daemon ticks every ~6-7 s in market hours, so a
+# sustained broker outage sent ~10 Telegram messages a minute. Each key
+# DISCRIMINATES what must stay independent, because collapsing two genuinely
+# distinct conditions HIDES the second one, which is worse than the flood: the
+# sweep failing is one condition per tick (no discriminator); an orphan is
+# keyed by identity (``_orphan_alert_key``); a protection failure by action TYPE
+# and uic. None is derived from the exception TEXT — a gateway that stamps a
+# request id into every message would mint a new key per tick and the flood
+# would be back.
+_ORPHAN_SWEEP_FAIL_ALERT_KEY = "orphan-sweep-fail"
+_ORPHAN_ALERT_KEY_PREFIX = "orphan"
+_PROTECTION_FAIL_ALERT_KEY_PREFIX = "protection-fail"
+
 
 @dataclass(frozen=True)
 class LoopDeps:
@@ -551,22 +565,41 @@ def _alert_kill_transition(deps: LoopDeps, kill: bool) -> None:
     deps.kill_state["active"] = kill
 
 
+def _orphan_alert_key(orphan: Any) -> str:
+    """Throttle key identifying ONE orphan across ticks.
+
+    The sweeper fills exactly one of the two id fields per arm (an order orphan
+    carries the order id and an empty reference, a position orphan the reverse),
+    so both are in the key: it stays stable for the same orphan seen again and
+    distinct for two orphans flagged in the same tick."""
+    return f"{_ORPHAN_ALERT_KEY_PREFIX}:{orphan.kind}:{orphan.order_id}:{orphan.external_reference}"
+
+
 def _run_orphan_sweep(deps: LoopDeps, report: TickReport) -> None:
     # A BrokerError here (list_open_orders etc.) must not crash the tick — the
     # sweep is a diagnostic read; alert and carry on to reconcile.
     try:
         orphans = deps.sweep_orphans_fn(deps.broker)
     except BrokerError as exc:
-        deps.alert(f"orphan-sweep failed (broker error) — skipped this tick: {exc}")
-        report.alerts += 1
+        if deps.alert_throttled(
+            f"orphan-sweep failed (broker error) — skipped this tick: {exc}",
+            _ORPHAN_SWEEP_FAIL_ALERT_KEY,
+        ):
+            report.alerts += 1
         orphans = []
     for orphan in orphans:
         # Human line renders the E{n}/TP{n} label off the machine ref (falls back
         # to the order id for an order orphan with no ref); the raw machine repr
         # is kept OUT of the operator line and carried only on a debug logger.
         human = human_label_from_external_reference(orphan.external_reference) or orphan.order_id
-        deps.alert(f"orphan (placed but never journaled): {human} [{orphan.kind}]")
+        if deps.alert_throttled(
+            f"orphan (placed but never journaled): {human} [{orphan.kind}]",
+            _orphan_alert_key(orphan),
+        ):
+            report.alerts += 1
         logger.debug("orphan detail: %r", orphan)
+        # DETECTION count, not a paging count: every tick's sighting still lands
+        # here even when the throttle swallowed the repeat page.
         report.orphans += 1
 
 
@@ -1526,8 +1559,12 @@ def _run_protection_pass(
         try:
             deps.execute_protection(action, kill, report)
         except BrokerError as exc:
-            deps.alert(f"protection {type(action).__name__} failed (broker error) — skipped: {exc}")
-            report.alerts += 1
+            action_name = type(action).__name__
+            if deps.alert_throttled(
+                f"protection {action_name} failed (broker error) — skipped: {exc}",
+                f"{_PROTECTION_FAIL_ALERT_KEY_PREFIX}:{action_name}:{getattr(action, 'uic', None)}",
+            ):
+                report.alerts += 1
     if track_oco_lag:
         _track_oco_lag(deps, actions, report)
 
