@@ -117,6 +117,8 @@ BASELINE: dict[str, int] = {
     # correction to #1621's own premise: the orphan sweep runs only on a
     # process's first tick, so only the protection arm removes a flood. A
     # comment that stops the next reader re-deriving that is worth its lines.
+    # 7 more from the pre-merge review round: why the protection key's uic
+    # can read None, and which test keeps that from hiding a failure.
     # The previous entry's #1525 history follows.
     #
     # Raised from 7227 for the #1525 extraction. Pulling the journaled stop
@@ -125,7 +127,7 @@ BASELINE: dict[str, int] = {
     # docstring that records why the ``>`` chain is safe without the shared
     # ratchet helper costs 18 more. The function it exists to shrink went from
     # cognitive complexity 34 to 12, which is the trade this entry pays for.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7305,
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7312,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3302,

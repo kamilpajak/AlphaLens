@@ -1576,6 +1576,13 @@ def _run_protection_pass(
             action_name = type(action).__name__
             if deps.alert_throttled(
                 f"protection {action_name} failed (broker error) — skipped: {exc}",
+                # ``None`` when the action carries no uic. Reachable only for
+                # the arms that never call the broker, so it cannot merge two
+                # real failures today: ``CancelRemaining`` is not dispatched
+                # here, ``AlertOnly`` only sends an alert and a bare ``NoOp``
+                # returns at once. Pinned by
+                # ``test_every_action_that_reaches_the_broker_carries_a_uic_field``,
+                # which reads the contract's union and goes red on a new type.
                 f"{_PROTECTION_FAIL_ALERT_KEY_PREFIX}:{action_name}:{getattr(action, 'uic', None)}",
             ):
                 report.alerts += 1

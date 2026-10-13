@@ -10629,6 +10629,34 @@ class TestOrphanSweepAlertsAreThrottled(IsolatedHomeTestCase):
         )
         return cl.LoopDeps(**{**deps.__dict__, "sweep_orphans_fn": sweep})
 
+    def test_every_action_that_reaches_the_broker_carries_a_uic_field(self) -> None:
+        """The protection-failure key discriminates by action TYPE and uic, so an
+        action that calls the broker without a uic would key every one of its
+        failures to the same string and hide all but the first.
+
+        Two members of the contract's union carry no ``uic`` field, and neither
+        reaches the broker: ``CancelRemaining`` is not dispatched by the
+        protection executor at all, and ``AlertOnly`` only sends a throttled
+        alert. (``NoOp`` has the field, defaulting to None, and returns at
+        once.) The union is read from the contract rather than listed here, so a
+        NEW action type is red until someone classifies it.
+        """
+        from typing import get_args
+
+        from alphalens_pipeline.brokers.automanager import position_manager
+
+        without_a_uic = {
+            cls.__name__
+            for cls in get_args(position_manager.Action)
+            if "uic" not in {f.name for f in dataclasses.fields(cls)}
+        }
+
+        self.assertEqual(
+            without_a_uic,
+            {"CancelRemaining", "AlertOnly"},
+            "a new protection action with no uic would merge its failures into one page",
+        )
+
     def test_two_distinct_orphans_in_one_tick_both_alert(self) -> None:
         """The discriminating case: a key that collapsed the two would HIDE an
         orphan, which is worse than the flood this change exists to stop."""
