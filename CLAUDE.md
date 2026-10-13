@@ -19,7 +19,9 @@ Guidance for Claude Code (claude.ai/code) when working in this repo.
 
 ## Layer status
 
-Lifecycle status of each layer lives in its `__init__.py` as the `__status__` constant (enforced by `apps/alphalens-research/tests/test_layer_status.py`). The workspace splits live infrastructure from the research lab per [ADR 0011](docs/adr/0011-split-pipeline-and-research.md):
+Lifecycle status of each layer lives in its `__init__.py` as the `__status__` constant. The workspace splits live infrastructure from the research lab per [ADR 0011](docs/adr/0011-split-pipeline-and-research.md):
+
+**The two tables below are an illustrative DIGEST, not an inventory.** They name the layers worth knowing about, not every package on disk — `alphalens_pipeline` alone holds 14 and `screeners/` holds 12, so a table row is a pointer and its absence means nothing. For a package's real status read its own `__status__`; for what exists, read the tree. Only the research-side roots are gated — see **Status markers** below for what the test actually requires.
 
 ### Live production (`apps/alphalens-pipeline/alphalens_pipeline/`)
 
@@ -131,7 +133,7 @@ Closed paradigms used to ship CLI replay tooling; that surface was removed per [
 
 ## Conventions
 
-**Status markers** — each layer/screener `__init__.py` declares `__status__: Literal["ACTIVE", "CLOSED", "RESEARCH_ONLY", "ARCHIVED"]` plus `__closed_date__`, `__closed_reason__`, and `__closed_evidence__: dict[str, str]` (mapping 7 gates → evidence path) if `__status__ ∈ {CLOSED, ARCHIVED}`. Schema: `docs/research/kill_verdict_checklist.md`. `apps/alphalens-research/tests/test_layer_status.py` auto-discovers every package declaring `__status__` under the layer roots (no manual registry to maintain); a small `NAMESPACE_ONLY_ALLOWLIST` covers genuine namespace packages that legitimately carry no `__status__`.
+**Status markers** — each layer/screener `__init__.py` declares `__status__: Literal["ACTIVE", "CLOSED", "RESEARCH_ONLY", "ARCHIVED"]` plus `__closed_date__`, `__closed_reason__`, and `__closed_evidence__: dict[str, str]` (mapping 7 gates → evidence path) if `__status__ ∈ {CLOSED, ARCHIVED}`. Schema: `docs/research/kill_verdict_checklist.md`. `apps/alphalens-research/tests/test_layer_status.py` VALIDATES every package that declares `__status__` anywhere under `alphalens_research` or `alphalens_pipeline` (no manual registry to maintain), but REQUIRES one only under eight research-side layer roots (`screeners`, `gates`, `backtest`, `overlays`, `attribution`, `preaudit`, `diagnostics`, `retrospective_audit`); a small `NAMESPACE_ONLY_ALLOWLIST` covers genuine namespace packages that legitimately carry no `__status__`. So the convention is NOT universal and a missing marker is usually INVISIBLE to the gate rather than red: a pipeline-side package is checked only once it declares a status (`core/`, `data/`, `scorers/`, `market/` and `observability/` carry none today), and the other four uv workspace members — `apps/alphalens-broker-contract`, `apps/alphalens-feedback`, `apps/intent-replay`, `apps/alphalens-django` — are never scanned at all.
 
 **English-only in code** — comments, docstrings, identifiers in English. Math notation (α, ρ, ×, −) stays. Polish prose lives in CLAUDE.md, MEMORY, conversations, commit messages, postmortems. Enforcement: `apps/alphalens-research/tests/test_no_polish_chars.py`.
 
