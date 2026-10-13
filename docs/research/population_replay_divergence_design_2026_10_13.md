@@ -1,6 +1,6 @@
 # Design: does charging costs change WHICH candidates look good, or only how good they look?
 
-Status: **LOCKED**, 2026-10-13. Adversarial review comes before any compute, per this repository's
+Status: **REJECTED**, 2026-10-13 — see section 9. The money question it was built to answer is settled there by arithmetic, as a null, and the design is refused on five measured blockers. Section 9 is the only part a later reader needs. Adversarial review comes before any compute, per this repository's
 rule for a design of this class. Code facts come from `50f286e7`; store facts carry their host and
 their read timestamp. Nothing in the repository was modified while this was written.
 
@@ -211,3 +211,69 @@ Decision rule:
 5. **What would make this experiment worth NOT running?** If the answer "keep the cheap instrument"
    changes nothing, and the answer "re-base" would be refused on doctrine anyway, then the measurement
    is decoration. The reviewer should say so plainly if that is the case.
+
+
+---
+
+## 9. Review verdict, 2026-10-13 — do not run; the money question is settled by arithmetic
+
+Two adversarial passes ran on this memo before any compute: one reading it against the code, one on
+the statistical design. Both refuse it, and the first settled the underlying question in ten minutes
+without an engine. Every number below was re-derived by hand before being written here.
+
+**The premise of section 1 is wrong: `intent-replay` charges nothing to the result.** Its R is gross
+— `pnl_cash = _proceeds(result.events) - spend` (`intent_replay/measures.py:121-122`), with no fee
+subtracted anywhere; `commission` appears **0** times in `walk.py`; the whole-share lattice is absent
+and the engine says so (`cost_gate.py:27-28`, "**No whole-share lattice.** The daemon prices the
+WHOLE-SHARE notional; this prices the stated budget"), with fractional units at `walk.py:217`; and FX
+cancels everywhere but the gate. Fees enter through exactly one mechanism: the take-profit cost gate,
+which DEFERS a tranche whose exit would not clear cost. So "charging costs" cannot lower an R number;
+it can only move when a tranche fires.
+
+**And it cannot do that either, on this population.** The gate threshold is
+`entry * (1 + (fee_bps + exit_edge_min_bps)/1e4)` (`cost_gate.py:118`) with `COMMISSION_RATE = 0.0008`,
+`MIN_COMMISSION_USD = 1.0` and `EXIT_EDGE_MIN_BPS = 50.0` (`brokers/automanager/costs.py:53,57,203`),
+so the floor is 66 bps above the fee knee and about 80 bps at the owner's real 8 000 PLN position
+(three tranches, ~667 USD each, under the 1 250 USD knee). Measured over every `status == "OK"` setup
+in `~/.alphalens/thematic_briefs/*.parquet` (host `Mac.localdomain`, read 2026-10-13; construction:
+alloc-weighted blend from `entry_tiers`, gap to each `tp_tranches[].target` in bps):
+
+| Quantity | Value |
+|---|---|
+| take-profit tranches measured | 2553 |
+| smallest gap above the blend | **91.2 bps** |
+| 1st percentile / median | 542.9 / 3122 bps |
+| tranches below 66 bps | **0** |
+| tranches below 80 bps | **0** |
+| tranches below 110 bps | 1 (0.04%) |
+
+The nearest take-profit in the whole store sits 91 bps above the blend against a threshold of at most
+80. The gate has nothing to bind on, so arm 2 — 482 episodes times three sizes of engine runs — would
+have measured a null it took one query to establish. `/edge`'s `gross_of_cost: True` is therefore
+correct on the evidence and not merely by doctrine, and the realized measure keeps `ladder_replay`.
+
+**Five measured blockers would have corrupted the run had it gone ahead**, each in the harness rather
+than in either engine. `time_stop_t` is hardcoded to `None` on the path section 2.4 names
+(`scripts/replay_from_pick.py:296`), so the 193 `TIME_STOP` episodes — 40% of the pool — would never
+close. The entry deadline differs by one full session: the population blocks a fill at the session
+OPEN of expiry (`feedback/population_ladder_monitor.py:495`) where `pick_window` gives its CLOSE
+(`brokers/automanager/pick_window.py:68-69`), measured at 6.5 hours on 200 of 200 sampled episodes,
+landing exactly on the `NO_FILL -> filled` cell section 3 calls the most interesting. The bar path
+section 2.4 names REFUSES an off-grid bar on a supplied series rather than dropping it
+(`replay_from_pick.py:1603-1608`), and 7.63% of cached bars are off-grid, so every file would be
+refused. The brief-store join is unspecified, and 83 of 629 terminal rows (13%) have no recoverable
+payload. And the independence unit contradicts this repository's own rule for this panel: rule 5
+collapse gives 247 episodes in 51 arrival-session clusters, not 482 in 176 tickers, with no replicate
+count stated where the house figure is B = 10 000.
+
+**What the reviews settled in this memo's favour, and what survives as a separate question.** The
+field mapping of section 5 is sound: 546 of 546 synthesized documents pass the replay's own door with
+zero refusals, and `planned_blended_entry` equals the stored `full_ladder_blended_entry` on 546 of 546
+with a maximum relative difference of 0. Arm 1 is buildable — zero is accepted for every cost
+magnitude it needs — so section 4's worry and section 7's matching abort were dead branches. Question
+1 was wrong in the other direction: the anchors agree on 84 of 84 brief dates. What remains is a
+different experiment under a different title, and this memo is not it: **is `ladder_replay`'s fill
+model wrong independently of costs?** It would be dominated by a signed asymmetry neither engine's
+documentation advertises — on a gap-down bar `intent-replay` buys at `min(bar.open, limit_price)`
+(`walk.py:357-360`) where the lens buys at the limit, and 290 of 629 terminal rows filled exactly one
+tier, so the day-1 gap is the modal case, not the tail.
