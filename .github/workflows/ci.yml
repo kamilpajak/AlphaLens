@@ -37,7 +37,16 @@ jobs:
   research:
     name: research (Python)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 25, not 15. Measured over the 15 most recent ci.yml runs (2026-10-13):
+    # the `Run tests with coverage` step takes 463 s on a fast hosted runner and
+    # 821 s on a slow one -- a 1.8x spread on identical code, and every other
+    # step in this job costs seconds. The longest GREEN job was 14.68 min
+    # against the old 15, so the margin was 2% and a slow runner killed the job
+    # outright (GitHub reports a timeout as `cancelled`, which `gh pr checks`
+    # renders as `fail`). This limit is insurance against a HUNG job, not a
+    # budget for a healthy one: it has to clear the slowest runner, not the
+    # median. The other jobs here use at most a quarter of their own limits.
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
