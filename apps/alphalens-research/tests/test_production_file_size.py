@@ -113,7 +113,11 @@ BASELINE: dict[str, int] = {
     # ``deps.alert`` calls into three ``if deps.alert_throttled(...)`` blocks
     # and adds the key helper plus the comment that says what each key
     # discriminates -- which is the design, not decoration: a collapsed key
-    # HIDES an orphan. 37 lines; the previous entry's #1525 history follows.
+    # HIDES an orphan. 51 lines, of which the last 14 record a MEASURED
+    # correction to #1621's own premise: the orphan sweep runs only on a
+    # process's first tick, so only the protection arm removes a flood. A
+    # comment that stops the next reader re-deriving that is worth its lines.
+    # The previous entry's #1525 history follows.
     #
     # Raised from 7227 for the #1525 extraction. Pulling the journaled stop
     # floor out of ``_build_managed_exits`` cannot be line-neutral -- the
@@ -121,7 +125,7 @@ BASELINE: dict[str, int] = {
     # docstring that records why the ``>`` chain is safe without the shared
     # ratchet helper costs 18 more. The function it exists to shrink went from
     # cognitive complexity 34 to 12, which is the trade this entry pays for.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7291,
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7305,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3302,

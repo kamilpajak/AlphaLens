@@ -10592,6 +10592,11 @@ class TestRunOnceNowEntryScope(IsolatedHomeTestCase):
 
 _ORPHAN_A = ("", "OLN-2026-08-18-entry-t0-fire", "position")
 _ORPHAN_B = ("99", "", "order")
+# Same KIND as the pair above, differing only in the one id field that arm
+# fills. A key built from the kind alone cannot tell these apart, and the two
+# fixtures above cannot show it: they differ in kind as well as in both ids.
+_ORPHAN_A_SIBLING = ("", "SMG-2026-08-19-entry-t0-fire", "position")
+_ORPHAN_B_SIBLING = ("101", "", "order")
 
 
 def _orphan(order_id: str, external_reference: str, kind: str):
@@ -10636,6 +10641,27 @@ class TestOrphanSweepAlertsAreThrottled(IsolatedHomeTestCase):
         self.assertEqual(len(flagged), 2, f"both orphans must page: {alerts}")
         self.assertEqual(report.orphans, 2)
         self.assertEqual(report.alerts, 2)
+
+    def _both_page(self, pair: tuple) -> None:
+        orphans = [_orphan(*spec) for spec in pair]
+        with TemporaryDirectory() as d:
+            alerts: list[str] = []
+            deps = self._deps_with(d, alerts, sweep=lambda _b: orphans)
+            report = cl.run_once(deps, sweep_orphans=True)
+        flagged = [a for a in alerts if "orphan (placed but never journaled)" in a]
+        self.assertEqual(len(flagged), 2, f"both orphans must page: {alerts}")
+        self.assertEqual(report.alerts, 2)
+
+    def test_two_position_orphans_of_one_kind_both_alert(self) -> None:
+        """Pins ``external_reference`` in the key on its own. Two position
+        orphans share a kind and carry no order id, so a key that drops the
+        reference pages for the first and HIDES the second."""
+        self._both_page((_ORPHAN_A, _ORPHAN_A_SIBLING))
+
+    def test_two_order_orphans_of_one_kind_both_alert(self) -> None:
+        """Pins ``order_id`` in the key on its own, by the mirror argument: two
+        order orphans share a kind and carry no reference."""
+        self._both_page((_ORPHAN_B, _ORPHAN_B_SIBLING))
 
     def test_the_same_orphan_pages_once_within_the_interval(self) -> None:
         orphans = [_orphan(*_ORPHAN_A)]

@@ -119,6 +119,7 @@ if TYPE_CHECKING:
     from broker_contract.price_feed import PriceFeed
     from broker_contract.sizing import SetupPlan, TpTranchePlan
 
+    from alphalens_pipeline.brokers.automanager.orphan_sweeper import Orphan
     from alphalens_pipeline.brokers.automanager.streaming_trigger import StreamTrigger
     from alphalens_pipeline.brokers.notifications import NotificationPort
     from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
@@ -180,16 +181,25 @@ def kill_active_metric(job: str) -> str:
 # hold for this many consecutive protection ticks, the driver pages ONCE (throttled).
 _OCO_LAG_ALERT_TICKS = 5
 
-# Throttle keys for the three failure alerts that used to page on EVERY tick
-# (#1621 part 4) — the LIVE daemon ticks every ~6-7 s in market hours, so a
-# sustained broker outage sent ~10 Telegram messages a minute. Each key
-# DISCRIMINATES what must stay independent, because collapsing two genuinely
-# distinct conditions HIDES the second one, which is worse than the flood: the
-# sweep failing is one condition per tick (no discriminator); an orphan is
-# keyed by identity (``_orphan_alert_key``); a protection failure by action TYPE
-# and uic. None is derived from the exception TEXT — a gateway that stamps a
-# request id into every message would mint a new key per tick and the flood
-# would be back.
+# Throttle keys for the three failure alerts that bypassed the throttle (#1621
+# part 4). What each arm actually buys differs, and #1621's own premise that all
+# three "repeat on every tick" is false — measured, not assumed:
+#   - A PROTECTION failure genuinely repeats per tick. The LIVE daemon ticks
+#     every ~6-7 s in market hours, so a sustained broker outage sent ~10
+#     Telegram messages a minute. This is the only arm that removes a flood.
+#   - The ORPHAN SWEEP runs only on the FIRST tick of a daemon process
+#     (``run_daemon`` passes ``sweep_orphans=first``, then clears it), so neither
+#     orphan alert can repeat in-process at all. Their keys buy the other half of
+#     the contract instead: two orphans flagged in one sweep must BOTH page. The
+#     per-restart burst stays #1361's subject, because the throttle is built once
+#     per process and a restart gets a fresh one.
+# Each key DISCRIMINATES what must stay independent, because collapsing two
+# genuinely distinct conditions HIDES the second one, which is worse than the
+# flood: the sweep failing is one condition per sweep (no discriminator); an
+# orphan is keyed by identity (``_orphan_alert_key``); a protection failure by
+# action TYPE and uic. None is derived from the exception TEXT — a gateway that
+# stamps a request id into every message would mint a new key per tick and the
+# flood would be back.
 _ORPHAN_SWEEP_FAIL_ALERT_KEY = "orphan-sweep-fail"
 _ORPHAN_ALERT_KEY_PREFIX = "orphan"
 _PROTECTION_FAIL_ALERT_KEY_PREFIX = "protection-fail"
@@ -565,13 +575,17 @@ def _alert_kill_transition(deps: LoopDeps, kill: bool) -> None:
     deps.kill_state["active"] = kill
 
 
-def _orphan_alert_key(orphan: Any) -> str:
-    """Throttle key identifying ONE orphan across ticks.
+def _orphan_alert_key(orphan: Orphan) -> str:
+    """Throttle key identifying ONE orphan.
 
     The sweeper fills exactly one of the two id fields per arm (an order orphan
     carries the order id and an empty reference, a position orphan the reverse),
-    so both are in the key: it stays stable for the same orphan seen again and
-    distinct for two orphans flagged in the same tick."""
+    so BOTH are in the key: two orphans flagged in the same sweep are distinct,
+    and a key built from the kind alone would page for the first and hide the
+    rest. The same-kind cases in ``TestOrphanSweepAlertsAreThrottled`` pin each
+    id field on its own; the mixed-kind pair cannot, since it differs in kind as
+    well. Stability across ticks is a property of the key but not a benefit in
+    practice: the sweep runs only on a process's first tick."""
     return f"{_ORPHAN_ALERT_KEY_PREFIX}:{orphan.kind}:{orphan.order_id}:{orphan.external_reference}"
 
 
