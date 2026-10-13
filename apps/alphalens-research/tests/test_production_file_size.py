@@ -108,6 +108,19 @@ ALLOWED_EXCLUDED_FILE_PREFIXES = ("test_",)
 BASELINE: dict[str, int] = {
     "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3507,
     "apps/alphalens-pipeline/alphalens_cli/commands/thematic.py": 1708,
+    # Raised from 7254 for #1621 part 4. Routing the orphan-sweep, orphan and
+    # protection-failure alerts through the throttle turns three one-line
+    # ``deps.alert`` calls into three ``if deps.alert_throttled(...)`` blocks
+    # and adds the key helper plus the comment that says what each key
+    # discriminates -- which is the design, not decoration: a collapsed key
+    # HIDES an orphan. 51 lines, of which the last 14 record a MEASURED
+    # correction to #1621's own premise: the orphan sweep runs only on a
+    # process's first tick, so only the protection arm removes a flood. A
+    # comment that stops the next reader re-deriving that is worth its lines.
+    # 7 more from the pre-merge review round: why the protection key's uic
+    # can read None, and which test keeps that from hiding a failure.
+    # The previous entry's #1525 history follows.
+    #
     # Raised from 7227 for the #1525 extraction. Pulling the journaled stop
     # floor out of ``_build_managed_exits`` cannot be line-neutral -- the
     # signature, the call line and the moved block cost 13 lines -- and the
@@ -132,7 +145,12 @@ BASELINE: dict[str, int] = {
     # against a 7444-line file and shipped the gate red. The last 22 lines are
     # the pre-merge review round: grouping the gap observations per uic instead
     # of electing one, and the two comments that say what is NOT recorded.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7496,
+    #
+    # Re-counted after merging #1766 into this branch: that change and this
+    # one both grew the file from 7254, so the merged length is 7554
+    # rather than either branch's own number. Counted with ``wc -l`` on the
+    # merged file, not added up from the two diffs.
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7554,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3302,
