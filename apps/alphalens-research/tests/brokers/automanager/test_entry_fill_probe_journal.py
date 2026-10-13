@@ -124,7 +124,8 @@ class TestTheProbeJournalsWhatItSaw(IsolatedHomeTestCase):
                     "crid": _CRID,
                     entry_trails.KEY_OBSERVATION: entry_trails.OBSERVATION_ORDER_ABSENT,
                     "order_id": _ORDER_ID,
-                    entry_trails.KEY_FILLED_QTY: 0.0,
+                    # No quantity: an order that LEFT the book reports none, and
+                    # the 0.0 the probe reads is the absence, not a fill size.
                     "uic": _UIC,
                     "ts": _NOW.isoformat(),
                 }
@@ -200,6 +201,37 @@ class TestTheProbeJournalsWhatItSaw(IsolatedHomeTestCase):
         failures = [line for line in caught.output if "observation journal" in line]
         self.assertEqual(len(failures), 1, caught.output)
 
+    def test_a_failing_append_is_not_retried_while_the_reading_KEEPS_changing(self) -> None:
+        """The no-retry property has TWO possible causes and the case above can
+        only see one of them. There, the book never changes after the order
+        goes absent, so the unchanged-reading short-circuit alone would keep the
+        append from running again even if nothing marked it done.
+
+        A quantity that grows 3 -> 5 -> 7 is a NEW reading every probe under the
+        SAME observation name, so the short-circuit cannot help: only the mark
+        taken BEFORE the append keeps this to one attempt. Marking after a
+        successful append instead turns a full disk into one failed write per
+        probe for the life of the order."""
+
+        def _explode(_record: Mapping[str, Any]) -> None:
+            raise OSError("ENOSPC")
+
+        probe = _Probe(
+            [
+                [_book_order(_ORDER_ID, filled=3.0)],
+                [_book_order(_ORDER_ID, filled=5.0)],
+                [_book_order(_ORDER_ID, filled=7.0)],
+            ],
+            append=_explode,
+        )
+
+        with self.assertLogs(cl.logger, level="WARNING") as caught:
+            woke = probe.cycle(3)
+
+        self.assertEqual(woke, [True, True, True], "every growth is still a wake")
+        failures = [line for line in caught.output if "observation journal" in line]
+        self.assertEqual(len(failures), 1, f"one attempt, not one per probe: {caught.output}")
+
     def test_the_production_probe_carries_the_crid_and_uic_from_the_one_fold_it_reads(self) -> None:
         # The crid and the uic are already in the fold the armed-order read does:
         # the tier is KEYED by crid and its watch_open carries the uic. No new read.
@@ -232,7 +264,7 @@ class TestTheProbeJournalsWhatItSaw(IsolatedHomeTestCase):
                     filled_quantity=0.0,
                     crid=_CRID,
                     uic=_UIC,
-                    journaled=frozenset({entry_trails.OBSERVATION_ORDER_ABSENT}),
+                    journaled={entry_trails.OBSERVATION_ORDER_ABSENT: None},
                 )
             },
         )
@@ -339,12 +371,14 @@ class TestTheProtectionPassJournalsAFillItCannotSee(IsolatedHomeTestCase):
             by_uic=by_uic,
         )
         deps = _deps(broker, feed_factory=None, sink=[])
+        # Production shape: the probe reads 0.0 for an order that is GONE, and
+        # records no quantity for that observation (see ``_observed_quantity``).
         deps.entry_fill_seen[_ORDER_ID] = cl.EntryFillObservation(
             book_state=cl._BOOK_STATE_ABSENT,
-            filled_quantity=4.0,
+            filled_quantity=0.0,
             crid=_CRID,
             uic=_UIC,
-            journaled=frozenset({entry_trails.OBSERVATION_ORDER_ABSENT}),
+            journaled={entry_trails.OBSERVATION_ORDER_ABSENT: None},
         )
         return deps
 
@@ -369,11 +403,49 @@ class TestTheProtectionPassJournalsAFillItCannotSee(IsolatedHomeTestCase):
                     "crid": _CRID,
                     entry_trails.KEY_OBSERVATION: entry_trails.OBSERVATION_ORDER_ABSENT,
                     "order_id": _ORDER_ID,
-                    entry_trails.KEY_FILLED_QTY: 4.0,
                     "uic": _UIC,
                     "ts": _NOW.isoformat(),
                 }
             ],
+        )
+
+    def test_each_gap_line_carries_its_OWN_observation_quantity(self) -> None:
+        """The production shape the other cases miss: a PARTIAL fill followed by
+        the order leaving the book, so one order id carries two observations.
+
+        The quantity belongs to the observation each line NAMES. Stamping the
+        latest reading onto both makes the ``filled_qty_grew`` line report the
+        0.0 the probe read once the order was gone -- a record that says the
+        quantity grew to zero. An absent order cannot report a fill size at all,
+        so that line carries no quantity rather than a misleading one."""
+        probe = _Probe([[_book_order(_ORDER_ID)], [_book_order(_ORDER_ID, filled=7.0)], []])
+        probe.cycle(3)
+        self.assertEqual(
+            sorted(probe.seen[_ORDER_ID].journaled),
+            [entry_trails.OBSERVATION_FILLED_QTY_GREW, entry_trails.OBSERVATION_ORDER_ABSENT],
+            "the fixture must leave BOTH observations on one order id",
+        )
+        deps = self._deps_for(positions=[])
+        deps.entry_fill_seen[_ORDER_ID] = probe.seen[_ORDER_ID]
+        self.lines.clear()
+
+        self._pass(deps)
+
+        by_observation = {line[entry_trails.KEY_OBSERVATION]: line for line in self.lines}
+        self.assertEqual(
+            sorted(by_observation),
+            [entry_trails.OBSERVATION_FILLED_QTY_GREW, entry_trails.OBSERVATION_ORDER_ABSENT],
+            f"one line per observation: {self.lines}",
+        )
+        self.assertEqual(
+            by_observation[entry_trails.OBSERVATION_FILLED_QTY_GREW][entry_trails.KEY_FILLED_QTY],
+            7.0,
+            "the grow line must carry the quantity it saw grow, not the later reading",
+        )
+        self.assertNotIn(
+            entry_trails.KEY_FILLED_QTY,
+            by_observation[entry_trails.OBSERVATION_ORDER_ABSENT],
+            "an absent order reports no fill size, so the key is left out",
         )
 
     def test_a_visible_position_journals_nothing(self) -> None:
@@ -396,14 +468,71 @@ class TestTheProtectionPassJournalsAFillItCannotSee(IsolatedHomeTestCase):
 
         self.assertEqual(self.lines, [])
 
+    def test_a_NET_FLAT_row_for_the_uic_counts_as_seen(self) -> None:
+        """The visible-position guard has two members, and this is the one the
+        long-position map cannot answer. ``_netted_all_positions`` keeps a uic
+        the broker still reports at quantity 0.0, which is what a CLOSED
+        position looks like; such a uic is absent from the long map. Treating
+        that as "could not see the fill" would write a gap line after the
+        position had already closed and ended — a false record in the one
+        journal this instrument exists to make trustworthy."""
+        deps = self._deps_for(positions=[_pos(0.0)])
+
+        self._pass(deps)
+
+        self.assertEqual(self.lines, [], "a uic the broker reports is seen, flat or not")
+
+    def test_an_unjournaled_SIBLING_tier_cannot_mask_its_uic(self) -> None:
+        """The tiers of one pick share a uic, and the gap record is keyed by uic,
+        so the per-uic selection keeps only one observation per uic. Without the
+        ``and observation.journaled`` filter a sibling tier that has nothing
+        journaled yet can win that slot and silence the tier that does — and the
+        loop below it emits nothing, so the suite stays green. The empty sibling
+        is inserted LAST on purpose: that is the order in which it would win."""
+        deps = self._deps_for(positions=[])
+        deps.entry_fill_seen["o2"] = cl.EntryFillObservation(
+            book_state=cl._BOOK_STATE_RESTING,
+            filled_quantity=0.0,
+            crid="BIO-2026-10-13-entry-t1",
+            uic=_UIC,
+        )
+
+        self._pass(deps)
+
+        self.assertEqual(len(self.lines), 1, f"the journaled tier must still record: {self.lines}")
+        self.assertEqual(self.lines[0]["order_id"], _ORDER_ID)
+
+    def test_only_the_observations_the_probe_SAW_are_journaled(self) -> None:
+        """One line per observation actually recorded, never a fixed name added
+        on the way out. A single partial fill has seen no absence yet, so an
+        ``order_absent`` line here would claim an observation that never
+        happened."""
+        deps = self._deps_for(positions=[])
+        deps.entry_fill_seen[_ORDER_ID] = cl.EntryFillObservation(
+            book_state=cl._BOOK_STATE_RESTING,
+            filled_quantity=6.0,
+            crid=_CRID,
+            uic=_UIC,
+            journaled={entry_trails.OBSERVATION_FILLED_QTY_GREW: 6.0},
+        )
+
+        self._pass(deps)
+
+        self.assertEqual(
+            [line[entry_trails.KEY_OBSERVATION] for line in self.lines],
+            [entry_trails.OBSERVATION_FILLED_QTY_GREW],
+            f"exactly the one observation the probe recorded: {self.lines}",
+        )
+        self.assertEqual(self.lines[0][entry_trails.KEY_FILLED_QTY], 6.0)
+
     def test_an_observation_without_a_uic_is_skipped(self) -> None:
         deps = self._deps_for(positions=[])
         deps.entry_fill_seen[_ORDER_ID] = cl.EntryFillObservation(
             book_state=cl._BOOK_STATE_ABSENT,
-            filled_quantity=4.0,
+            filled_quantity=0.0,
             crid=_CRID,
             uic=None,
-            journaled=frozenset({entry_trails.OBSERVATION_ORDER_ABSENT}),
+            journaled={entry_trails.OBSERVATION_ORDER_ABSENT: None},
         )
 
         self._pass(deps)
@@ -423,10 +552,10 @@ class TestTheProtectionPassJournalsAFillItCannotSee(IsolatedHomeTestCase):
 
         deps.entry_fill_seen[_ORDER_ID] = cl.EntryFillObservation(
             book_state=cl._BOOK_STATE_ABSENT,
-            filled_quantity=9.0,
+            filled_quantity=0.0,
             crid=_CRID,
             uic=_UIC,
-            journaled=frozenset({entry_trails.OBSERVATION_ORDER_ABSENT}),
+            journaled={entry_trails.OBSERVATION_ORDER_ABSENT: None},
         )
         self._pass(deps)
 
@@ -441,10 +570,10 @@ class TestTheProtectionPassJournalsAFillItCannotSee(IsolatedHomeTestCase):
         _seed_planned(self.journal, reaction=None)
         deps.entry_fill_seen[_ORDER_ID] = cl.EntryFillObservation(
             book_state=cl._BOOK_STATE_ABSENT,
-            filled_quantity=4.0,
+            filled_quantity=0.0,
             crid=_CRID,
             uic=_INVISIBLE_UIC,
-            journaled=frozenset({entry_trails.OBSERVATION_ORDER_ABSENT}),
+            journaled={entry_trails.OBSERVATION_ORDER_ABSENT: None},
         )
 
         with (

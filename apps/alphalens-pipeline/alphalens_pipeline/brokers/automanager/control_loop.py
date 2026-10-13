@@ -3555,15 +3555,19 @@ class EntryFillObservation:
     ``book_state`` + ``filled_quantity`` are the WAKE comparison: a new pair is
     a new observation, and the probe ends the wait early when the order went
     absent or its filled quantity grew. ``crid`` / ``uic`` ride along from the
-    armed-order read (see :class:`ArmedEntryOrder`). ``journaled`` holds the
-    observation names already written for this order id, so the record is
-    written once per (order id, observation) however many probes run."""
+    armed-order read (see :class:`ArmedEntryOrder`). ``journaled`` maps each
+    observation name already written for this order id to THE QUANTITY THAT
+    OBSERVATION SAW, so the record is written once per (order id, observation)
+    however many probes run, and each record carries its own reading rather than
+    the latest one. An absent order reports no fill size — the probe reads 0.0
+    because the order is gone, not because nothing filled — so that observation
+    maps to ``None`` and its record leaves the key out."""
 
     book_state: str
     filled_quantity: float
     crid: str
     uic: int | None
-    journaled: frozenset[str] = frozenset()
+    journaled: Mapping[str, float | None] = field(default_factory=dict)
 
     @property
     def reading(self) -> tuple[str, float]:
@@ -3586,20 +3590,40 @@ def _fill_probe_observation(
     return None
 
 
+def _observed_quantity(observation: EntryFillObservation, observed: str) -> float | None:
+    """The quantity to record FOR this observation, or ``None`` when it has no
+    meaningful one. An absent order carries ``filled_quantity`` 0.0 because the
+    book no longer holds it, so recording that zero would read as "nothing
+    filled" for an order that in fact filled and left."""
+    if observed == entry_trails.OBSERVATION_ORDER_ABSENT:
+        return None
+    return observation.filled_quantity
+
+
 def _fill_probe_record(
     order_id: str, observation: EntryFillObservation, observed: str, *, kind: str
 ) -> dict[str, Any]:
     """The journal line for ONE probe observation (#1402) — the shape shared by
-    the probe's own record and the protection pass's gap record."""
-    return {
+    the probe's own record and the protection pass's gap record.
+
+    The quantity comes from ``observation.journaled[observed]``, the reading
+    THAT observation saw, never from ``observation.filled_quantity``, which is
+    the LATEST reading: one order id can carry two observations (a partial fill
+    and then the order leaving the book) and the gap record writes a line for
+    each, so the latest reading would make the grow line claim the quantity grew
+    to zero. A ``None`` quantity is left out, never written as null."""
+    record: dict[str, Any] = {
         "kind": kind,
         "crid": observation.crid,
         entry_trails.KEY_OBSERVATION: observed,
         "order_id": order_id,
-        entry_trails.KEY_FILLED_QTY: observation.filled_quantity,
-        "uic": observation.uic,
-        "ts": _utc_now().isoformat(),
     }
+    quantity = observation.journaled.get(observed)
+    if quantity is not None:
+        record[entry_trails.KEY_FILLED_QTY] = quantity
+    record["uic"] = observation.uic
+    record["ts"] = _utc_now().isoformat()
+    return record
 
 
 class EntryFillProbe:
@@ -3675,7 +3699,7 @@ class EntryFillProbe:
                 filled_quantity=0.0 if order is None else float(order.filled_quantity or 0.0),
                 crid=armed.crid,
                 uic=armed.uic,
-                journaled=frozenset() if previous is None else previous.journaled,
+                journaled={} if previous is None else previous.journaled,
             )
             if previous is not None and observation.reading == previous.reading:
                 continue
@@ -3683,7 +3707,13 @@ class EntryFillProbe:
             if observed is not None:
                 woke = True
                 if observed not in observation.journaled:
-                    observation = replace(observation, journaled=observation.journaled | {observed})
+                    observation = replace(
+                        observation,
+                        journaled={
+                            **observation.journaled,
+                            observed: _observed_quantity(observation, observed),
+                        },
+                    )
                     self._journal(order_id, observation, observed)
             self._seen[order_id] = observation
         return woke

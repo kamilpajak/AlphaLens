@@ -126,7 +126,11 @@ BASELINE: dict[str, int] = {
     # can never touch the money path. They belong HERE and not in
     # ``entry_trails``: the probe and the protection pass are the two observers,
     # ``entry_trails`` owns the kinds and the field spellings they write.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7439,
+    #
+    # The number is the file's ACTUAL length, checked against ``wc -l`` rather
+    # than counted from the diff: the first attempt at this entry read 7439
+    # against a 7444-line file and shipped the gate red.
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7474,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3302,
