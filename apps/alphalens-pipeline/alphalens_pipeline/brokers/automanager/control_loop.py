@@ -184,9 +184,14 @@ _OCO_LAG_ALERT_TICKS = 5
 # Throttle keys for the three failure alerts that bypassed the throttle (#1621
 # part 4). What each arm actually buys differs, and #1621's own premise that all
 # three "repeat on every tick" is false — measured, not assumed:
-#   - A PROTECTION failure genuinely repeats per tick. The LIVE daemon ticks
-#     every ~6-7 s in market hours, so a sustained broker outage sent ~10
-#     Telegram messages a minute. This is the only arm that removes a flood.
+#   - A PROTECTION failure genuinely repeats per tick, and the alert sits inside
+#     the PER-ACTION loop, so the flood scales with the number of OPEN
+#     POSITIONS, not with the tick rate: with the nine instruments protected on
+#     2026-10-13, a total broker outage pages nine times per tick. The LIVE
+#     daemon ticks every 54-59 s — measured on
+#     ``alphalens-broker-manager-live.service``, NOT on the SIM unit of almost
+#     the same name that runs beside it — so that is about ten messages a
+#     minute. This is the only arm that removes a flood.
 #   - The ORPHAN SWEEP runs only on the FIRST tick of a daemon process
 #     (``run_daemon`` passes ``sweep_orphans=first``, then clears it), so neither
 #     orphan alert can repeat in-process at all. Their keys buy the other half of
