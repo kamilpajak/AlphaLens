@@ -162,9 +162,12 @@ ENTRY_TRAIL_KINDS = (
 # they carry a ``crid``) and the compactor PRESERVES them verbatim, which is
 # the G4 contract for a kind a reader does not know.
 #
-# Both are written at most ONCE per observation, so "preserved forever" is a
-# bounded cost: at most two ``fill_probe`` lines per armed order id and one
-# ``fill_probe_protection_gap`` line per (uic, observation).
+# Both are written at most ONCE per observation NAME, so "preserved forever" is
+# a bounded cost: there are two names, so at most two ``fill_probe`` lines per
+# armed order id and one ``fill_probe_protection_gap`` line per (uic, name).
+# A quantity that grows in several steps is several wakes but ONE line -- every
+# growth reports the same name, and only the first one is written. So these
+# lines do not grow with how finely an entry fills.
 
 KIND_FILL_PROBE = "fill_probe"
 """What the #1402 entry-fill probe SAW for one armed order id: that the id left

@@ -129,8 +129,10 @@ BASELINE: dict[str, int] = {
     #
     # The number is the file's ACTUAL length, checked against ``wc -l`` rather
     # than counted from the diff: the first attempt at this entry read 7439
-    # against a 7444-line file and shipped the gate red.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7474,
+    # against a 7444-line file and shipped the gate red. The last 22 lines are
+    # the pre-merge review round: grouping the gap observations per uic instead
+    # of electing one, and the two comments that say what is NOT recorded.
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7496,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3302,

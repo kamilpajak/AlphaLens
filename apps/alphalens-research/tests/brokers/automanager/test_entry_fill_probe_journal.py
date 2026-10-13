@@ -482,13 +482,50 @@ class TestTheProtectionPassJournalsAFillItCannotSee(IsolatedHomeTestCase):
 
         self.assertEqual(self.lines, [], "a uic the broker reports is seen, flat or not")
 
+    def test_TWO_journaled_tiers_on_one_uic_both_record(self) -> None:
+        """A pick's tiers share a uic, and each tier has its own armed order, so
+        two tiers can hold DIFFERENT observations at the same time: t0 saw a
+        partial fill, t1 saw its order leave the book. Both are evidence about
+        the same unprotected window and both must survive. Electing one
+        observation per uic keeps only the last tier inserted and drops the
+        other, which loses exactly the reading the measurement needs."""
+        deps = self._deps_for(positions=[])
+        deps.entry_fill_seen[_ORDER_ID] = cl.EntryFillObservation(
+            book_state=cl._BOOK_STATE_RESTING,
+            filled_quantity=5.0,
+            crid=_CRID,
+            uic=_UIC,
+            journaled={entry_trails.OBSERVATION_FILLED_QTY_GREW: 5.0},
+        )
+        deps.entry_fill_seen["o2"] = cl.EntryFillObservation(
+            book_state=cl._BOOK_STATE_ABSENT,
+            filled_quantity=0.0,
+            crid="BIO-2026-10-13-entry-t1",
+            uic=_UIC,
+            journaled={entry_trails.OBSERVATION_ORDER_ABSENT: None},
+        )
+
+        self._pass(deps)
+
+        self.assertEqual(
+            sorted(line[entry_trails.KEY_OBSERVATION] for line in self.lines),
+            [entry_trails.OBSERVATION_FILLED_QTY_GREW, entry_trails.OBSERVATION_ORDER_ABSENT],
+            f"both tiers' observations must be recorded: {self.lines}",
+        )
+        by_observation = {line[entry_trails.KEY_OBSERVATION]: line for line in self.lines}
+        self.assertEqual(
+            by_observation[entry_trails.OBSERVATION_FILLED_QTY_GREW]["order_id"],
+            _ORDER_ID,
+            "each line names the order it came from, not the uic's last tier",
+        )
+        self.assertEqual(by_observation[entry_trails.OBSERVATION_ORDER_ABSENT]["order_id"], "o2")
+
     def test_an_unjournaled_SIBLING_tier_cannot_mask_its_uic(self) -> None:
-        """The tiers of one pick share a uic, and the gap record is keyed by uic,
-        so the per-uic selection keeps only one observation per uic. Without the
-        ``and observation.journaled`` filter a sibling tier that has nothing
-        journaled yet can win that slot and silence the tier that does — and the
-        loop below it emits nothing, so the suite stays green. The empty sibling
-        is inserted LAST on purpose: that is the order in which it would win."""
+        """The tiers of one pick share a uic. A tier that has nothing journaled
+        yet must not silence the tier that does — which is a property of
+        GROUPING the observations per uic rather than electing one of them. The
+        empty sibling is inserted LAST on purpose: under an election that is the
+        order in which it would win the uic's only slot."""
         deps = self._deps_for(positions=[])
         deps.entry_fill_seen["o2"] = cl.EntryFillObservation(
             book_state=cl._BOOK_STATE_RESTING,

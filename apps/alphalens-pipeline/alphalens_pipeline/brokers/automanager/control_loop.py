@@ -1493,47 +1493,69 @@ def _journal_entry_fill_protection_gap(deps: LoopDeps, view: ProtectionView) -> 
     no journal read); it returns before ``reconcile_protection``, so nothing it
     does can reorder or veto an action; and every write is marked done BEFORE it
     is attempted, so a failing append costs one line rather than one attempt per
-    tick for the life of the position."""
-    # Keyed by UIC, not by order id: the question this record answers is about
-    # the POSITION the pass could not see. The tiers of one pick share a uic, so
-    # the last of them wins the ``order_id`` field — one line per instrument is
-    # the intended granularity, and every tier of that pick has its own
-    # ``fill_probe`` line with the same crid.
-    observed = {
-        observation.uic: (order_id, observation)
-        for order_id, observation in deps.entry_fill_seen.items()
-        if observation.uic is not None and observation.journaled
-    }
-    # Release the memo for uics the probe no longer observes (their tier went
-    # terminal, so arm() dropped the order id): a later fill on the same
-    # instrument is a NEW gap and must be recordable.
+    tick for the life of the position.
+
+    NOT recorded, deliberately: a pass whose ``build_protection_view`` raised
+    ``BrokerError`` returns BEFORE this function, so "the pass could not read
+    anything" leaves no line and is indistinguishable IN THE JOURNAL from "no
+    pass ran". It is not invisible to the operator -- that branch pages under
+    the throttle key ``protview-fail`` -- so the journal is joined to that alert
+    rather than given an observation name the probe never produces."""
+    # Grouped by UIC, not elected per uic: the VISIBILITY question is about the
+    # position, so the guard below is per uic — but the tiers of one pick share
+    # a uic and each has its own armed order, so two tiers can hold DIFFERENT
+    # observations at once (t0 saw a partial fill, t1 saw its order leave the
+    # book). Both are evidence about the same window. An election would keep
+    # only the last tier inserted and silently drop the other's reading, which
+    # is the one the measurement most needs. The ``(uic, name)`` memo key is
+    # what keeps the granularity to one line per observation per instrument, so
+    # two tiers reporting the SAME name still produce one line.
+    #
+    # A tier with NOTHING journaled rides along deliberately unfiltered: with
+    # grouping it contributes no name and therefore no line, so a filter for it
+    # would be a guard no observation can refute.
+    observed: dict[int, list[tuple[str, EntryFillObservation]]] = {}
+    for order_id, observation in deps.entry_fill_seen.items():
+        if observation.uic is not None:
+            observed.setdefault(observation.uic, []).append((order_id, observation))
+    # Release the memo for (uic, observation) pairs the probe no longer reports
+    # (their tier went terminal, so arm() dropped the order id): a later fill on
+    # the same instrument is a NEW gap and must be recordable. The release set is
+    # built from EVERY observation, so one tier's pair cannot be released
+    # because a sibling tier happened to win a selection.
     deps.entry_fill_protection_gap_journaled.intersection_update(
-        {(uic, name) for uic, (_order_id, obs) in observed.items() for name in obs.journaled}
+        {
+            (uic, name)
+            for uic, tiers in observed.items()
+            for _order_id, obs in tiers
+            for name in obs.journaled
+        }
     )
-    for uic, (order_id, observation) in observed.items():
+    for uic, tiers in observed.items():
         if uic in view.long_positions or uic in view.all_positions:
             continue
-        for name in sorted(observation.journaled):
-            key = (uic, name)
-            if key in deps.entry_fill_protection_gap_journaled:
-                continue
-            deps.entry_fill_protection_gap_journaled.add(key)
-            try:
-                entry_trails.append_entry_trail_line(
-                    _fill_probe_record(
-                        order_id,
-                        observation,
-                        name,
-                        kind=entry_trails.KIND_FILL_PROBE_PROTECTION_GAP,
+        for order_id, observation in tiers:
+            for name in sorted(observation.journaled):
+                key = (uic, name)
+                if key in deps.entry_fill_protection_gap_journaled:
+                    continue
+                deps.entry_fill_protection_gap_journaled.add(key)
+                try:
+                    entry_trails.append_entry_trail_line(
+                        _fill_probe_record(
+                            order_id,
+                            observation,
+                            name,
+                            kind=entry_trails.KIND_FILL_PROBE_PROTECTION_GAP,
+                        )
                     )
-                )
-            except Exception:  # broad on purpose: see the docstring
-                logger.warning(
-                    "entry fill probe: protection-gap journal write failed for uic %s — "
-                    "protection continues",
-                    uic,
-                    exc_info=True,
-                )
+                except Exception:  # broad on purpose: see the docstring
+                    logger.warning(
+                        "entry fill probe: protection-gap journal write failed for uic %s — "
+                        "protection continues",
+                        uic,
+                        exc_info=True,
+                    )
 
 
 def _run_protection_pass(
