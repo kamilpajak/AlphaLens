@@ -1,5 +1,25 @@
 """Registry of WHAT-IF exit lenses + grid replay.
 
+DEPRECATED by owner decision, 2026-10-13, in favour of ``apps/intent-replay``:
+a what-if is a claim about a policy the system could ARM, so it must be measured
+by the engine that models what arming does. Tracked by epic #1526. Nothing here
+is removed yet, and the retirement is ORDERED on purpose -- reproduce these
+lenses through the replay, compare the two bases on the same episodes, swap the
+``/edge`` panel's source, and only then delete -- because the panel is
+user-visible: ``edge/api/serializers.py`` publishes ``what_if.lenses`` and
+``apps/web`` renders it, with a cross-language parity test over both registries.
+
+What is NOT deprecated, and must not be deleted with this: the REALIZED
+population measure in ``ladder_replay`` layers 1 and 2. Measured 2026-10-13, the
+costed engine cannot move it. The cost gate's floor is at most 80 bps at the
+owner's position size, while the nearest take-profit in the whole brief store
+sits 91.2 bps above the blended entry -- 0 of 2553 tranches fall below either
+threshold -- and ``intent-replay`` subtracts no fee from its result at all
+(``measures.py``: ``pnl_cash = _proceeds - spend``). So ``/edge`` keeps its own
+engine, and its published ``gross_of_cost`` is right on the evidence rather than
+only by doctrine. Full working:
+``docs/research/population_replay_divergence_design_2026_10_13.md`` section 9.
+
 Each lens is an alternative EXIT POLICY re-applied to the SAME picks and the SAME
 retained price paths — the pick and the bars are held fixed, so a difference in
 realized R is the exit effect, not the selection. The result is a display-only
