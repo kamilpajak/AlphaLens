@@ -243,7 +243,13 @@ class LoopDeps:
     # #1402: order id -> the last fill observation the entry fill probe made
     # (``EntryFillProbe``). Carried across waits so a tier whose order is gone
     # but never resolves wakes the daemon once, not on every probe.
-    entry_fill_seen: dict[str, tuple[str, float]] = field(default_factory=dict)
+    entry_fill_seen: dict[str, EntryFillObservation] = field(default_factory=dict)
+    # #1402: (uic, observation) pairs whose "a protection pass ran and could not
+    # see this fill" line has already been ATTEMPTED. Marked before the append so
+    # a failing journal write costs one line, never a per-tick retry storm. Keys
+    # are released when the uic leaves ``entry_fill_seen``, so a later fill on the
+    # same instrument records again.
+    entry_fill_protection_gap_journaled: set[tuple[int, str]] = field(default_factory=set)
     # uic -> the raised managed-exit stop last announced in the log. Carried
     # across ticks so ``_build_managed_exits`` says a raise once per level, not
     # once a minute while it holds. Mutable dict on the frozen deps, as above.
@@ -1470,6 +1476,66 @@ def _fetch_protection_peaks(
         return {}, {}
 
 
+def _journal_entry_fill_protection_gap(deps: LoopDeps, view: ProtectionView) -> None:
+    """Record, once per (uic, observation), a protection pass that COULD NOT ACT
+    on an entry fill the probe had already observed (#1402).
+
+    The measured shape: for 7 LIVE entries the venue fill preceded the journaled
+    ``stop_placed`` by 6.2-18.8 s, and in two of them a full protection pass ran
+    inside that window and placed nothing. A pass that holds a probe observation
+    for an armed order and finds NO position for that order's uic in the snapshot
+    it just read is that pass, and this line is what tells it apart from a pass
+    that ran before the order even left the book (which leaves no observation at
+    all).
+
+    Observability only, in three senses a change must keep: it reads
+    ``deps.entry_fill_seen`` and the view the pass ALREADY built (no broker call,
+    no journal read); it returns before ``reconcile_protection``, so nothing it
+    does can reorder or veto an action; and every write is marked done BEFORE it
+    is attempted, so a failing append costs one line rather than one attempt per
+    tick for the life of the position."""
+    # Keyed by UIC, not by order id: the question this record answers is about
+    # the POSITION the pass could not see. The tiers of one pick share a uic, so
+    # the last of them wins the ``order_id`` field — one line per instrument is
+    # the intended granularity, and every tier of that pick has its own
+    # ``fill_probe`` line with the same crid.
+    observed = {
+        observation.uic: (order_id, observation)
+        for order_id, observation in deps.entry_fill_seen.items()
+        if observation.uic is not None and observation.journaled
+    }
+    # Release the memo for uics the probe no longer observes (their tier went
+    # terminal, so arm() dropped the order id): a later fill on the same
+    # instrument is a NEW gap and must be recordable.
+    deps.entry_fill_protection_gap_journaled.intersection_update(
+        {(uic, name) for uic, (_order_id, obs) in observed.items() for name in obs.journaled}
+    )
+    for uic, (order_id, observation) in observed.items():
+        if uic in view.long_positions or uic in view.all_positions:
+            continue
+        for name in sorted(observation.journaled):
+            key = (uic, name)
+            if key in deps.entry_fill_protection_gap_journaled:
+                continue
+            deps.entry_fill_protection_gap_journaled.add(key)
+            try:
+                entry_trails.append_entry_trail_line(
+                    _fill_probe_record(
+                        order_id,
+                        observation,
+                        name,
+                        kind=entry_trails.KIND_FILL_PROBE_PROTECTION_GAP,
+                    )
+                )
+            except Exception:  # broad on purpose: see the docstring
+                logger.warning(
+                    "entry fill probe: protection-gap journal write failed for uic %s — "
+                    "protection continues",
+                    uic,
+                    exc_info=True,
+                )
+
+
 def _run_protection_pass(
     deps: LoopDeps,
     records: list[Mapping[str, Any]],
@@ -1520,6 +1586,7 @@ def _run_protection_pass(
         ):
             report.alerts += 1
         return
+    _journal_entry_fill_protection_gap(deps, protection_view)
     actions = reconcile_protection(protection_view)
     for action in actions:
         report.actions.append(("protection", type(action).__name__))
@@ -3460,6 +3527,80 @@ def _execute_action(
 # trailing BUY rests. One GET per probe covers every armed order.
 _FILL_PROBE_S = 5.0
 
+# The two book states the probe distinguishes per armed order id. Named so the
+# memo value, the wake rule and the journal record cannot drift onto different
+# spellings of the same reading.
+_BOOK_STATE_RESTING = "resting"
+_BOOK_STATE_ABSENT = "absent"
+
+
+@dataclass(frozen=True)
+class ArmedEntryOrder:
+    """One resting armed entry order, with the tier facts the entry-trails fold
+    ALREADY states for it (#1402).
+
+    The probe's armed-order read folds the whole journal: the tier is KEYED by
+    ``crid`` and its ``watch_open`` record carries the ``uic``. Carrying both on
+    the memo is therefore free — the alternative (looking either up later, from
+    the protection pass) would be a SECOND journal read on the money path."""
+
+    crid: str
+    uic: int | None
+
+
+@dataclass(frozen=True)
+class EntryFillObservation:
+    """What the probe last saw for one armed order id (#1402).
+
+    ``book_state`` + ``filled_quantity`` are the WAKE comparison: a new pair is
+    a new observation, and the probe ends the wait early when the order went
+    absent or its filled quantity grew. ``crid`` / ``uic`` ride along from the
+    armed-order read (see :class:`ArmedEntryOrder`). ``journaled`` holds the
+    observation names already written for this order id, so the record is
+    written once per (order id, observation) however many probes run."""
+
+    book_state: str
+    filled_quantity: float
+    crid: str
+    uic: int | None
+    journaled: frozenset[str] = frozenset()
+
+    @property
+    def reading(self) -> tuple[str, float]:
+        """The part that decides whether this is a NEW observation."""
+        return self.book_state, self.filled_quantity
+
+
+def _fill_probe_observation(
+    current: EntryFillObservation, previous: EntryFillObservation | None
+) -> str | None:
+    """The observation name a NEW reading reports, or ``None`` when the reading
+    is new but reports nothing (a resting order whose filled quantity did not
+    grow — the very first sighting of an untouched order is this case).
+
+    This is the probe's wake rule, named: absent, or a grown filled quantity."""
+    if current.book_state == _BOOK_STATE_ABSENT:
+        return entry_trails.OBSERVATION_ORDER_ABSENT
+    if current.filled_quantity > (previous.filled_quantity if previous is not None else 0.0):
+        return entry_trails.OBSERVATION_FILLED_QTY_GREW
+    return None
+
+
+def _fill_probe_record(
+    order_id: str, observation: EntryFillObservation, observed: str, *, kind: str
+) -> dict[str, Any]:
+    """The journal line for ONE probe observation (#1402) — the shape shared by
+    the probe's own record and the protection pass's gap record."""
+    return {
+        "kind": kind,
+        "crid": observation.crid,
+        entry_trails.KEY_OBSERVATION: observed,
+        "order_id": order_id,
+        entry_trails.KEY_FILLED_QTY: observation.filled_quantity,
+        "uic": observation.uic,
+        "ts": _utc_now().isoformat(),
+    }
+
 
 class EntryFillProbe:
     """Tells the poll-only wait when a resting native trailing BUY has filled (#1402).
@@ -3473,33 +3614,43 @@ class EntryFillProbe:
     just left the book, or whose filled quantity grew. A tier whose order is
     gone but never resolves (audit REJECTED or UNKNOWN keeps it armed) would
     otherwise wake every probe for good. ``seen`` carries those observations
-    across waits; the daemon keeps it on ``LoopDeps.entry_fill_seen``."""
+    across waits; the daemon keeps it on ``LoopDeps.entry_fill_seen``.
+
+    Each observation is also JOURNALED once, as an observability-only
+    ``fill_probe`` line (#1402 part 2). The daemon is silent on a happy tick, so
+    without it the one fact the unprotected-window measurement needs — WHEN the
+    fill first became visible to the daemon — exists nowhere. The write is
+    best-effort by construction: it is marked as done before it is attempted, so
+    a failing journal costs that one line and never a retry per probe, and it
+    can never change what the wait returns."""
 
     def __init__(
         self,
         *,
-        armed_order_ids: Callable[[], frozenset[str]],
+        armed_orders: Callable[[], Mapping[str, ArmedEntryOrder]],
         list_open_orders: Callable[[], list[OrderState]],
-        seen: dict[str, tuple[str, float]],
+        seen: dict[str, EntryFillObservation],
+        append: Callable[[Mapping[str, Any]], None] = entry_trails.append_entry_trail_line,
     ) -> None:
-        self._armed_order_ids = armed_order_ids
+        self._armed_orders = armed_orders
         self._list_open_orders = list_open_orders
         self._seen = seen
-        self._armed: frozenset[str] = frozenset()
+        self._append = append
+        self._armed: Mapping[str, ArmedEntryOrder] = {}
         self._failing = False
 
     def arm(self) -> bool:
-        """Read the armed ids for this wait (journal only). False = nothing to watch.
+        """Read the armed orders for this wait (journal only). False = nothing to watch.
 
         Runs on the daemon's main loop, so a failing read costs the probe (the
         plain sleep for this wait), never the daemon."""
         try:
-            self._armed = self._armed_order_ids()
+            self._armed = self._armed_orders()
         except Exception:  # broad on purpose: see the docstring
             logger.warning("entry fill probe: armed-order read failed — plain sleep", exc_info=True)
-            self._armed = frozenset()
+            self._armed = {}
             return False
-        for gone in set(self._seen) - self._armed:
+        for gone in set(self._seen) - set(self._armed):
             del self._seen[gone]
         return bool(self._armed)
 
@@ -3516,20 +3667,44 @@ class EntryFillProbe:
             return False
         self._failing = False
         woke = False
-        for order_id in self._armed:
+        for order_id, armed in self._armed.items():
             order = book.get(order_id)
-            observation = (
-                ("absent", 0.0)
-                if order is None
-                else ("resting", float(order.filled_quantity or 0.0))
-            )
             previous = self._seen.get(order_id)
-            if observation == previous:
+            observation = EntryFillObservation(
+                book_state=_BOOK_STATE_ABSENT if order is None else _BOOK_STATE_RESTING,
+                filled_quantity=0.0 if order is None else float(order.filled_quantity or 0.0),
+                crid=armed.crid,
+                uic=armed.uic,
+                journaled=frozenset() if previous is None else previous.journaled,
+            )
+            if previous is not None and observation.reading == previous.reading:
                 continue
-            self._seen[order_id] = observation
-            if observation[0] == "absent" or observation[1] > (previous or ("", 0.0))[1]:
+            observed = _fill_probe_observation(observation, previous)
+            if observed is not None:
                 woke = True
+                if observed not in observation.journaled:
+                    observation = replace(observation, journaled=observation.journaled | {observed})
+                    self._journal(order_id, observation, observed)
+            self._seen[order_id] = observation
         return woke
+
+    def _journal(self, order_id: str, observation: EntryFillObservation, observed: str) -> None:
+        """Best-effort append of the observation. ``mkdir``/``open``/``fsync``
+        raise ``OSError`` (disk full, permission) and a record shape bug raises
+        ``TypeError``; neither is allowed anywhere near the wake decision, which
+        is what keeps the stop from waiting for the next tick. Logged once per
+        observation, never per probe (the caller has already marked it done)."""
+        try:
+            self._append(
+                _fill_probe_record(
+                    order_id, observation, observed, kind=entry_trails.KIND_FILL_PROBE
+                )
+            )
+        except Exception:  # broad on purpose: see the docstring
+            logger.warning(
+                "entry fill probe: observation journal write failed — the wake stands",
+                exc_info=True,
+            )
 
 
 def build_entry_fill_probe(deps: LoopDeps) -> EntryFillProbe | None:
@@ -3544,19 +3719,34 @@ def build_entry_fill_probe(deps: LoopDeps) -> EntryFillProbe | None:
     if list_open_orders is None:
         return None
 
-    def _armed_order_ids() -> frozenset[str]:
+    def _armed_orders() -> dict[str, ArmedEntryOrder]:
         if entry_trails.entry_trail_bps() <= 0 or not isinstance(broker, SupportsOrderResolution):
-            return frozenset()
+            return {}
         tiers = _resting_armed_tiers(entry_trails.read_entry_trail_fold())
-        return frozenset(
-            state.armed_order_id for state in tiers.values() if state.armed_order_id is not None
-        )
+        return {
+            state.armed_order_id: ArmedEntryOrder(crid=crid, uic=_watch_open_uic(state))
+            for crid, state in tiers.items()
+            if state.armed_order_id is not None
+        }
 
     return EntryFillProbe(
-        armed_order_ids=_armed_order_ids,
+        armed_orders=_armed_orders,
         list_open_orders=list_open_orders,
         seen=deps.entry_fill_seen,
     )
+
+
+def _watch_open_uic(state: entry_trails.EntryTrailTierState) -> int | None:
+    """The uic this tier's ``watch_open`` record carries, or ``None``.
+
+    Already in the fold the armed-order read does, so attributing a probe
+    observation to an instrument costs no extra read. ``None`` for a tier with
+    no ``watch_open`` or an uncastable uic — the observation is still journaled,
+    it just cannot be matched against a position."""
+    watch_open = state.watch_open
+    if watch_open is None:
+        return None
+    return cast(int | None, stop_journal._coerce(watch_open, "uic", int))
 
 
 def _wait_for_entry_fill(

@@ -114,7 +114,19 @@ BASELINE: dict[str, int] = {
     # docstring that records why the ``>`` chain is safe without the shared
     # ratchet helper costs 18 more. The function it exists to shrink went from
     # cognitive complexity 34 to 12, which is the trade this entry pays for.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7254,
+    #
+    # Raised from 7254 for the #1402 instrumentation of the unprotected window
+    # between an entry fill and its disaster stop. The room goes to two frozen
+    # dataclasses on the probe's memo (``ArmedEntryOrder``,
+    # ``EntryFillObservation`` -- the memo was a bare tuple and now has to carry
+    # the crid and the uic the fold already states), the named wake rule the
+    # journal record shares with it, and
+    # ``_journal_entry_fill_protection_gap``. Both records are read by nothing
+    # in the daemon, so most of those lines are the docstrings that say why they
+    # can never touch the money path. They belong HERE and not in
+    # ``entry_trails``: the probe and the protection pass are the two observers,
+    # ``entry_trails`` owns the kinds and the field spellings they write.
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7439,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3302,
