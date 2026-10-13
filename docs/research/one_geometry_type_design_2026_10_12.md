@@ -1,6 +1,6 @@
 # Design: one geometry type — the brief emits the unsized trade, and `intent-replay` becomes the only what-if engine
 
-Status: **REJECTED**, 2026-10-12. Epic #1761. The proposal in this memo — splitting `size` out of `TradeSpec` so the brief emits a shared geometry type — was refused by the adversarial review in section 9, on three grounds this memo's own measurements support. Sections 1 to 8 are kept as written, because the survey in them is what made the refusal possible and is reusable by whatever replaces it. **What survives is the destination, not the mechanism**: the brief's geometry should be validated, and the duplicate what-if engine should be retired. Section 9 names the three smaller, orthogonal changes that get both. Code facts come from `24c725b8`; every claim below carries the `file:line` or the command that produced it, and where a fact is missing rather than known the word is **GAP**. Nothing in the repository was modified while this was written.
+Status: **REJECTED**, 2026-10-12; refusal re-based 2026-10-13. Epic #1761. The proposal in this memo — splitting `size` out of `TradeSpec` so the brief emits a shared geometry type — was refused by the adversarial review in section 9, which stated three grounds. **A second review (section 10) left the refusal standing on one of them.** Ground 9.3 survives intact and is stronger than written; 9.1 rests on two premises this memo's own section 8 refutes, and 9.2 is refuted by the cut it proposes instead. Read section 9 through 10.1 and 10.2, never on its own. Sections 1 to 8 are kept as written, because the survey in them is what made the refusal possible and is reusable by whatever replaces it. **What survives is the destination, not the mechanism**: the brief's geometry should be validated, and the duplicate what-if engine should be retired. Section 9 names the three smaller, orthogonal changes that get both, and section 10.5 re-prices each of them. Code facts come from `24c725b8`; every claim below carries the `file:line` or the command that produced it, and where a fact is missing rather than known the word is **GAP** — section 10.6 lists the counts and labels that did not survive re-derivation. Nothing in the repository was modified while this was written, or while either review ran.
 
 The proposal in one paragraph. `TradeSpec` has seven fields: six describe the chart and one, `size`, describes the account. Its own docstring calls it `compute_setup_plan`'s UNSIZED input. Split `size` out, leaving an account-free geometry type. The brief then emits that geometry instead of its own parallel `brief_trade_setup` shape; arming composes geometry plus size, instrument and meta into a `TradeIntent` unchanged on the wire it places from; and a what-if states the size as a declared run value. The deprecated `/edge` what-if lenses and their engine are then replaceable by `intent-replay` with no translation layer, because the brief already speaks the engine's language.
 
@@ -1398,3 +1398,325 @@ goal.
 **GAP:** a second review, by an agent reading this memo against the repository rather than reasoning
 on its argument, was still running when this section was written. If it raises a finding that
 changes 9.1 to 9.5, that belongs in a further dated section rather than an edit to this one.
+
+---
+
+## 10. Second adversarial review, 2026-10-13 — the refusal stands on one ground, not three
+
+The GAP section 9.6 left open is closed. The second review ran as four read-only passes over
+disjoint slices of this memo, each reading it AGAINST the repository instead of reasoning on its
+argument, with no cap on findings and a standing instruction never to call a claim wrong without
+quoting the code that makes it wrong. Every load-bearing finding below was then re-run by hand
+before being written here. Code facts still come from `24c725b8`. Store facts carry their host and
+their date, which is the discipline section 4 did not keep.
+
+**Verdict: the refusal of the type split stands, and 9.3 — the ground section 9 itself calls
+decisive — survives intact and is stronger than it was written. Grounds 9.1 and 9.2 do not survive
+as written and must not be quoted again without 10.1 and 10.2.** Section 9 is left exactly as it
+was, per its own rule that a later finding belongs in a dated section rather than an edit.
+
+### 10.1 Ground 9.1 rests on two false premises
+
+**"The brief is LLM-authored" is false, and this memo already knew it.** The geometry is computed
+deterministically and the model is excluded from it by doctrine
+(`apps/alphalens-pipeline/alphalens_pipeline/thematic/argumentation/orchestrator.py:804-806`):
+
+> The trade setup is deterministic (cached OHLCV) and independent of the LLM — always computed so
+> the levels persist even when the prose brief is None. A cache miss / short history yields
+> NO_STRUCTURE.
+
+The generator's response schema says the same from the other side: "Numerical / quantitative fields
+(position size, exits, entry levels, weighted score) are NOT in this schema … the LLM only composes
+narrative" (`thematic/argumentation/schema.py:6-10`). And the number the 9.1 incident was about is
+arithmetic: `tp_pct = 100.0 / len(tp_raw) if tp_raw else 0.0`
+(`thematic/trade_setup/builder.py:208`).
+
+Section 8 of this memo states both halves are wrong (line 1296, about the stale comment at
+`broker_contract/sizing.py:140-143`). Line 1321 then asserts one of them. The boundary is
+**unvalidated against gated**, not **stochastic against gated**, which is a materially weaker
+asymmetry than the sentence claims.
+
+**"It happened inside ONE bounded context" is false.** The incident's own commit names the parties
+(`git log -1 73c9c675`, "fix(brokers): give the TP tranche weight one unit and one name (#1128)"):
+the brief emits 33.333, `compute_setup_plan` copies it verbatim, "the live exit sizer then
+multiplied the plan weight directly, with no /100", "the arm gate copied that expression", and "the
+fee estimator did the opposite and divided by 100". By this project's own area map that is
+`area:alphalens` to `area:contract` to `area:bracket-keeper` — three programs, with the brief as
+the origin of the ambiguous unit. The a-fortiori structure of 9.1 ("it happened within one
+context, so across two…") does not stand.
+
+**The remedy was two-part, and the second part argues the other way.** Beside the rename, the same
+commit added a type-level unit invariant (`broker_contract/sizing.py:134-137`):
+
+> A fraction outside [0, 1] is not a small mistake, it is the wrong UNIT — and the unit is exactly
+> what was ambiguous here. Refusing at construction is what makes the 100x class unrepresentable
+> rather than merely fixed.
+
+And the cross-boundary name was deliberately kept: "Rename on the plan side only …
+`TpTrancheSpec.tranche_pct` stays the brief's percentage." So the recorded answer to the 100x class
+was one unit, one name, converted once, refused at construction — which is closer to what this
+memo proposed than to its refusal.
+
+**The two contexts already share code in both directions.** `thematic/trade_setup/builder.py:23`
+imports `DEFAULT_ORDER_TTL_DAYS` from `broker_contract.constants`; `paper/sizing.py:23` imports a
+private contract helper (`_blend_priced_tiers`); and `broker_contract/exit_geometry/levels.py:44`
+reads a brief-shaped `Mapping` inside the contract package. Section 2.1 measured the third edge and
+9.1 never answers it.
+
+**What survives.** The quotation at `sizing.py:114-127` is exact, the incident is real, and it
+crossed precisely the brief-to-contract boundary a shared type would widen. That is a hazard claim,
+and a stronger one than 9.1 made. What does not survive is the asymmetry and the a-fortiori step.
+
+### 10.2 Ground 9.2 is refuted by the cut it proposes instead
+
+9.2 offers **levels against policy** as the principled seam: `entry_tiers`, `disaster_stop` and
+`tp_tranches` "need only the tape". They do not, in three distinct ways.
+
+- `alloc_pct` is a percentage **of the field the cut moves out**: "PERCENTAGE of the pick's
+  notional, 0-100" (`broker_contract/trade_intent/schema.py:163-164`), spent as
+  `tier_notional = sizing_notional * (alloc_pct / 100.0)` (`broker_contract/sizing.py:297`). The
+  cut exports the referent and keeps the number that refers to it.
+- `entry_mode` changes what `limit_price` MEANS, and submitting an immediate cap needs the venue:
+  "The tick scheme lives in the vendor's instrument details, which only the adapter fetches"
+  (`broker_contract/contract.py:424`).
+- `side` is the direction convention the two geometry invariants are written in:
+  `if spec.disaster_stop >= lowest` (`validate.py:293`) and `if tranche.price <= blend`
+  (`validate.py:375`) both hard-code long. Move `side` to the policy side and the geometry type can
+  no longer state its own rules.
+
+9.2's self-described sharper observation — that the decode-at-default hazard "applies identically"
+to the two policy fields — is also false. For both, the default IS the published meaning of
+absence: `'0 is the "field absent" value and means the default (7)'` (`schema.py:254`), and `"long"`
+is the only legal value (`validate.py:203-204`, `side_not_long`). For `size` a default would spend
+an amount nobody stated. The hazard exists for one of the three fields, not three.
+
+**Consequence.** 9.5's closing instruction — that a revived split "must move `order_ttl_days` and
+`side` out with `size`" — is withdrawn. Doing that makes the geometry type less self-contained, not
+more.
+
+### 10.3 Ground 9.3 holds, and the code makes it concrete
+
+A population run needs one `TradeIntent` per candidate, and the replay proves it by having a door
+of its own. `intent_replay/door.py` admits a document through derived-fields, published schema,
+completion, codec, fixed point and `validate_intent`; `complete()` supplies `intent_id` and
+`meta.armed_ts` but REFUSES a missing `meta.trade_date`. The engine then reads the size off the
+admitted document, not off its configuration: `cli.py:638` passes `admitted.intent.spec.size.currency`
+into `RunConfig.from_jsonable`, `interpreter.py:382-383` reads `notional_acct` and `currency` by
+path, and `config.py:267-270` says why it cannot be a config key — "a block able to state it would
+be able to disagree with the document it replays". The adapter also cannot live in the engine:
+`tests/test_module_dependencies.py` pins "intent_replay engine imports stdlib and broker_contract
+only".
+
+So a brief-to-intent generator is required in both designs, which is what 9.3 argued. The split
+shortens that adapter; it does not remove it.
+
+### 10.4 This memo refuses its own recommendation
+
+5.1 refutes a measurement-time render partly because "it restores what #1552 deleted on purpose"
+(line 1091). 9.5 recommendation 2 prescribes exactly such a render. The code settles it against 5.1:
+
+- `broker_contract/trade_intent/legacy.py:141-145` — "**#1552 removes the PRODUCER only.** The door
+  still ACCEPTS a document that states "brief"".
+- The deleted parse is in the tree verbatim:
+  `apps/alphalens-research/tests/paper/sizing_test_helpers.py:52-55`, `spec_from_brief`, "Test-only
+  copy of the `parse_brief_to_spec` removed with the brief producer in #1552, kept verbatim".
+- A measurement render reaches no queue: `intent-replay` writes nothing, and `broker arm` is the
+  only door onto `picks.jsonl`.
+
+5.1's third ground is sound against an **arming** render and unsound against a **measurement-time**
+one. 5.1 is the half to rewrite, not 9.5.
+
+Its second ground ("eight choices at every call site") is also overstated: `spec_from_brief` makes
+all of them once, in 49 lines, including the sentinel the memo does not list — "0 sentinel
+preserved — must NOT fall through to TradeSpec's default (7)".
+
+### 10.5 The three surviving recommendations, re-costed
+
+**Recommendation 1 is not "one file plus its test".** Its home is the shipped `brief_contract`
+package (`alphalens_pipeline/brief_contract/{columns,validation}.py`, #1676 via #1704), which 9.4
+never names. Three pieces are missing rather than present:
+
+- the schema generator hard-codes its root (`broker_contract/trade_intent/json_schema.py:261`,
+  `_define(TradeIntent, definitions)`) and its private helpers are not exported, so generating from
+  the brief dataclass means generalizing the contract package;
+- there is no brief-side decoder (zero `from_dict` / `def parse` under
+  `thematic/trade_setup/*.py`), and a codec fixed point needs one;
+- the payload is not the dataclass: `to_dict` INJECTS `label` per rung
+  (`thematic/trade_setup/model.py:115-123`) and no dataclass field carries it, so a
+  dataclass-derived fixed point would flag `entry_tiers[].label` on every OK row.
+
+It also silently decides an open issue — whether a column mismatch should be fatal rather than
+logged is #1705. That PR should resolve it, not assume it.
+
+**Recommendation 2 deletes a user-visible surface, which this memo nowhere says.** The break-even
+map is served and rendered: `apps/alphalens-django/edge/api/summary.py:201-206` parses
+`breakeven_realized_r_json`, `edge/api/serializers.py:325` publishes `whatif = WhatIfPanelSerializer()`,
+and `apps/web/src/lib/components/WhatIfPanel.svelte` plus `apps/web/src/lib/edgeWhatif.ts` render it,
+with a cross-language parity test over the two registries. **Section 7's GAP at line 1236 ("no SPA
+or Django read") is WRONG.**
+
+But the surface is SIX lenses, not nine. `grid_realized_r_json` and `ratchet_realized_r` have no
+reader anywhere — `grep -rn 'grid_realized_r_json' --include='*.py' --include='*.svelte'
+--include='*.ts' apps/alphalens-django apps/web` returns the model field, two migrations and two
+test lines, and the column is absent from `apps/alphalens-django/docs/openapi-parity/django.json`
+(count 0). Both can be dropped today with no UI consequence.
+
+The ordering that follows, and it dissolves the apparent decision rather than deferring it:
+reproduce the six lenses through the replay, compare the two bases on the same episodes, then swap
+the panel's source and retire the engine. The panel is never lost; and a lens whose verdict flips
+once commission, FX, the whole-share lattice and the cost gate are charged is a finding about that
+lens, which is the reason for doing this at all.
+
+**Recommendation 3 is one source edit plus a two-artefact regeneration.** The sentence sits at
+`broker_contract/trade_intent/schema.py:446` and in BOTH published artefacts
+(`docs/trade-intent-input-v3.schema.json:14`, `docs/trade-intent-v3.schema.json:18` — the stored
+shape too, which 9.5 does not mention), and the artefacts are byte-pinned to their generator. The
+word "unsized" appears 5 times in the contract source, so moving only `:446` leaves the rest
+self-contradictory.
+
+### 10.6 Errata to sections 1 to 8
+
+The survey is sound where it looks; roughly 200 citations were re-checked across the four slices and
+the quotations were faithful rather than paraphrase dressed as quotation. These are the defects a
+later reader should not inherit.
+
+**Labels and mechanisms:**
+
+- **"The deprecated engine" is this memo's verdict, not the repository's.**
+  `grep -rni deprecat apps/alphalens-pipeline/alphalens_pipeline/feedback/` returns 0 lines, while
+  `feedback/__init__.py:12` calls `population_ladder_monitor` "the SOLE feedback signal" and
+  `:30` declares `__status__ = "ACTIVE"`. By this project's own status-marker rule the retirement
+  has to be argued, which 4.1 does; it must not be presented as settled.
+- **A brief `schema_version` of `"1.1.0"` is NOT refused by the version gate** (section 1.3, line
+  75). That gate reads `meta.schema_version`, never `spec.schema_version`
+  (`alphalens_cli/commands/broker.py:1590-1594`), the published schema gives the spec field no
+  `enum`, and `validate_intent` declines version bounds on purpose. Run through the real gates in
+  arm order, a template carrying `"1.1.0"` at `spec.schema_version` passes every one, the fixed
+  point included. One of `TradeSpec`'s seven fields is gated by nothing.
+- **`size` is not the only field checked against the daemon's environment** (section 1.2, line 63).
+  `brokers/automanager/pick_money_gates.py:208` reads `MAX_FEE_BPS_ENV` for a figure whose dominant
+  term is ladder depth, and `brokers/automanager/day1_gap_gate.py` reads `entry_tiers[].limit_price`
+  against the live open under its own env flag. The narrower true claim is "the only field whose own
+  value must match an account property". This strengthens 9.2's thesis one section early.
+- **`suggested_size_pct` has six production readers, not the three section 2.1 marks as decisions**,
+  and three become persisted columns: `feedback/population_ladder_monitor.py:845-871` derives
+  `suggested_gross_weight_pct`, `implied_risk_pct_full` and `realized_gross_weight_pct`, mirrored to
+  `apps/alphalens-django/edge/models.py:199,202` and created by `edge/migrations/0001_initial.py:63,66`.
+  Section 2.1's "Django and the OpenAPI artefact are shape-blind … no migration" is true of the
+  `briefs` app and false of the `edge` app, which section 2.1 does not mention.
+- **Section 3.5's "each item is held by a gate to one of the others" is false for one item.**
+  `brokers/automanager/trades_schema.py:355-356` names `trade-intent-v3.schema.json` as a LITERAL in
+  a published description, baked into `docs/broker-trades-v1.schema.json`. That artefact is
+  byte-pinned to its generator, so after a `SCHEMA_VERSION` bump the pin stays green while the
+  published description points at a frozen v3 artefact. It is the one migration item no gate holds.
+- **Section 4.2 mis-locates the session grid.** Its table header credits "the engine", but
+  `intent_replay` has no calendar at all (a grep for `session_open|session_close|calendar` over
+  `apps/intent-replay/intent_replay/*.py` hits only two prose lines). The half-open grid, the
+  close-bar drop and the off-grid refusal live in `apps/alphalens-research/scripts/replay_from_pick.py`
+  — the bar-preparation step a population path must reuse. Sections 4.5 items 3 and 4 say this
+  correctly; 4.2's header does not.
+- **Section 4.3 overstates one divergence's reach.** `take_profit_observation_time` fires on
+  `bool(ladder)`, and an empty TP ladder is reachable by construction
+  (`thematic/trade_setup/builder.py:208-209`, and `TradeSetup.no_structure` emits `tp_tranches=()`),
+  though 0 of 279 setups over the 40 most recent local brief parquets carry one.
+
+**Counts that do not reproduce.** None carries an argument in section 9, but this project publishes
+a number with its construction.
+
+| Claim | As stated | Measured | Construction |
+|---|---|---|---|
+| production sites touching `brief_trade_setup` (2.0) | 43 | 32 rows / 46 distinct files | hand count of section 2.1's own tables, then expansion of each row to the paths it names; two adjacent group headers use opposite units (one 6-module header covers a row collapsing four files) |
+| production modules spelling a literal `spec.size` (2.0) | 14 | **13** | `grep -rn 'spec\.size\|spec\["size"\]' --include='*.py' apps/ \| grep -v /tests/ \| cut -d: -f1 \| sort -u \| wc -l` |
+| gates reading `size` (2.4) | "Seven, in four layers" | 9 table rows, plus one omitted gate | the section's own table; the omission is `trades.py:3011-3012`, the `EXCLUDE_LEGACY_PLAN` comparability gate |
+| what-if variants in `ladder_replay.py` (2.1, 2.7) | 9 | 3 there, 6 in `breakeven_lenses.py` | `GRID_CONFIGS` at `ladder_replay.py:342`; `MAX_REGISTERED_LENSES = 6`. Section 4.1 line 834 states the split correctly |
+| lines in `ladder_replay.py` (4.1) | ~1400 | **1910** | `wc -l`. The zero-money-dimension finding beside it holds |
+| test modules moving with a `size` split (2.0) | 30 | 30 by the stated grep, >= 33 in fact | the three extra are named elsewhere in this memo (`test_manual_pick_templates.py`, `test_broker_trades.py`, `test_replay_from_pick.py`) |
+
+**Store counts.** The six population figures in 4.4 and 4.5 carry no host, command or date, against
+this memo's own header rule. Measured on the Mac mirror, 2026-10-13:
+
+| Quantity | As stated | Mac mirror, 2026-10-13 |
+|---|---|---|
+| date parquets | 146 | 111 |
+| terminal episodes | 916 | 629 |
+| distinct tickers | 287 | 215 |
+| episodes with both what-if payloads non-empty | 740 | 609 |
+| bar parquets | 1652 | 881 |
+| bar store size | 406 MB | 153 MB |
+
+Construction: `ls -1 ~/.alphalens/population_ladders/*.parquet | wc -l`, the same over `bars/`,
+`du -sh`, and a pandas concat over all 111 date parquets filtered on the `terminal` column (the
+column is `terminal`, not `is_terminal`; a predicate on the wrong name silently counts every row).
+This is **not** a refutation: the Mac copy is a different store after a rebuild, and these figures
+are consistent with a VPS-side read. The defect is that 4.4's premise "no vendor spend — the bars
+are already on disk" is true of one host and this memo does not say which.
+
+**Three of the seven open questions are settled by the code, not by the owner:**
+
+- **6.2 (`entry_mode` for a brief tier).** The replay engine refuses `immediate` outright, with a
+  published code: `ENTRY_MODE_UNSUPPORTED_CODE` (`intent_replay/interpreter.py:92`, raised at
+  `:360`), documented at `intent_replay/cli.py:165` — "The arming door ADMITS `immediate`, so this
+  refusal is the interpreter's and not the door's." For replaying the candidate panel the answer is
+  pullback-only, enforced, until v1 grows the mode.
+- **6.5 (which MIC a candidate replays on).** The three stated blockers are measured invariants. One
+  fee card serves all three US venues (`brokers/automanager/costs.py:121-124`), and over
+  2022-01-01 to 2026-10-01 the three calendars are identical: 1191 sessions each, same session
+  dates, same opens and closes (`alphalens_pipeline.market.calendar`, `is_trading_day` /
+  `session_open_utc` / `session_close_utc` per MIC). Option 2 is additionally ruled out by stated
+  doctrine: "MIC is an execution concern (ADR 0013 R2 — no execution data flows upstream)"
+  (`brokers/routing.py:1-10`), which also records that a US hint is ADVISORY.
+- **6.6 option 3 (drop `order_ttl_days` from both).** It loses the deadline's provenance: the harness
+  declares `"kind": "order_ttl_sessions"` with `"source": "spec.order_ttl_days"` and a checkable
+  `formula` (`scripts/replay_from_pick.py:278-281`). Dropping the field forces the deadline to be
+  written as a literal, which #1714's rule forbids.
+
+**6.1 (`meta.source` for a candidate document) stays open, for a different reason than stated.** Its
+two costs evaporate: a replay document reaches no journal, so neither the `source_brief` marker nor
+its census is touched. What is genuinely open is measurable — the population measurement anchors on
+`ladder_arrival_session`, while the day-1 anchors keyed on `meta.source` advance from `trade_date`,
+and neither enum value reproduces the lens anchor on every date.
+
+Two further section 7 GAPs close in passing: `apps/web/src/lib/api-types.gen.ts` IS produced by a
+committed command (`apps/web/package.json`, `gen:api-types`) and NO CI workflow references it; and
+the `intent_invalid` reason vocabulary is NOT pinned to the README table — the only test touching
+`INTENT_INVALID_REASONS` asserts membership.
+
+**Smaller slips, recorded so a later editor need not re-derive them.**
+
+- **The payload two of section 4's figures rest on is never printed in this memo.** Lines 889-892
+  quote a planned blend of 72.44977 and "2404.4 bps" off "the quoted `brief_trade_setup` payload",
+  and section 1.3 refers to "the quoted VPS payload", but no payload JSON appears anywhere in the
+  document and the repository holds no such fixture. The CONCLUSION is robust by inspection
+  — 2404 bps against `EXIT_EDGE_MIN_BPS = 50.0` (`brokers/automanager/costs.py:203`) is two
+  orders of magnitude from binding — but the specific figures are unauditable, which this memo's
+  own header rule forbids.
+- **Section 4.2 inverts the sign of a heading it leans on.** It writes "A worse exit price is not a
+  worse answer" (line 896); the source reads "**A better exit price is not a better answer**"
+  (`apps/intent-replay/README.md:509`). The measurement quoted beneath it is transcribed exactly and
+  the operative conclusion survives the flip, but the two sentences are claims about opposite
+  directions. Section 8 line 1289 repeats this memo's phrasing.
+- **Section 3.3 says "Three consequential sites" and lists four** (line 690): `intent_door.tier_amounts`,
+  `_echo_armed_intent`, the drain's currency and ceiling check, and the planner at
+  `broker_contract/sizing.py:280`. All four are real and cited correctly.
+- **Section 3.1's "everything else is version-blind, on purpose" is not total.** One non-gate site
+  reads a version and PUBLISHES it: `brokers/automanager/trades.py:826-830` `_plan_schema_version`,
+  typed in the trades schema. It refuses nothing, so the door claim ("exactly one gate reads it")
+  holds, but the read belongs in section 3.3's list of sites that are not gates.
+- **Section 4.2 quotes the whole-share figures without the condition their source attaches.**
+  `apps/intent-replay/README.md` states that 17.50 / 130.00 / 60.81 are "measured at a rate of 1.0
+  and no sizing buffer", and that a 1 per cent buffer takes the first from 17.50 to 69.00 — a
+  factor of about 3.9. The numbers are transcribed correctly; the clause that makes them mean
+  anything is dropped.
+- A cluster of line references drifts by one to six lines without the quoted content changing
+  (among them `thematic/trade_setup/model.py:13` for a constant at `:12`, and section 2.2's
+  citations of `schema.py:170-175` and `:134-141` for `r_multiple` at `:195-201` and `entry_mode` at
+  `:172-175`). Listed in the review transcript rather than here.
+
+### 10.7 What this section does not change
+
+The status stays **REJECTED** and the destination stands, for the reasons 9.6 gives: an unvalidated
+brief payload is a real defect, and a slippage-free fill model is a worse instrument than the
+backtester. What changed is the basis of the refusal — one ground instead of three — and the price
+of what replaces it. Recommendation 2 in particular is no longer a backend swap: it touches a
+published serializer field and a rendered panel, and its honest form is a comparison before a
+retirement.
