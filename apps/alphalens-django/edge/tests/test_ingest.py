@@ -83,7 +83,13 @@ def test_ingest_writes_rows_and_daymeta(tmp_path: Path):
     assert ampl.market_excess_return == pytest.approx(0.04)
     assert ampl.realized_r == pytest.approx(1.5)
     assert ampl.ladder_config_version == '{"order_ttl_days":7,"time_stop_days":42}'
-    assert json.loads(ampl.grid_realized_r_json)["single_tp_first"] == 1.0
+    # The parquet fixture still CARRIES grid_realized_r_json and
+    # ratchet_realized_r (see the frame above). The mirror no longer models
+    # them, and _row_to_outcome maps by MODEL field, so an unmapped parquet
+    # column is ignored rather than refused -- which is what lets the
+    # pipeline keep producing them until the what-if layer retires (#1526).
+    assert not hasattr(ampl, "grid_realized_r_json")
+    assert not hasattr(ampl, "ratchet_realized_r")
     assert ampl.realized_r_full_fill == pytest.approx(1.3)
 
     meta = DayMetaLadderOutcome.objects.get(brief_date=dt.date(2026, 5, 27))
@@ -574,3 +580,23 @@ def test_command_without_a_textfile_dir_still_ingests(tmp_path: Path, monkeypatc
     assert summary == "rebuilt=1 skipped=0 deleted=0 unsettled=0 total_rows=1\n"
     assert LadderOutcome.objects.filter(ticker="BIO").count() == 1
     assert not list(tmp_path.rglob("*.prom"))
+
+
+@pytest.mark.django_db
+def test_the_mirror_drops_two_whatif_columns_nothing_reads() -> None:
+    """Pins the removal of two what-if columns that had no production reader.
+
+    ``grid_realized_r_json`` (the three-config exit grid) and
+    ``ratchet_realized_r`` (the ratchet what-if) were written by the pipeline and
+    mirrored here, but no view, serializer or SPA component read either, and
+    ``grid_realized_r_json`` never appeared in the committed OpenAPI artefact. The
+    ``edge`` serializers publish every model field (``exclude = ("pk",)``), so
+    carrying them meant publishing two fields no client consumes.
+
+    The pipeline keeps producing both until the what-if layer is retired (#1526);
+    only the Postgres mirror drops them, and the ingest tolerates the surviving
+    parquet columns because it maps by model field.
+    """
+    names = {f.name for f in LadderOutcome._meta.get_fields()}
+    assert "grid_realized_r_json" not in names
+    assert "ratchet_realized_r" not in names
