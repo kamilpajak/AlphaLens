@@ -10577,3 +10577,233 @@ class TestRunOnceNowEntryScope(IsolatedHomeTestCase):
             self.assertIsNone(deps.now_entry_scope)
             cl.run_once(deps)
             self.assertEqual(len(place_calls), 1)
+
+
+# --------------------------------------------------------------------------
+# #1621 part 4 — the three remaining unthrottled failure alerts.
+#
+# On LIVE the daemon ticks every ~6-7 s during market hours, so a condition
+# that persists for a whole broker outage used to page on EVERY tick (roughly
+# ten Telegram messages a minute). Routing them through the daemon-lifetime
+# throttle makes each page once per re-alert interval, keyed so that genuinely
+# DISTINCT conditions never suppress one another.
+# --------------------------------------------------------------------------
+
+
+_ORPHAN_A = ("", "OLN-2026-08-18-entry-t0-fire", "position")
+_ORPHAN_B = ("99", "", "order")
+# Same KIND as the pair above, differing only in the one id field that arm
+# fills. A key built from the kind alone cannot tell these apart, and the two
+# fixtures above cannot show it: they differ in kind as well as in both ids.
+_ORPHAN_A_SIBLING = ("", "SMG-2026-08-19-entry-t0-fire", "position")
+_ORPHAN_B_SIBLING = ("101", "", "order")
+
+
+def _orphan(order_id: str, external_reference: str, kind: str):
+    from alphalens_pipeline.brokers.automanager.orphan_sweeper import Orphan
+
+    return Orphan(order_id=order_id, external_reference=external_reference, kind=kind)  # type: ignore[arg-type]
+
+
+class TestOrphanSweepAlertsAreThrottled(IsolatedHomeTestCase):
+    """The orphan sweep's two alerts (the sweep itself failing, and each flagged
+    orphan) go through ``deps.alert_throttled``, keyed per ORPHAN IDENTITY so a
+    second orphan in the same tick is never swallowed by the first."""
+
+    def _deps_with(
+        self,
+        tmp: str,
+        alerts: list[str],
+        *,
+        sweep: Any,
+        clock: Callable[[], float] = lambda: 1000.0,
+    ) -> cl.LoopDeps:
+        throttle = cl._AlertThrottle(alerts.append, clock=clock, interval_s=1800.0)
+        deps = _deps(
+            _StubBroker(),
+            kill_file=Path(tmp) / "KILL",
+            verdicts=[],
+            place_calls=[],
+            alerts=[],
+            alert_throttled=lambda m, r: throttle.emit(m, reason=r),
+        )
+        return cl.LoopDeps(**{**deps.__dict__, "sweep_orphans_fn": sweep})
+
+    def test_every_action_that_reaches_the_broker_carries_a_uic_field(self) -> None:
+        """The protection-failure key discriminates by action TYPE and uic, so an
+        action that calls the broker without a uic would key every one of its
+        failures to the same string and hide all but the first.
+
+        Two members of the contract's union carry no ``uic`` field, and neither
+        reaches the broker: ``CancelRemaining`` is not dispatched by the
+        protection executor at all, and ``AlertOnly`` only sends a throttled
+        alert. (``NoOp`` has the field, defaulting to None, and returns at
+        once.) The union is read from the contract rather than listed here, so a
+        NEW action type is red until someone classifies it.
+        """
+        from typing import get_args
+
+        from alphalens_pipeline.brokers.automanager import position_manager
+
+        without_a_uic = {
+            cls.__name__
+            for cls in get_args(position_manager.Action)
+            if "uic" not in {f.name for f in dataclasses.fields(cls)}
+        }
+
+        self.assertEqual(
+            without_a_uic,
+            {"CancelRemaining", "AlertOnly"},
+            "a new protection action with no uic would merge its failures into one page",
+        )
+
+    def test_two_distinct_orphans_in_one_tick_both_alert(self) -> None:
+        """The discriminating case: a key that collapsed the two would HIDE an
+        orphan, which is worse than the flood this change exists to stop."""
+        orphans = [_orphan(*_ORPHAN_A), _orphan(*_ORPHAN_B)]
+        with TemporaryDirectory() as d:
+            alerts: list[str] = []
+            deps = self._deps_with(d, alerts, sweep=lambda _b: orphans)
+            report = cl.run_once(deps, sweep_orphans=True)
+        flagged = [a for a in alerts if "orphan (placed but never journaled)" in a]
+        self.assertEqual(len(flagged), 2, f"both orphans must page: {alerts}")
+        self.assertEqual(report.orphans, 2)
+        self.assertEqual(report.alerts, 2)
+
+    def _both_page(self, pair: tuple) -> None:
+        orphans = [_orphan(*spec) for spec in pair]
+        with TemporaryDirectory() as d:
+            alerts: list[str] = []
+            deps = self._deps_with(d, alerts, sweep=lambda _b: orphans)
+            report = cl.run_once(deps, sweep_orphans=True)
+        flagged = [a for a in alerts if "orphan (placed but never journaled)" in a]
+        self.assertEqual(len(flagged), 2, f"both orphans must page: {alerts}")
+        self.assertEqual(report.alerts, 2)
+
+    def test_two_position_orphans_of_one_kind_both_alert(self) -> None:
+        """Pins ``external_reference`` in the key on its own. Two position
+        orphans share a kind and carry no order id, so a key that drops the
+        reference pages for the first and HIDES the second."""
+        self._both_page((_ORPHAN_A, _ORPHAN_A_SIBLING))
+
+    def test_two_order_orphans_of_one_kind_both_alert(self) -> None:
+        """Pins ``order_id`` in the key on its own, by the mirror argument: two
+        order orphans share a kind and carry no reference."""
+        self._both_page((_ORPHAN_B, _ORPHAN_B_SIBLING))
+
+    def test_the_same_orphan_pages_once_within_the_interval(self) -> None:
+        orphans = [_orphan(*_ORPHAN_A)]
+        with TemporaryDirectory() as d:
+            alerts: list[str] = []
+            deps = self._deps_with(d, alerts, sweep=lambda _b: orphans)
+            for _ in range(5):  # five consecutive ticks, same orphan still unresolved
+                report = cl.run_once(deps, sweep_orphans=True)
+        flagged = [a for a in alerts if "orphan (placed but never journaled)" in a]
+        self.assertEqual(len(flagged), 1, f"one page per interval, not per tick: {alerts}")
+        # Detection is UNCHANGED — report.orphans still counts every tick's sighting;
+        # only the paging is throttled, and report.alerts counts pages actually sent.
+        self.assertEqual(report.orphans, 1)
+        self.assertEqual(report.alerts, 0)
+
+    def test_the_same_orphan_re_alerts_after_the_interval(self) -> None:
+        orphans = [_orphan(*_ORPHAN_A)]
+        clock = {"t": 1000.0}
+        with TemporaryDirectory() as d:
+            alerts: list[str] = []
+            deps = self._deps_with(d, alerts, sweep=lambda _b: orphans, clock=lambda: clock["t"])
+            cl.run_once(deps, sweep_orphans=True)
+            clock["t"] += 1801.0
+            cl.run_once(deps, sweep_orphans=True)
+        flagged = [a for a in alerts if "orphan (placed but never journaled)" in a]
+        self.assertEqual(len(flagged), 2)
+
+    def test_a_sustained_sweep_failure_pages_once_within_the_interval(self) -> None:
+        """The sweep is ONE call per tick, so its key carries no discriminator —
+        and deliberately NOT the exception text either: a gateway that stamps a
+        request id or a timestamp into every message would otherwise mint a new
+        key per tick and the flood would be back."""
+        attempt = {"n": 0}
+
+        def _raise(_broker: Any) -> list:
+            attempt["n"] += 1
+            raise BrokerError(f"gateway 503 (request 00000000-0000-0000-0000-{attempt['n']:012d})")
+
+        with TemporaryDirectory() as d:
+            alerts: list[str] = []
+            deps = self._deps_with(d, alerts, sweep=_raise)
+            for _ in range(5):
+                report = cl.run_once(deps, sweep_orphans=True)
+        failed = [a for a in alerts if "orphan-sweep failed (broker error)" in a]
+        self.assertEqual(len(failed), 1, f"one page per interval, not per tick: {alerts}")
+        self.assertEqual(report.alerts, 0)
+        self.assertEqual(report.orphans, 0)
+
+
+class TestProtectionFailureAlertsAreThrottled(IsolatedHomeTestCase):
+    """A per-action ``BrokerError`` in the protection pass pages through the
+    throttle, keyed by ACTION TYPE and uic: one uic's failure must never silence
+    another uic's, nor one action type another action type on the same uic."""
+
+    def _run(
+        self,
+        actions: list,
+        alerts: list[str],
+        *,
+        ticks: int = 1,
+        clock: Callable[[], float] = lambda: 1000.0,
+    ) -> cl.TickReport:
+        throttle = cl._AlertThrottle(alerts.append, clock=clock, interval_s=1800.0)
+        # The message VARIES per call on purpose (a real gateway stamps a request
+        # id into it), so the key may not be derived from the exception text.
+        attempt = {"n": 0}
+
+        def _boom(action: Any, kill: bool, report: cl.TickReport) -> None:
+            attempt["n"] += 1
+            raise BrokerError(f"gateway 503 (request {attempt['n']:012d})")
+
+        deps = _deps(
+            _StubBroker(),
+            kill_file=Path("/nonexistent/KILL"),
+            verdicts=[],
+            place_calls=[],
+            alerts=[],
+            execute_protection=_boom,
+            alert_throttled=lambda m, r: throttle.emit(m, reason=r),
+        )
+        report = cl.TickReport()
+        with mock.patch.object(cl, "reconcile_protection", lambda _view: actions):
+            for _ in range(ticks):
+                cl._run_protection_pass(deps, [], False, report)
+        return report
+
+    def test_the_same_action_on_distinct_uics_both_alert(self) -> None:
+        """The discriminating case for the uic half of the key."""
+        actions = [
+            PlaceStop(1, "SELL", 3.0, 216.48, "crid-a-stop-0"),
+            PlaceStop(2, "SELL", 3.0, 216.48, "crid-b-stop-0"),
+        ]
+        alerts: list[str] = []
+        report = self._run(actions, alerts)
+        failed = [a for a in alerts if "failed (broker error)" in a]
+        self.assertEqual(len(failed), 2, f"each uic must page: {alerts}")
+        self.assertEqual(report.alerts, 2)
+
+    def test_distinct_action_types_on_one_uic_both_alert(self) -> None:
+        """The discriminating case for the action-type half of the key."""
+        actions = [
+            PlaceStop(1, "SELL", 3.0, 216.48, "crid-a-stop-0"),
+            CancelSellLegs(1, ("oco-tp-1",), "over-hedge repair"),
+        ]
+        alerts: list[str] = []
+        report = self._run(actions, alerts)
+        failed = [a for a in alerts if "failed (broker error)" in a]
+        self.assertEqual(len(failed), 2, f"each action type must page: {alerts}")
+        self.assertEqual(report.alerts, 2)
+
+    def test_the_same_failure_pages_once_within_the_interval(self) -> None:
+        actions = [PlaceStop(1, "SELL", 3.0, 216.48, "crid-a-stop-0")]
+        alerts: list[str] = []
+        report = self._run(actions, alerts, ticks=5)
+        failed = [a for a in alerts if "failed (broker error)" in a]
+        self.assertEqual(len(failed), 1, f"one page per interval, not per tick: {alerts}")
+        self.assertEqual(report.alerts, 1)

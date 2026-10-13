@@ -119,6 +119,7 @@ if TYPE_CHECKING:
     from broker_contract.price_feed import PriceFeed
     from broker_contract.sizing import SetupPlan, TpTranchePlan
 
+    from alphalens_pipeline.brokers.automanager.orphan_sweeper import Orphan
     from alphalens_pipeline.brokers.automanager.streaming_trigger import StreamTrigger
     from alphalens_pipeline.brokers.notifications import NotificationPort
     from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
@@ -179,6 +180,29 @@ def kill_active_metric(job: str) -> str:
 # stall — Q9 never propagating — is otherwise invisible. When a uic emits the M1
 # hold for this many consecutive protection ticks, the driver pages ONCE (throttled).
 _OCO_LAG_ALERT_TICKS = 5
+
+# Throttle keys for the three failure alerts that bypassed the throttle (#1621
+# part 4). What each arm actually buys differs, and #1621's own premise that all
+# three "repeat on every tick" is false — measured, not assumed:
+#   - A PROTECTION failure genuinely repeats per tick. The LIVE daemon ticks
+#     every ~6-7 s in market hours, so a sustained broker outage sent ~10
+#     Telegram messages a minute. This is the only arm that removes a flood.
+#   - The ORPHAN SWEEP runs only on the FIRST tick of a daemon process
+#     (``run_daemon`` passes ``sweep_orphans=first``, then clears it), so neither
+#     orphan alert can repeat in-process at all. Their keys buy the other half of
+#     the contract instead: two orphans flagged in one sweep must BOTH page. The
+#     per-restart burst stays #1361's subject, because the throttle is built once
+#     per process and a restart gets a fresh one.
+# Each key DISCRIMINATES what must stay independent, because collapsing two
+# genuinely distinct conditions HIDES the second one, which is worse than the
+# flood: the sweep failing is one condition per sweep (no discriminator); an
+# orphan is keyed by identity (``_orphan_alert_key``); a protection failure by
+# action TYPE and uic. None is derived from the exception TEXT — a gateway that
+# stamps a request id into every message would mint a new key per tick and the
+# flood would be back.
+_ORPHAN_SWEEP_FAIL_ALERT_KEY = "orphan-sweep-fail"
+_ORPHAN_ALERT_KEY_PREFIX = "orphan"
+_PROTECTION_FAIL_ALERT_KEY_PREFIX = "protection-fail"
 
 
 @dataclass(frozen=True)
@@ -551,22 +575,45 @@ def _alert_kill_transition(deps: LoopDeps, kill: bool) -> None:
     deps.kill_state["active"] = kill
 
 
+def _orphan_alert_key(orphan: Orphan) -> str:
+    """Throttle key identifying ONE orphan.
+
+    The sweeper fills exactly one of the two id fields per arm (an order orphan
+    carries the order id and an empty reference, a position orphan the reverse),
+    so BOTH are in the key: two orphans flagged in the same sweep are distinct,
+    and a key built from the kind alone would page for the first and hide the
+    rest. The same-kind cases in ``TestOrphanSweepAlertsAreThrottled`` pin each
+    id field on its own; the mixed-kind pair cannot, since it differs in kind as
+    well. Stability across ticks is a property of the key but not a benefit in
+    practice: the sweep runs only on a process's first tick."""
+    return f"{_ORPHAN_ALERT_KEY_PREFIX}:{orphan.kind}:{orphan.order_id}:{orphan.external_reference}"
+
+
 def _run_orphan_sweep(deps: LoopDeps, report: TickReport) -> None:
     # A BrokerError here (list_open_orders etc.) must not crash the tick — the
     # sweep is a diagnostic read; alert and carry on to reconcile.
     try:
         orphans = deps.sweep_orphans_fn(deps.broker)
     except BrokerError as exc:
-        deps.alert(f"orphan-sweep failed (broker error) — skipped this tick: {exc}")
-        report.alerts += 1
+        if deps.alert_throttled(
+            f"orphan-sweep failed (broker error) — skipped this tick: {exc}",
+            _ORPHAN_SWEEP_FAIL_ALERT_KEY,
+        ):
+            report.alerts += 1
         orphans = []
     for orphan in orphans:
         # Human line renders the E{n}/TP{n} label off the machine ref (falls back
         # to the order id for an order orphan with no ref); the raw machine repr
         # is kept OUT of the operator line and carried only on a debug logger.
         human = human_label_from_external_reference(orphan.external_reference) or orphan.order_id
-        deps.alert(f"orphan (placed but never journaled): {human} [{orphan.kind}]")
+        if deps.alert_throttled(
+            f"orphan (placed but never journaled): {human} [{orphan.kind}]",
+            _orphan_alert_key(orphan),
+        ):
+            report.alerts += 1
         logger.debug("orphan detail: %r", orphan)
+        # DETECTION count, not a paging count: every tick's sighting still lands
+        # here even when the throttle swallowed the repeat page.
         report.orphans += 1
 
 
@@ -1526,8 +1573,19 @@ def _run_protection_pass(
         try:
             deps.execute_protection(action, kill, report)
         except BrokerError as exc:
-            deps.alert(f"protection {type(action).__name__} failed (broker error) — skipped: {exc}")
-            report.alerts += 1
+            action_name = type(action).__name__
+            if deps.alert_throttled(
+                f"protection {action_name} failed (broker error) — skipped: {exc}",
+                # ``None`` when the action carries no uic. Reachable only for
+                # the arms that never call the broker, so it cannot merge two
+                # real failures today: ``CancelRemaining`` is not dispatched
+                # here, ``AlertOnly`` only sends an alert and a bare ``NoOp``
+                # returns at once. Pinned by
+                # ``test_every_action_that_reaches_the_broker_carries_a_uic_field``,
+                # which reads the contract's union and goes red on a new type.
+                f"{_PROTECTION_FAIL_ALERT_KEY_PREFIX}:{action_name}:{getattr(action, 'uic', None)}",
+            ):
+                report.alerts += 1
     if track_oco_lag:
         _track_oco_lag(deps, actions, report)
 
