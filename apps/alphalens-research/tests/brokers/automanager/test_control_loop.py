@@ -8242,6 +8242,11 @@ class _Book:
         return list(step)
 
 
+def _ARMED_O1() -> dict[str, cl.ArmedEntryOrder]:
+    """One armed entry order, as the entry-trails fold states it."""
+    return {"o1": cl.ArmedEntryOrder(crid="crid-t0", uic=43070)}
+
+
 class TestRunDaemonWakesOnAnEntryFill(IsolatedHomeTestCase):
     """#1402. On LIVE the poll-only wait was a fixed 45 s, so a native trailing
     BUY that filled at the venue waited up to a whole ~58 s cycle for its stop
@@ -8254,7 +8259,7 @@ class TestRunDaemonWakesOnAnEntryFill(IsolatedHomeTestCase):
     def _run(
         self,
         *,
-        armed: Callable[[], frozenset[str]],
+        armed: Callable[[], dict[str, cl.ArmedEntryOrder]],
         book: _Book,
         ticks: int,
         seen: dict[str, Any] | None = None,
@@ -8269,7 +8274,7 @@ class TestRunDaemonWakesOnAnEntryFill(IsolatedHomeTestCase):
             clock.now += seconds
 
         probe = cl.EntryFillProbe(
-            armed_order_ids=armed, list_open_orders=book, seen={} if seen is None else seen
+            armed_orders=armed, list_open_orders=book, seen={} if seen is None else seen
         )
         cl.run_daemon(
             deps,
@@ -8303,14 +8308,14 @@ class TestRunDaemonWakesOnAnEntryFill(IsolatedHomeTestCase):
             sleep_fn=slept.append,
             wake_event=None,
             monotonic=_forbidden_monotonic,
-            fill_probe=cl.EntryFillProbe(armed_order_ids=frozenset, list_open_orders=book, seen={}),
+            fill_probe=cl.EntryFillProbe(armed_orders=dict, list_open_orders=book, seen={}),
         )
         self.assertEqual(slept, [45.0, 45.0])
         self.assertEqual(book.reads, 0)
 
     def test_a_resting_order_probes_every_five_seconds_and_keeps_the_cadence(self) -> None:
         book = _Book([[_book_order("o1")]])
-        run_at, slept = self._run(armed=lambda: frozenset({"o1"}), book=book, ticks=2)
+        run_at, slept = self._run(armed=_ARMED_O1, book=book, ticks=2)
         self.assertEqual(run_at, [1000.0, 1045.0])
         self.assertEqual(slept[:9], [self._PROBE] * 9)
         # Two waits (run_daemon also waits after the last tick), 8 probes each:
@@ -8319,14 +8324,14 @@ class TestRunDaemonWakesOnAnEntryFill(IsolatedHomeTestCase):
 
     def test_an_order_that_leaves_the_book_wakes_protection_then_the_tick(self) -> None:
         book = _Book([[_book_order("o1")], [_book_order("o1")], []])
-        run_at, _ = self._run(armed=lambda: frozenset({"o1"}), book=book, ticks=2)
+        run_at, _ = self._run(armed=_ARMED_O1, book=book, ticks=2)
         # Tick 1 at 1000; the order is gone at the third probe (1015): a fast
         # protection pass, then the normal tick, both at 1015.
         self.assertEqual(run_at, [1000.0, 1015.0, 1015.0])
 
     def test_a_partial_fill_wakes_once_and_the_same_quantity_does_not_wake_again(self) -> None:
         book = _Book([[_book_order("o1")], [_book_order("o1", filled=3.0)]])
-        run_at, _ = self._run(armed=lambda: frozenset({"o1"}), book=book, ticks=3)
+        run_at, _ = self._run(armed=_ARMED_O1, book=book, ticks=3)
         # Woken at 1010 by the growth to 3; the next wait sees 3 again every
         # probe and runs the full 45 s.
         self.assertEqual(run_at, [1000.0, 1010.0, 1010.0, 1055.0])
@@ -8335,20 +8340,20 @@ class TestRunDaemonWakesOnAnEntryFill(IsolatedHomeTestCase):
         # Audit REJECTED/UNKNOWN keeps the tier armed for good. Without the
         # memo this would tick every ~5 s forever.
         book = _Book([[]])
-        run_at, _ = self._run(armed=lambda: frozenset({"o1"}), book=book, ticks=3)
+        run_at, _ = self._run(armed=_ARMED_O1, book=book, ticks=3)
         self.assertEqual(run_at, [1000.0, 1005.0, 1005.0, 1050.0])
 
     def test_the_memo_survives_across_waits_on_the_deps(self) -> None:
         seen: dict[str, Any] = {}
         book = _Book([[]])
-        self._run(armed=lambda: frozenset({"o1"}), book=book, ticks=2, seen=seen)
-        run_at, _ = self._run(armed=lambda: frozenset({"o1"}), book=_Book([[]]), ticks=2, seen=seen)
+        self._run(armed=_ARMED_O1, book=book, ticks=2, seen=seen)
+        run_at, _ = self._run(armed=_ARMED_O1, book=_Book([[]]), ticks=2, seen=seen)
         self.assertEqual(run_at, [1000.0, 1045.0])  # already seen absent: no wake
 
     def test_a_failing_probe_waits_the_full_poll_and_warns_once(self) -> None:
         book = _Book([BrokerError("book read failed")])
         with self.assertLogs(cl.logger, level="WARNING") as caught:
-            run_at, _ = self._run(armed=lambda: frozenset({"o1"}), book=book, ticks=3)
+            run_at, _ = self._run(armed=_ARMED_O1, book=book, ticks=3)
         self.assertEqual(run_at, [1000.0, 1045.0, 1090.0])
         warnings = [line for line in caught.output if "fill probe" in line]
         self.assertEqual(len(warnings), 1, caught.output)
@@ -8356,7 +8361,7 @@ class TestRunDaemonWakesOnAnEntryFill(IsolatedHomeTestCase):
     def test_an_armed_reader_that_raises_falls_back_to_the_plain_sleep(self) -> None:
         # The journal read runs on the daemon's main loop: a raise there must
         # cost the probe, never the daemon.
-        def _broken() -> frozenset[str]:
+        def _broken() -> dict[str, cl.ArmedEntryOrder]:
             raise OSError("journal unreadable")
 
         book = _Book([[]])
@@ -8369,7 +8374,7 @@ class TestRunDaemonWakesOnAnEntryFill(IsolatedHomeTestCase):
     def test_the_fast_protection_pass_does_not_count_toward_the_oco_lag_alert(self) -> None:
         book = _Book([[]])
         with mock.patch.object(cl, "_track_oco_lag") as track:
-            self._run(armed=lambda: frozenset({"o1"}), book=book, ticks=2)
+            self._run(armed=_ARMED_O1, book=book, ticks=2)
         # Two run_once ticks track the lag; the fast pass between them does not.
         self.assertEqual(track.call_count, 2)
 
@@ -8453,7 +8458,17 @@ class TestTheDaemonBuildsItsFillProbe(IsolatedHomeTestCase):
             assert probe is not None
             probe.arm()
             probe.fill_seen()
-        self.assertEqual(deps.entry_fill_seen, {"o1": ("resting", 0.0)})
+        self.assertEqual(
+            deps.entry_fill_seen,
+            {
+                "o1": cl.EntryFillObservation(
+                    book_state=cl._BOOK_STATE_RESTING,
+                    filled_quantity=0.0,
+                    crid="crid-t0",
+                    uic=None,
+                )
+            },
+        )
 
 
 class TestRunDaemonAbsoluteDeadline(IsolatedHomeTestCase):

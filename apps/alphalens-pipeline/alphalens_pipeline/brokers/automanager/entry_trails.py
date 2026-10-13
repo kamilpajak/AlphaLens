@@ -21,7 +21,10 @@ PR-T0 defines only the schema, nothing generates them yet). Kinds:
 ``fired`` / ``expired`` / ``suspended`` / ``cancelled``. The compactor keeps a
 minimal fold-equivalent set per crid and PRESERVES UNKNOWN KINDS VERBATIM —
 the standalone-stops compactor eats unknown kinds (memo G4) and that bug
-class must not recur here.
+class must not recur here. The file also carries the two observability-only
+#1402 probe kinds (:data:`KIND_FILL_PROBE` /
+:data:`KIND_FILL_PROBE_PROTECTION_GAP`), which the fold deliberately treats as
+unknown — see their own block below.
 
 **Virtual reservation** (memo G5): watching tiers have NO broker order, so
 they fold to zero in the committed-working gross — the gross cap and cash
@@ -146,6 +149,49 @@ ENTRY_TRAIL_KINDS = (
     frozenset({KIND_WATCH_OPEN, KIND_TOUCHED, KIND_TROUGH, KIND_TRAIL_ARMED})
     | ENTRY_TRAIL_TERMINAL_KINDS
 )
+
+
+# --- Observability-only probe kinds (#1402) ----------------------------------
+#
+# These two instrument the unprotected window between an entry fill and its
+# disaster stop. They are DELIBERATELY outside :data:`ENTRY_TRAIL_KINDS`:
+# registering them would give a tier a non-terminal ``latest_kind`` that no
+# state machine models, which would move :func:`tier_stage` and the
+# ``latest_kind``-gated watch/reconcile sets -- a money-path change bought by
+# an observability record. Unregistered, the fold SKIPS them (not malformed:
+# they carry a ``crid``) and the compactor PRESERVES them verbatim, which is
+# the G4 contract for a kind a reader does not know.
+#
+# Both are written at most ONCE per observation NAME, so "preserved forever" is
+# a bounded cost: there are two names, so at most two ``fill_probe`` lines per
+# armed order id and one ``fill_probe_protection_gap`` line per (uic, name).
+# A quantity that grows in several steps is several wakes but ONE line -- every
+# growth reports the same name, and only the first one is written. So these
+# lines do not grow with how finely an entry fills.
+
+KIND_FILL_PROBE = "fill_probe"
+"""What the #1402 entry-fill probe SAW for one armed order id: that the id left
+the open-orders book, or that its filled quantity grew. Read by nothing in the
+daemon -- it exists so the unprotected-window measurement can tell "the fill
+was not visible yet" from "the pass saw it and did not act"."""
+
+KIND_FILL_PROBE_PROTECTION_GAP = "fill_probe_protection_gap"
+"""A protection pass ran while an armed entry order already had a
+:data:`KIND_FILL_PROBE` observation and NO position for its uic was in the
+snapshot that pass read. This is the record that discriminates "the order had
+not left the book yet" from "the position was not readable yet"."""
+
+KEY_OBSERVATION = "observation"
+"""Field name on both probe lines: WHICH observation it was, one of
+:data:`OBSERVATION_ORDER_ABSENT` / :data:`OBSERVATION_FILLED_QTY_GREW`."""
+
+KEY_FILLED_QTY = "filled_qty"
+"""Field name on both probe lines: the filled quantity the probe SAW on the
+armed order. Deliberately not ``realized_qty`` (the terminal reconcile's
+measured fill) -- this is an in-flight book reading, not a settled fill."""
+
+OBSERVATION_ORDER_ABSENT = "order_absent"
+OBSERVATION_FILLED_QTY_GREW = "filled_qty_grew"
 
 # Compaction growth bound: per crid the minimal fold-equivalent set is at most
 # the latest watch_open + the min-trough record + the latest trail_armed + the

@@ -127,7 +127,30 @@ BASELINE: dict[str, int] = {
     # docstring that records why the ``>`` chain is safe without the shared
     # ratchet helper costs 18 more. The function it exists to shrink went from
     # cognitive complexity 34 to 12, which is the trade this entry pays for.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7312,
+    #
+    # Raised from 7254 for the #1402 instrumentation of the unprotected window
+    # between an entry fill and its disaster stop. The room goes to two frozen
+    # dataclasses on the probe's memo (``ArmedEntryOrder``,
+    # ``EntryFillObservation`` -- the memo was a bare tuple and now has to carry
+    # the crid and the uic the fold already states), the named wake rule the
+    # journal record shares with it, and
+    # ``_journal_entry_fill_protection_gap``. Both records are read by nothing
+    # in the daemon, so most of those lines are the docstrings that say why they
+    # can never touch the money path. They belong HERE and not in
+    # ``entry_trails``: the probe and the protection pass are the two observers,
+    # ``entry_trails`` owns the kinds and the field spellings they write.
+    #
+    # The number is the file's ACTUAL length, checked against ``wc -l`` rather
+    # than counted from the diff: the first attempt at this entry read 7439
+    # against a 7444-line file and shipped the gate red. The last 22 lines are
+    # the pre-merge review round: grouping the gap observations per uic instead
+    # of electing one, and the two comments that say what is NOT recorded.
+    #
+    # Re-counted after merging #1766 into this branch: that change and this
+    # one both grew the file from 7254, so the merged length is 7554
+    # rather than either branch's own number. Counted with ``wc -l`` on the
+    # merged file, not added up from the two diffs.
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7554,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3302,
