@@ -13,7 +13,7 @@ parquet mtime), the same incremental-rebuild gate the briefs cache uses.
 
 Unit conventions (see memo §3 + the discovery's "CRITICAL UNIT RESOLUTION"):
 
-* ``realized_r`` / ``open_r`` / ``mfe`` / ``mae`` / ``ratchet_realized_r`` are
+* ``realized_r`` / ``open_r`` / ``mfe`` / ``mae`` are
   RISK-NORMALISED (multiples of R = the per-share risk ``blended_entry −
   disaster_stop``). They are the protocol "gross / pre-cost" metric, NEVER a
   raw return.
@@ -127,7 +127,7 @@ class LadderOutcome(models.Model):
     sector_excess_return = models.FloatField(null=True, blank=True)
     outcome_benchmark_version = models.CharField(max_length=64, blank=True, default="")
 
-    # Sequence + ratchet what-if.
+    # Ordered crossing sequence (the policy-free substrate layer).
     sequence_str = models.CharField(max_length=256, blank=True, default="")
 
     # Pre-computed ladder-chart payload (PR-1): the JSON projection the pipeline
@@ -139,7 +139,6 @@ class LadderOutcome(models.Model):
     # NO_DATA payload). See alphalens_pipeline.feedback.ladder_chart.
     chart_payload_json = models.TextField(blank=True, default="")
     ambiguous_bars = models.IntegerField(null=True, blank=True)
-    ratchet_realized_r = models.FloatField(null=True, blank=True)
 
     # Holding period (first-fill → exit; NULL for NO_FILL).
     holding_days_elapsed = models.IntegerField(null=True, blank=True)
@@ -171,13 +170,6 @@ class LadderOutcome(models.Model):
     # cluster that day — counted in both cohorts, reported, never a filter here.
     source = models.CharField(max_length=32, blank=True, default="")
     event_overlap = models.BooleanField(default=False)
-
-    # Alternate-exit-ladder grid (PR-2): JSON map {config -> realized_r} from
-    # re-replaying the SAME bars under each exit policy (single_tp_first /
-    # single_tp_last / no_tp_ride). Holds the candidate + entry + stop fixed, so
-    # the spread vs realized_r is the trade-management effect, not the pick.
-    # Empty until a minute resolve computes it (non-plannable / placeholder rows).
-    grid_realized_r_json = models.TextField(blank=True, default="")
 
     # WHAT-IF exit-lens grid (Stage A): JSON map {lens_id -> realized_r} from re-replaying
     # the SAME bars under every registered lens. Lens SCOPE is per-lens, never blanket
