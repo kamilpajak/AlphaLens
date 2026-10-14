@@ -33,6 +33,9 @@ logger = logging.getLogger(__name__)
 _SEPARATOR = " - "
 # Below one unit of currency two decimals hide the move; four keep it readable.
 _SMALL_PRICE = 1.0
+# The widest a stop MOVE's two levels are ever rendered, when nothing narrower
+# tells them apart. Matches the stop-raised throttle key's precision.
+_MAX_LEVEL_DECIMALS = 6
 
 
 class EventKind(enum.Enum):
@@ -155,6 +158,30 @@ def format_price(price: float) -> str:
     return f"{price:.2f}" if abs(price) >= _SMALL_PRICE else f"{price:.4f}"
 
 
+def _format_level_pair(previous: float, level: float) -> tuple[str, str]:
+    """Both levels of one stop MOVE, at ONE shared decimal width.
+
+    Two defects, one cause — :func:`format_price` picks a width per PRICE:
+
+    * Across the pair the widths can disagree, so a stop crossing 1.00 read
+      ``resting 1.04 (raised from 0.9801)``: four decimals then two, which the
+      reader cannot compare digit by digit.
+    * Two levels a fraction of a cent apart round to the SAME two decimals, so
+      the one page sent for that move said the stop did not move. That move is
+      reachable: ``stop_decision.TRAIL_STEP_EPS`` gates only the trail, and
+      against the ratchet floor, so the re-anchor arm has no step gate at all
+      and a small later fill shifts the blend by less than a cent.
+
+    So: the wider of the two widths, then wider still until the two differ.
+    ``_MAX_LEVEL_DECIMALS`` is the throttle key's own precision
+    (``control_loop._stop_raised_alert_key``), which is this codebase's
+    statement of when two levels are two different stops."""
+    decimals = 4 if min(abs(previous), abs(level)) < _SMALL_PRICE else 2
+    while decimals < _MAX_LEVEL_DECIMALS and f"{previous:.{decimals}f}" == f"{level:.{decimals}f}":
+        decimals += 2
+    return f"{previous:.{decimals}f}", f"{level:.{decimals}f}"
+
+
 def _with_level(text: str, level: float | None) -> str:
     """``text`` followed by ``level``, or ``text`` alone when it is not known."""
     return text if level is None else f"{text} {format_price(level)}"
@@ -189,10 +216,8 @@ def _stop_move_text(event: TradeEvent) -> str | None:
     # raise. Calling it a raise was the old defect: the call site dropped the
     # higher previous level and quoted the plan stop instead.
     moved = "lowered" if event.previous_level > event.level else "raised"
-    return (
-        f"{stop} resting {format_price(event.level)} "
-        f"({moved} from {format_price(event.previous_level)})"
-    )
+    was, now = _format_level_pair(event.previous_level, event.level)
+    return f"{stop} resting {now} ({moved} from {was})"
 
 
 def _reason_text(event: TradeEvent) -> str | None:

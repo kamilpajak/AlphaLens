@@ -1273,6 +1273,37 @@ class TestStopRaisePagesTheOperator(_JournalCase):
                 cl._drain_pages(report)
                 self.assertEqual([msg for msg, _k in pages if "resting" in msg], [expected])
 
+    def test_the_asts_raise_the_owner_was_never_told_about(self) -> None:
+        # 2026-09-29, the case #1621 was written for: the stop moved 50.64 ->
+        # 62.42, locking in +0.36R, and the first message the owner saw was the
+        # fill hours later. The two levels are the ones that position's real
+        # `tranche_plan` and `trailed` journal lines carry, and the page is
+        # produced by the pass rather than by a hand-built formatter event --
+        # restated as an event it was byte-identical to a formatter unit test.
+        broker = FakeBroker()
+        uic = broker.uic_of("KO")  # the fake's instrument; the levels are ASTS's
+        broker.set_position("KO", 7, avg_price=55.0)
+        broker.add_resting_sell("KO", 7, 50.64, order_type="StopIfTraded")
+        self._seed_tranche_plan(
+            uic, tranches=(_tr(0, 999.0, 0.5),), reference_qty=7.0, stop_price=50.64
+        )
+        sj._journal_trailed(uic, 62.42304, peak=65.0, last_price=64.0)
+        pages: list[tuple[str, str]] = []
+        deps = _deps(
+            broker,
+            alerts=[],
+            live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 64.0}),
+            alert_throttled=lambda msg, reason: pages.append((msg, reason)) or True,
+        )
+        report = cl.TickReport()
+        with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+            cl._run_live_exits_pass(deps, report)
+        cl._drain_pages(report)
+        self.assertEqual(
+            [msg for msg, _k in pages if "resting" in msg],
+            ["TRAIL KO SL - trailed stop resting 62.42 (raised from 50.64)"],
+        )
+
     def test_a_level_that_does_not_raise_pages_nothing(self) -> None:
         broker = FakeBroker()
         uic = broker.uic_of("KO")
