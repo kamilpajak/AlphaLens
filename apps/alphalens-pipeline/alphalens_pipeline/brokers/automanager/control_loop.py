@@ -396,6 +396,13 @@ class TickReport:
     # audit budget exhausted — audit-429 memo): retried next tick, no alert.
     audits_deferred: int = 0
     actions: list[tuple[str, str]] = field(default_factory=list)  # (ticker, Action class)
+    # Operator pages computed during the tick and SENT after its protective
+    # work: (what, a zero-arg callable that builds, renders and delivers one).
+    # The alert sink is a synchronous HTTP POST whose own bound is tens of
+    # seconds, so it may not sit between a position and its stop —
+    # ``_queue_page`` / ``_drain_pages`` carry the whole argument. Per TICK, not
+    # per daemon: a report is built fresh in ``run_once``.
+    pending_pages: list[tuple[str, Callable[[], bool]]] = field(default_factory=list)
 
 
 def _always() -> bool:
@@ -560,8 +567,18 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
     # never-naked backstop — protection stays the LAST pass every tick.
     # Internally gated on the flag (default OFF): a no-op when off, so this
     # call site is unconditional and the flag alone controls behaviour.
-    _run_live_exits_pass(deps, report)
-    _run_protection_pass(deps, records, kill, report)
+    try:
+        _run_live_exits_pass(deps, report)
+        _run_protection_pass(deps, records, kill, report)
+    finally:
+        # The stop pages #1621 part 3 added, sent only now that every protective
+        # action of this tick has run. The sink is a synchronous POST bounded at
+        # tens of seconds and not bounded at all on DNS, so it may not sit
+        # between a position and its stop; the passes above only APPEND to the
+        # queue (``_queue_page``). In a ``finally`` because the two passes carry
+        # their own ``BrokerError`` boundaries but not every boundary, and a page
+        # the operator never gets is the loss this part exists to fix.
+        _drain_pages(report)
     report.audits_deferred = deps.audit_budget.deferred
     return report
 
@@ -1352,9 +1369,14 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
     # Here, and not after the engine run: the raise is a JOURNAL fact that
     # holds whether or not the engine gets to run this tick, and the
     # once-per-level guard inside the build has ALREADY consumed it — so a page
-    # placed behind any of the early returns below would be lost for good
-    # rather than sent late. The emit is contained, which is what keeps the
-    # feed-scope write and the engine run below it safe (#1621 part 3).
+    # computed behind any of the early returns below would be lost for good
+    # rather than sent late. Pinned by
+    # ``test_the_raise_is_queued_before_the_engine_so_an_engine_failure_cannot_eat_it``:
+    # moving this call down left all 3588 broker tests green.
+    #
+    # It only QUEUES. Nothing below — the feed-scope write, the engine, and the
+    # whole protection pass after this one — waits on a Telegram POST (#1621
+    # part 3; ``_queue_page`` carries the measured bound).
     _announce_stop_raises(deps, stop_raises, uic_to_instrument, report)
     # Built BEFORE the managed check on purpose: the build writes this pass's
     # "exits" slice of the shared price-stream subscription off the live long
@@ -1545,24 +1567,33 @@ def _announce_stop_raises(
     The page carries NO quantity. The only one this site holds is the ladder's
     reference qty, which is not the resting stop's size, and the live snapshot
     is per LEG rather than per exposure — a number that looks like the protected
-    size and is not would be worse than its absence."""
+    size and is not would be worse than its absence.
+
+    The page is QUEUED, not sent: everything below this call in the pass — the
+    feed-scope write, the exits engine — and the whole protection pass after it
+    would otherwise wait behind a hung Telegram POST, once per raising uic. See
+    :func:`_queue_page`."""
     for raise_ in raises:
         ticker = uic_to_instrument.get(raise_.uic, (f"uic {raise_.uic}", None))[0]
-        event = trade_alerts.TradeEvent(
-            kind=trade_alerts.EventKind.STOP_RAISED,
-            ticker=ticker,
-            label=STOP_LABEL,
-            reason=raise_.reason,
-            level=raise_.level,
-            previous_level=raise_.previous,
-        )
-        _page_best_effort(
-            functools.partial(
-                deps.alert_throttled, trade_alerts.render(event), _stop_raised_alert_key(raise_)
-            ),
+        _queue_page(
+            functools.partial(_send_stop_raised_page, deps, raise_, ticker),
             report,
             what="stop-raised",
         )
+
+
+def _send_stop_raised_page(deps: LoopDeps, raise_: StopRaise, ticker: str) -> bool:
+    """Build, render and deliver one stop-raised page. Runs inside the drain's
+    containment, so a formatter failure costs the page and nothing else."""
+    event = trade_alerts.TradeEvent(
+        kind=trade_alerts.EventKind.STOP_RAISED,
+        ticker=ticker,
+        label=STOP_LABEL,
+        reason=raise_.reason,
+        level=raise_.level,
+        previous_level=raise_.previous,
+    )
+    return deps.alert_throttled(trade_alerts.render(event), _stop_raised_alert_key(raise_))
 
 
 def _uics_moving_their_stop(journal_lines: Iterable[Mapping[str, Any]]) -> frozenset[int]:
@@ -4023,13 +4054,21 @@ def _run_fill_wake_protection(deps: LoopDeps) -> None:
     """The protection pass, run at once when the probe saw a fill, so the stop
     does not wait for the rest of the next tick (#1402). It skips the OCO-lag
     counter, which counts calls and would page twice as fast; the full tick that
-    follows runs the pass again with it."""
+    follows runs the pass again with it.
+
+    Its own report, so its own page queue: the stop-placed pages this pass
+    computes are drained HERE, after it. The drain is in a ``finally`` for the
+    same reason as in ``run_once``, and because the broad catch below must not
+    swallow the page along with the failure."""
+    report = TickReport()
     try:
         _run_protection_pass(
-            deps, deps.read_records(), _kill_active(deps), TickReport(), track_oco_lag=False
+            deps, deps.read_records(), _kill_active(deps), report, track_oco_lag=False
         )
     except Exception:  # broad on purpose: the full tick right after is the backstop
         logger.exception("entry fill probe: fast protection pass failed — the tick follows")
+    finally:
+        _drain_pages(report)
 
 
 def run_daemon(
@@ -7111,27 +7150,63 @@ def _emit_alert(
         report.alerts += 1
 
 
-def _page_best_effort(send: Callable[[], bool], report: TickReport, *, what: str) -> None:
-    """Emit one observability-only operator page, CONTAINED, counting it in
-    ``report`` iff it actually went out (#1621 part 3).
+def _queue_page(send: Callable[[], bool], report: TickReport, *, what: str) -> None:
+    """Hold one observability-only operator page for :func:`_drain_pages`, which
+    runs after this tick's protective work (#1621 part 3).
+
+    QUEUED rather than sent, because the sink is a synchronous HTTP POST on a
+    money path and its own bound is tens of seconds. ``_telegram_daemon_notify``
+    builds the canonical ``TelegramClient`` with no ``timeout``, so the default
+    10 s applies, over ``_MAX_ATTEMPTS = 3`` with ``_BACKOFFS = (1, 3)``:
+    measured against the real constants that is 34 s of block when only the read
+    hangs, and 64 s when connect and read each burn the window (``requests``
+    applies a scalar timeout to each phase). Name resolution is not bounded at
+    all — ``socket.getaddrinfo`` runs before the connect timeout applies — and
+    this host has a recorded DNS-storm incident.
+
+    Sent where they were computed, those seconds land ON the protective path.
+    The stop-placed page sits inside the per-action protection loop, so one hung
+    page delays every LATER uic's stop in the same tick; with 10 uics needing a
+    stop after a restart the last one waits minutes while naked. The stop-raised
+    page sits before the feed-scope write, the exits engine and the whole
+    protection pass — the never-naked backstop — and a restart re-derives one
+    raise per managed position, so N hung pages serialise ahead of it.
+
+    The page is still computed HERE, where its facts are: ``send`` is a zero-arg
+    callable that BUILDS and renders too, so a render failure is contained with
+    the delivery failure rather than escaping the ``functools.partial``
+    argument list. Nothing between here and the drain can delay a stop: this is
+    a list append.
+
+    Why not bound the sink instead: it is shared with every failure alert, the
+    attempt count is a class attribute, and no timeout bounds DNS. Deferring
+    removes the delay rather than shrinking it."""
+    report.pending_pages.append((what, send))
+
+
+def _drain_pages(report: TickReport) -> None:
+    """Send this tick's queued pages, each CONTAINED, counting the ones that
+    actually went out. Called after the protective work, never before it.
 
     Same reasoning as :func:`_journal_outcome_best_effort`, for the other
     observability sink. The production Telegram sink does not raise by design
     (``_telegram_daemon_notify``: "send_message never raises, so a delivery blip
-    cannot crash a tick"), but the two pages routed through here sit ON money
-    paths — the stop-raised page runs before the live-exits feed write and the
-    engine, the stop-placed page after a confirmed place and before the
-    protection pass's remaining actions. A sink that someday DOES raise would
-    not be a ``BrokerError``, so it would blow through the per-action boundary
-    in ``_run_protection_pass`` and abort the tick mid-protection. An alert is
-    never worth a naked position, so a failure costs the page plus one WARNING
-    and nothing else. The catch is ``Exception``, not a narrower class, for the
-    same reason the journal helper's is; ``BaseException`` still propagates."""
-    try:
-        if send():
-            report.alerts += 1
-    except Exception:
-        logger.warning("alert: the %s page failed — the tick continues", what, exc_info=True)
+    cannot crash a tick"), but a sink that someday DOES raise would not be a
+    ``BrokerError``, so uncontained it would blow through the per-action
+    boundary in ``_run_protection_pass`` and abort the tick. An alert is never
+    worth a naked position, so a failure costs the page plus one WARNING and
+    nothing else. The catch is ``Exception``, not a narrower class, for the same
+    reason the journal helper's is; ``BaseException`` still propagates.
+
+    The queue is emptied even if a page fails, so a tick never re-sends another
+    tick's pages."""
+    pending, report.pending_pages = report.pending_pages, []
+    for what, send in pending:
+        try:
+            if send():
+                report.alerts += 1
+        except Exception:
+            logger.warning("alert: the %s page failed — the tick continues", what, exc_info=True)
 
 
 def _journal_outcome_best_effort(
@@ -7647,7 +7722,25 @@ def _page_stop_placed(
     not. Keying on the uic alone would page for the session's first stop and
     hide every later one (the #1766 orphan-key lesson). The ref is the fallback
     for an adapter that returns no id, so the page is never keyed on an empty
-    string."""
+    string.
+
+    QUEUED, not sent. This runs inside the per-action protection loop
+    (``for action in actions: deps.execute_protection(...)``), which is serial,
+    so a page sent here puts the sink's own bound — tens of seconds, unbounded
+    on DNS — between THIS uic's confirmed stop and the NEXT uic's. Nothing but a
+    list append may sit there. See :func:`_queue_page`."""
+    _queue_page(
+        functools.partial(_send_stop_placed_page, throttle, action, qty, order_id),
+        report,
+        what="stop-placed",
+    )
+
+
+def _send_stop_placed_page(
+    throttle: _AlertThrottle, action: PlaceStop, qty: float, order_id: str
+) -> bool:
+    """Build, render and deliver one stop-placed page. Runs inside the drain's
+    containment, so a formatter failure costs the page and nothing else."""
     event = trade_alerts.TradeEvent(
         kind=trade_alerts.EventKind.STOP_PLACED,
         ticker=stop_journal._ticker_from_ref(action.request_id) or f"uic {action.uic}",
@@ -7657,11 +7750,7 @@ def _page_stop_placed(
         order_id=order_id or None,
     )
     key = f"{_STOP_PLACED_ALERT_KEY_PREFIX}:{order_id or action.request_id}"
-    _page_best_effort(
-        functools.partial(throttle.emit, trade_alerts.render(event), uic=action.uic, reason=key),
-        report,
-        what="stop-placed",
-    )
+    return throttle.emit(trade_alerts.render(event), uic=action.uic, reason=key)
 
 
 def _execute_place_stop(

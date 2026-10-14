@@ -108,6 +108,20 @@ ALLOWED_EXCLUDED_FILE_PREFIXES = ("test_",)
 BASELINE: dict[str, int] = {
     "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3507,
     "apps/alphalens-pipeline/alphalens_cli/commands/thematic.py": 1708,
+    # Raised again, by 89, for the review of #1621 part 3's money-path finding.
+    # The two pages were synchronous sink calls on protective paths, and the
+    # sink's own bound is 34 s when a read hangs, 64 s when connect and read
+    # each burn the 10 s window, and unbounded when DNS hangs. One page sat
+    # INSIDE the serial per-action protection loop, so it delayed every later
+    # uic's stop; the other sat ahead of the exits engine and the whole
+    # protection pass. They are now computed where their facts are and SENT
+    # after the tick's protective work: ``_queue_page`` (which carries the
+    # measurement, because a bound nobody states is a bound nobody checks),
+    # ``_drain_pages``, the two ``_send_*_page`` builders that let a render
+    # failure be contained with the delivery failure, a ``finally`` in
+    # ``run_once`` and one in the #1402 fill-wake pass, which has its own report
+    # and so its own queue. Measured with ``wc -l`` after ``ruff format``.
+    #
     # Raised again, by 6, for the review of #1621 part 3: the stop-raised key's
     # docstring claimed the level in the key dedups a daemon RESTART. It cannot
     # -- the throttle is built per process, so its last-sent map dies with the
@@ -174,7 +188,7 @@ BASELINE: dict[str, int] = {
     # rather than either branch's own number. Counted with ``wc -l`` on the
     # merged file, not added up from the two diffs.
     #
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7763,
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7852,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3302,

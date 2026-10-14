@@ -18,7 +18,7 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import stop_journal as sj
-from broker_contract.contract import InstrumentRef, Position
+from broker_contract.contract import BrokerError, InstrumentRef, Position
 from broker_contract.price_feed import PricePoint
 from broker_contract.sizing import TpTranchePlan
 
@@ -1121,6 +1121,10 @@ class TestStopRaisePagesTheOperator(_JournalCase):
         report = cl.TickReport()
         with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
             cl._run_live_exits_pass(deps, report)
+        # The pass QUEUES the page; ``run_once`` drains after the protection
+        # pass, so nothing reaches the sink inside the pass itself. That
+        # ordering has its own test below.
+        cl._drain_pages(report)
         return pages, report, uic
 
     def test_the_page_carries_the_ticker_the_label_and_both_levels(self) -> None:
@@ -1166,7 +1170,9 @@ class TestStopRaisePagesTheOperator(_JournalCase):
             )
 
         def _tick(deps: cl.LoopDeps) -> None:
-            cl._run_live_exits_pass(deps, cl.TickReport())
+            report = cl.TickReport()
+            cl._run_live_exits_pass(deps, report)
+            cl._drain_pages(report)
 
         with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
             _tick(_a_fresh_daemon())
@@ -1229,8 +1235,10 @@ class TestStopRaisePagesTheOperator(_JournalCase):
             live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 16.5}),
             alert_throttled=lambda msg, reason: pages.append((msg, reason)) or True,
         )
+        report = cl.TickReport()
         with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
-            cl._run_live_exits_pass(deps, cl.TickReport())
+            cl._run_live_exits_pass(deps, report)
+        cl._drain_pages(report)
         self.assertEqual([msg for msg, _key in pages if "raised" in msg], [])
 
     def test_a_held_raise_pages_once_not_on_every_tick(self) -> None:
@@ -1252,13 +1260,19 @@ class TestStopRaisePagesTheOperator(_JournalCase):
             live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 16.5}),
             alert_throttled=lambda msg, reason: pages.append((msg, reason)) or True,
         )
+
+        def _tick() -> None:
+            report = cl.TickReport()
+            cl._run_live_exits_pass(deps, report)
+            cl._drain_pages(report)
+
         with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
-            cl._run_live_exits_pass(deps, cl.TickReport())
-            cl._run_live_exits_pass(deps, cl.TickReport())
+            _tick()
+            _tick()
             self.assertEqual(len([m for m, _k in pages if "raised" in m]), 1)
             # A NEW level is a new fact and pages again.
             sj._journal_trailed(uic, 15.5, peak=15.9, last_price=15.8)
-            cl._run_live_exits_pass(deps, cl.TickReport())
+            _tick()
         raised = [m for m, _k in pages if "raised" in m]
         self.assertEqual(len(raised), 2, f"the second level pages too; got {raised}")
         # The second page reads from the level the FIRST one announced, not from
@@ -1266,13 +1280,67 @@ class TestStopRaisePagesTheOperator(_JournalCase):
         # "13.00 -> 15.50" would overstate the move the operator just missed.
         self.assertIn("resting 15.50 (raised from 14.50)", raised[1])
 
-    def test_an_alert_sink_that_raises_does_not_stop_the_exits_pass(self) -> None:
-        # Observability may never endanger the money path. The feed-scope write
-        # and the engine run both come AFTER this page in the pass, so an
-        # uncontained sink failure would cost the tick its exits. The tranche
-        # target stays out of reach here so the only page is the raise: the
-        # tranche-fired page is pre-existing and uncontained, and widening its
-        # containment is not this change.
+    def test_the_raise_is_queued_before_the_engine_so_an_engine_failure_cannot_eat_it(
+        self,
+    ) -> None:
+        # The PR's headline ordering decision, which nothing pinned: moving the
+        # announce call to the END of the pass -- behind `if not managed: return`
+        # and behind `except BrokerError: return` -- left all 3588 broker tests
+        # green.
+        #
+        # The raise is a JOURNAL fact and the once-per-level guard inside the
+        # build has ALREADY consumed it, so a page the engine's failure skips is
+        # lost for good rather than sent late. Here the engine raises, the pass
+        # returns early, and the page must nonetheless be on the queue that
+        # `run_once` drains in its `finally`.
+        broker = FakeBroker()
+        uic = broker.uic_of("KO")
+        broker.set_position("KO", 100, avg_price=15.0)
+        broker.add_resting_sell("KO", 100, self._PLAN_STOP, order_type="StopIfTraded")
+        self._seed_tranche_plan(
+            uic, tranches=(_tr(0, 99.0, 0.5),), reference_qty=100.0, stop_price=self._PLAN_STOP
+        )
+        sj._journal_trailed(uic, self._TRAILED, peak=14.9, last_price=14.8)
+        pages: list[tuple[str, str]] = []
+        deps = _deps(
+            broker,
+            alerts=[],
+            live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 16.5}),
+            alert_throttled=lambda msg, reason: pages.append((msg, reason)) or True,
+        )
+        report = cl.TickReport()
+        with mock.patch.object(cl, "run_live_exits", side_effect=BrokerError("engine down")):
+            with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+                cl._run_live_exits_pass(deps, report)
+
+        self.assertEqual(
+            [what for what, _send in report.pending_pages],
+            ["stop-raised"],
+            "the raise was computed and queued before the engine ran",
+        )
+        self.assertEqual(
+            [msg for msg, _key in pages if "resting" in msg],
+            [],
+            "and the page did not reach the sink inside the pass: the feed-scope "
+            "write, the engine and the whole protection pass sit below that call, "
+            "and the sink blocks for tens of seconds per page. (The pass's own "
+            "engine-failure alert is pre-existing and must go out.)",
+        )
+        cl._drain_pages(report)
+        self.assertEqual(
+            [msg for msg, _key in pages if "resting" in msg],
+            ["TRAIL KO SL - trailed stop resting 14.50 (raised from 13.00)"],
+            "and the operator is told, even though the engine failed",
+        )
+
+    def test_an_alert_sink_that_raises_does_not_stop_the_drain_or_the_tick(self) -> None:
+        # Observability may never endanger the money path. The drain runs after
+        # the protection pass, so an uncontained sink failure there would abort
+        # the tick between the pass and the rest of ``run_once`` and would also
+        # cost the pages of the raises behind it. The tranche target stays out of
+        # reach here so the only page is the raise: the tranche-fired page is
+        # pre-existing and uncontained, and widening its containment is not this
+        # change.
         broker = FakeBroker()
         uic = broker.uic_of("KO")
         broker.set_position("KO", 100, avg_price=15.0)
@@ -1296,6 +1364,7 @@ class TestStopRaisePagesTheOperator(_JournalCase):
             with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
                 with self.assertLogs(cl.logger, level="WARNING") as captured:
                     cl._run_live_exits_pass(deps, report)  # must not raise
+                    cl._drain_pages(report)  # nor must this
         engine.assert_called_once()
         self.assertEqual(report.alerts, 0, "a page that never went out is not counted")
         self.assertTrue(

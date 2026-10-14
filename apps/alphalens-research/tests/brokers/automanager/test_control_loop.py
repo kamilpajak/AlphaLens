@@ -4140,6 +4140,95 @@ class TestBrokerErrorBoundary(IsolatedHomeTestCase):
             self.assertEqual(deps.audit_budget.spent, 0, "budget resets at tick start")
             self.assertEqual(report.audits_deferred, 0)
 
+    def test_the_pages_are_sent_after_the_protection_pass_and_even_if_it_raises(self) -> None:
+        # Where the two stop pages of #1621 part 3 actually go out. They are
+        # queued where their facts are and drained HERE, because the sink is a
+        # synchronous POST bounded at 34-64 s (unbounded when DNS hangs) and
+        # `_run_protection_pass` is the never-naked backstop.
+        #
+        # Two claims. The drain runs AFTER both passes -- a drain before them
+        # would put the sink back in front of protection, which is the whole
+        # defect. And it runs even when a pass raises something that is not a
+        # `BrokerError`, because a page the operator never gets is the loss this
+        # part exists to fix; `run_once` has no boundary of its own at its
+        # caller, so the `finally` is what guarantees it.
+        for label, boom in (("a clean pass", None), ("a pass that raises", RuntimeError("boom"))):
+            with self.subTest(label):
+                order: list[str] = []
+                with TemporaryDirectory() as d:
+                    deps = _deps(
+                        _StubBroker(),
+                        kill_file=Path(d) / "KILL",
+                        verdicts=[],
+                        place_calls=[],
+                        alerts=[],
+                    )
+
+                    def _exits(_deps: Any, _report: Any, order: list[str] = order) -> None:
+                        order.append("live-exits")
+
+                    def _protection(
+                        *_a: Any, _boom: Any = boom, order: list[str] = order, **_k: Any
+                    ) -> None:
+                        order.append("protection")
+                        if _boom is not None:
+                            raise _boom
+
+                    def _drain(_report: Any, order: list[str] = order) -> None:
+                        order.append("drain")
+
+                    with mock.patch.object(cl, "_run_live_exits_pass", _exits):
+                        with mock.patch.object(cl, "_run_protection_pass", _protection):
+                            with mock.patch.object(cl, "_drain_pages", _drain):
+                                if boom is None:
+                                    cl.run_once(deps)
+                                else:
+                                    with self.assertRaises(RuntimeError):
+                                        cl.run_once(deps)
+
+                # The WHOLE order, not just the last entry: a drain added before
+                # the protection pass still leaves "drain" last, because the
+                # `finally` drains the (now empty) queue again.
+                self.assertEqual(order, ["live-exits", "protection", "drain"])
+
+    def test_the_fill_wake_protection_pass_drains_its_own_pages(self) -> None:
+        # The #1402 fast protection pass runs OUTSIDE a tick, on its own report,
+        # and it PLACES stops -- so it computes stop-placed pages. Nothing else
+        # ever sees that report, so if it does not drain, the page for the stop
+        # that the fast pass placed is dropped and never retried (the next full
+        # tick finds the stop already resting and places nothing). Asserted for
+        # the raising pass too: the broad catch there must not eat the page.
+        for label, boom in (("a clean pass", None), ("a pass that raises", RuntimeError("boom"))):
+            with self.subTest(label):
+                sent: list[str] = []
+
+                def _protection(
+                    _deps: Any,
+                    _records: Any,
+                    _kill: Any,
+                    report: Any,
+                    *,
+                    _boom: Any = boom,
+                    sent: list[str] = sent,
+                    **_k: Any,
+                ) -> None:
+                    cl._queue_page(lambda: bool(sent.append("page")) or True, report, what="x")
+                    if _boom is not None:
+                        raise _boom
+
+                with TemporaryDirectory() as d:
+                    deps = _deps(
+                        _StubBroker(),
+                        kill_file=Path(d) / "KILL",
+                        verdicts=[],
+                        place_calls=[],
+                        alerts=[],
+                    )
+                    with mock.patch.object(cl, "_run_protection_pass", _protection):
+                        cl._run_fill_wake_protection(deps)  # must not raise
+
+                self.assertEqual(sent, ["page"], "the fast pass's page still goes out")
+
     def test_run_once_reports_the_pass_deferral_counter(self) -> None:
         with TemporaryDirectory() as d:
             deps = _deps(
@@ -4811,6 +4900,11 @@ class TestStopPlacedPagesTheOperator(IsolatedHomeTestCase):
                 sj, "_standalone_stop_journal_path", lambda journal=journal: journal
             ):
                 executor(action, False, report)
+        # The page is QUEUED by the action and sent by the drain, which in
+        # production runs after every protective action of the tick. Nothing
+        # reaches the sink until it does — that is asserted on its own in
+        # ``test_the_page_is_not_sent_inside_the_protection_action``.
+        cl._drain_pages(report)
         return throttle, report
 
     def _pages(self, throttle: _KeyedThrottle) -> list[tuple[str, int | None, str | None]]:
@@ -4841,6 +4935,7 @@ class TestStopPlacedPagesTheOperator(IsolatedHomeTestCase):
             ):
                 executor(action, False, report)
                 executor(action, False, report)
+        cl._drain_pages(report)
         self.assertEqual(len(self._pages(throttle)), 2, "both emits were attempted")
         self.assertEqual(len([a for a in sent if "stop placed" in a]), 1, "one went out")
         self.assertEqual(report.alerts, 1, "only the page that went out is counted")
@@ -4873,6 +4968,45 @@ class TestStopPlacedPagesTheOperator(IsolatedHomeTestCase):
         throttle, _report = self._place(broker=_ProtBroker(by_uic={_UIC: _pos(46.0)}))
         self.assertEqual(self._pages(throttle)[0][1:], (_UIC, "stop-placed:S-1"))
 
+    def test_the_page_is_not_sent_inside_the_protection_action(self) -> None:
+        # The money-path rule, and the reason the page is queued rather than
+        # sent where it is computed. `_execute_place_stop` runs inside the
+        # SERIAL per-action loop of `_run_protection_pass`, and the real sink is
+        # a synchronous POST: the canonical `TelegramClient` is built with no
+        # timeout, so 10 s applies over 3 attempts with 1 s + 3 s backoffs --
+        # 34 s of block when the read hangs, 64 s when connect and read each
+        # burn the window, and unbounded when name resolution hangs, because
+        # `socket.getaddrinfo` runs before the connect timeout applies. Sent
+        # here, that lands between THIS uic's confirmed stop and the NEXT uic's,
+        # so with three uics the last one is naked for over a minute.
+        #
+        # So: the action may only APPEND. Nothing reaches the sink until the
+        # drain, which `run_once` calls after the protection pass.
+        sent: list[str] = []
+        throttle = _KeyedThrottle(sent)
+        broker = _ProtBroker(by_uic={_UIC: _pos(46.0)})
+        executor = cl._make_protection_executor(broker, throttle)
+        action = PlaceStop(_UIC, "SELL", 46.0, 216.48, _TRAIL_STOP_REF)
+        report = cl.TickReport()
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(
+                sj, "_standalone_stop_journal_path", lambda journal=journal: journal
+            ):
+                executor(action, False, report)
+
+        self.assertEqual(len(broker.placed), 1, "the stop went to the broker")
+        self.assertEqual(throttle.calls, [], "no sink call inside the protective action")
+        self.assertEqual(report.alerts, 0, "and nothing counted yet")
+        self.assertEqual(
+            [what for what, _send in report.pending_pages],
+            ["stop-placed"],
+            "the page is queued for the drain instead",
+        )
+        cl._drain_pages(report)
+        self.assertEqual(len(self._pages(throttle)), 1, "and the drain is what sends it")
+        self.assertEqual(report.pending_pages, [], "a drained queue does not re-send")
+
     def test_no_page_on_any_path_that_did_not_place(self) -> None:
         failures = {
             "flat-skip": _ProtBroker(by_uic={_UIC: _pos(0.0)}),
@@ -4894,9 +5028,10 @@ class TestStopPlacedPagesTheOperator(IsolatedHomeTestCase):
                 self.assertEqual(report.exits_placed, 0)
 
     def test_an_alert_sink_that_raises_never_aborts_the_protection_pass(self) -> None:
-        # The page is the LAST thing in the branch, but a raise would still
-        # escape the per-action ``except BrokerError`` boundary in
-        # ``_run_protection_pass`` and strand every uic queued behind this one.
+        # The page is off the per-action path now, but a raise out of the drain
+        # would still escape the per-action ``except BrokerError`` boundary in
+        # ``_run_protection_pass`` and abort the tick before the pages of the
+        # actions behind it.
         class _ExplodingThrottle(cl._AlertThrottle):
             def emit(
                 self, message: str, *, uic: int | None = None, reason: str | None = None
@@ -4914,6 +5049,7 @@ class TestStopPlacedPagesTheOperator(IsolatedHomeTestCase):
             ):
                 with self.assertLogs(cl.logger, level="WARNING") as captured:
                     executor(action, False, report)  # must NOT raise
+                    cl._drain_pages(report)  # nor must this
                 placed_lines = [
                     line
                     for line in sj._iter_standalone_stop_journal()
