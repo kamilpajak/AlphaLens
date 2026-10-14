@@ -145,7 +145,9 @@ class RenderStopStateKinds(unittest.TestCase):
             level=62.42304,
             previous_level=50.64,
         )
-        self.assertEqual(render(event), "TRAIL ASTS SL - trailed stop raised 50.64 -> 62.42")
+        self.assertEqual(
+            render(event), "TRAIL ASTS SL - trailed stop resting 62.42 (raised from 50.64)"
+        )
 
     def test_a_reanchored_raise_says_which_floor_moved_it(self) -> None:
         event = TradeEvent(
@@ -157,7 +159,9 @@ class RenderStopStateKinds(unittest.TestCase):
             level=15.0,
             previous_level=9.0,
         )
-        self.assertEqual(render(event), "TRAIL OLN SL - re-anchored stop raised 9.00 -> 15.00")
+        self.assertEqual(
+            render(event), "TRAIL OLN SL - re-anchored stop resting 15.00 (raised from 9.00)"
+        )
 
     def test_a_raise_with_no_named_cause_still_reads_as_a_raise(self) -> None:
         event = TradeEvent(
@@ -168,7 +172,7 @@ class RenderStopStateKinds(unittest.TestCase):
             level=15.0,
             previous_level=9.0,
         )
-        self.assertEqual(render(event), "TRAIL OLN SL - stop raised 9.00 -> 15.00")
+        self.assertEqual(render(event), "TRAIL OLN SL - stop resting 15.00 (raised from 9.00)")
 
     def test_a_stop_move_never_renders_an_exit_reason_as_a_fill_reason(self) -> None:
         # ExitReason is shared with the fill kinds, so without the stop-move
@@ -358,7 +362,9 @@ class RealMessagesFromIssue1621(unittest.TestCase):
             level=62.42304,
             previous_level=50.64,
         )
-        self.assertEqual(render(event), "TRAIL ASTS SL - trailed stop raised 50.64 -> 62.42")
+        self.assertEqual(
+            render(event), "TRAIL ASTS SL - trailed stop resting 62.42 (raised from 50.64)"
+        )
 
 
 if __name__ == "__main__":

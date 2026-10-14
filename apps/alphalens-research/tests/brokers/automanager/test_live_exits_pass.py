@@ -1127,11 +1127,79 @@ class TestStopRaisePagesTheOperator(_JournalCase):
         pages, _report, _uic = self._pages()
         raised = [msg for msg, _key in pages if "raised" in msg]
         self.assertEqual(len(raised), 1, f"exactly one raise page; got {pages}")
-        self.assertEqual(raised[0], "TRAIL KO SL - trailed stop raised 13.00 -> 14.50")
+        self.assertEqual(raised[0], "TRAIL KO SL - trailed stop resting 14.50 (raised from 13.00)")
 
     def test_the_page_is_counted_in_the_report(self) -> None:
         _pages, report, _uic = self._pages()
         self.assertEqual(report.alerts, 1)
+
+    def test_a_restart_re_pages_the_same_raise_and_the_text_is_still_true(self) -> None:
+        # Both suppressors are PROCESS-local: ``stop_raises_announced`` is a
+        # field on the per-daemon deps and the throttle's last-sent map is built
+        # per process. So a deploy or one `Restart=on-failure` bounce re-derives
+        # the held raise from the journal and pages it AGAIN. The decision was to
+        # word the page so that repeat is not a lie, rather than to persist the
+        # announce map: the page states where the stop RESTS, which is true
+        # whether it just moved or moved on Monday, and still carries the level
+        # it came from.
+        #
+        # A past-tense event sentence here read as "the stop just jumped 1.50",
+        # which is the #1621 point-7 defect class in the page part 3 adds to fix
+        # point 6.
+        broker = FakeBroker()
+        uic = broker.uic_of("KO")
+        broker.set_position("KO", 100, avg_price=15.0)
+        broker.add_resting_sell("KO", 100, self._PLAN_STOP, order_type="StopIfTraded")
+        self._seed_tranche_plan(
+            uic, tranches=(_tr(0, 99.0, 0.5),), reference_qty=100.0, stop_price=self._PLAN_STOP
+        )
+        sj._journal_trailed(uic, self._TRAILED, peak=14.9, last_price=14.8)
+        pages: list[tuple[str, str]] = []
+
+        def _a_fresh_daemon() -> cl.LoopDeps:
+            """What a restart leaves: an empty announce map and a new throttle."""
+            return _deps(
+                broker,
+                alerts=[],
+                live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 16.5}),
+                alert_throttled=lambda msg, reason: pages.append((msg, reason)) or True,
+            )
+
+        def _tick(deps: cl.LoopDeps) -> None:
+            cl._run_live_exits_pass(deps, cl.TickReport())
+
+        with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+            _tick(_a_fresh_daemon())
+            second = _a_fresh_daemon()  # the daemon restarted; nothing was persisted
+            _tick(second)
+
+            raised = [msg for msg, _key in pages if "resting" in msg]
+            self.assertEqual(len(raised), 2, f"the restart re-pages; got {pages}")
+            self.assertEqual(raised[0], raised[1], "the same fact must read the same way twice")
+            self.assertIn("resting 14.50", raised[1], "a state line, true on a restart echo")
+
+            # And the "from" level after a restart is the PLAN stop, not the
+            # level the previous process announced -- there is nowhere to read
+            # that from. Second phase: the SAME process sees a further raise to
+            # 15.50 and reads "from" off its own announce map, then the daemon
+            # restarts and re-derives. The echo says "resting 15.50 (raised from
+            # 13.00)", which the state wording keeps TRUE -- the stop does rest
+            # at 15.50, and over this position's life it did come from 13.00.
+            # The event wording would have claimed a 2.50 jump this instant.
+            sj._journal_trailed(uic, 15.5, peak=15.9, last_price=15.8)
+            _tick(second)
+            _tick(_a_fresh_daemon())
+
+        resting = [msg for msg, _key in pages if "resting" in msg]
+        self.assertEqual(
+            resting[2:],
+            [
+                "TRAIL KO SL - trailed stop resting 15.50 (raised from 14.50)",
+                "TRAIL KO SL - trailed stop resting 15.50 (raised from 13.00)",
+            ],
+            f"within a process it reads from the announced level, after a restart "
+            f"from the plan stop; got {resting}",
+        )
 
     def test_the_throttle_key_carries_the_uic_and_the_level(self) -> None:
         # The level is IN the key on purpose. Each distinct level is a distinct
@@ -1196,7 +1264,7 @@ class TestStopRaisePagesTheOperator(_JournalCase):
         # The second page reads from the level the FIRST one announced, not from
         # the plan stop: that level is the one resting at the broker, so
         # "13.00 -> 15.50" would overstate the move the operator just missed.
-        self.assertIn("14.50 -> 15.50", raised[1])
+        self.assertIn("resting 15.50 (raised from 14.50)", raised[1])
 
     def test_an_alert_sink_that_raises_does_not_stop_the_exits_pass(self) -> None:
         # Observability may never endanger the money path. The feed-scope write

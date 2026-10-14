@@ -167,11 +167,24 @@ def _stop_move_text(event: TradeEvent) -> str | None:
     # A raise names its cause when the call site knows it (which journaled floor
     # moved the stop) and BOTH levels, because the MOVE is the fact the operator
     # is missing: the new level alone does not say how much it locked in.
-    moved = f"{event.reason.value} raised" if event.reason is not None else "stop raised"
+    #
+    # Phrased as STATE ("resting at X, raised from Y"), never as an event
+    # ("raised Y -> X"), because this page is re-derived rather than remembered.
+    # Both of the raise's suppressors are process-local — the once-per-level
+    # announce map is a field on the per-daemon deps and the throttle's last-sent
+    # map is built per process — so a deploy or one `Restart=on-failure` bounce
+    # re-derives a held raise from the journal and sends this page again. A
+    # past-tense sentence then tells the operator that the stop just jumped when
+    # nothing moved; "resting 62.42 (raised from 50.64)" is true either way, and
+    # it still carries both levels, which is what says how much was locked in.
+    stop = event.reason.value if event.reason is not None else "stop"
     if event.previous_level is None or event.level is None:
-        # A half-known move is still worth saying; the arrow form needs both.
-        return _with_level(moved, event.level)
-    return f"{moved} {format_price(event.previous_level)} -> {format_price(event.level)}"
+        # A half-known move is still worth saying; the full form needs both.
+        return _with_level(f"{stop} resting", event.level)
+    return (
+        f"{stop} resting {format_price(event.level)} "
+        f"(raised from {format_price(event.previous_level)})"
+    )
 
 
 def _reason_text(event: TradeEvent) -> str | None:

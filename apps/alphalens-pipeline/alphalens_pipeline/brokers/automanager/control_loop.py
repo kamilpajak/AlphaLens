@@ -1514,10 +1514,16 @@ def _stop_raised_alert_key(raise_: StopRaise) -> str:
 
     Nothing is lost on the other side: the once-per-level ``announced`` guard
     already suppresses the steady state, so this key only ever sees a level that
-    just changed. What it still buys is a daemon RESTART, which empties
-    ``announced`` and re-derives the same raise from the journal — that repeat
-    carries the same level, so it dedups, while a genuinely higher level does
-    not.
+    just changed.
+
+    It does NOT dedup a daemon RESTART, and an earlier version of this docstring
+    claimed it did. A restart empties ``announced`` AND throws away the throttle:
+    ``_AlertThrottle`` is constructed once per process in ``build_default_deps``
+    and its last-sent map is plain in-memory state, so the first tick after a
+    bounce re-derives the held raise from the journal and finds no record of
+    having sent it. The page is worded as STATE for exactly that reason
+    (``trade_alerts._stop_move_text``) rather than persisted: it reads true
+    whether the stop just moved or moved on Monday.
 
     Six decimals, not :func:`trade_alerts.format_price`: the rendered text
     rounds to two, and two levels 0.004 apart are the same key under that
