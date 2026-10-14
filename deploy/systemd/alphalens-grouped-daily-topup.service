@@ -3,8 +3,11 @@
 # from the store's newest date forward to yesterday (capped --max-catchup-days), so a multi-day
 # outage auto-heals on the next run. Steady-state = ONE Polygon grouped-daily call/session
 # (adjusted=true), trivially within the free 5 req/min quota. The one-time backfill (--sessions 440)
-# is run by hand once; this unit only keeps it fresh. Runs at 01:30 UTC (after US close + EOD
-# finalization, BEFORE the 02:30 form4 job) so it never collides with the heavier backfills.
+# is run by hand once; this unit only keeps it fresh. Fires twice nightly, at 00:05 and
+# 03:00 America/New_York: Polygon's "today" is the US/EASTERN market day, so a call placed
+# before that boundary is refused with HTTP 403 NOT_AUTHORIZED ("Attempted to request
+# today's data before end of day") for the session that just closed. The timer unit carries
+# the measurement and the DST arithmetic behind both fires.
 [Unit]
 Description=AlphaLens grouped-daily history top-up (O'Neil RS)
 After=network-online.target

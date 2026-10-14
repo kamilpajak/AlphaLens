@@ -1,12 +1,45 @@
-# Trigger the grouped-daily history top-up nightly at 01:30 UTC (after US close + EOD
-# finalization, before the 02:30 form4 incremental). Persistent=true so a missed fire
-# (host asleep) runs on next boot; the self-sizing top-up then catches up any gap.
+# Trigger the grouped-daily history top-up twice nightly, anchored to
+# America/New_York so the fires track DST on their own.
+#
+# WHY NOT UTC: Polygon's "today" is the US/EASTERN market day, not a UTC day.
+# Measured 2026-10-14 against the live API — a request at 01:30:00 UTC on
+# 2026-10-14, which is 21:30 America/New_York of session 2026-10-13 and so the
+# SAME Eastern day, for the grouped-daily snapshot of 2026-10-13 answers
+#   HTTP 403 {"status":"NOT_AUTHORIZED",
+#             "message":"Attempted to request today's data before end of day"}
+# Under a UTC boundary 2026-10-13 would already have been yesterday at that
+# instant and the call would have been served, so the 403 is what pins the
+# boundary to Eastern. That is not an edge case: 22 of the 31 runs in the 30
+# days to 2026-10-14 ended on exactly that 403 — every trading session. The
+# store's newest snapshot was therefore always one session behind the asof
+# (three across a weekend), and the thematic `score` stage read a market_state
+# computed from the wrong session.
+#
+# 00:05 ET (04:05 UTC in EDT, 05:05 UTC in EST) is the first instant past that
+# boundary. In EDT it lands 25 min before the 04:30 UTC deciding thematic slot,
+# so the deciding brief can carry the session that just closed. STATED
+# LIMITATION: in EST the same fire is 05:05 UTC, i.e. AFTER that slot, so in
+# winter the deciding run still reads the previous session and the repair slot
+# is the first one to see the fresh snapshot.
+#
+# 03:00 ET (07:00 UTC in EDT, 08:00 UTC in EST) is the safety net: it precedes
+# the 08:30 UTC repair slot in BOTH regimes, and sits near the only hour
+# measured as actually served (12582 rows for session 2026-10-13 at 04:57 ET).
+# The earliest availability hour between 00:00 ET and 04:57 ET is unmeasured,
+# which is why the first fire alone is not trusted to land the session. The
+# second fire is nearly free: the self-sizing top-up returns an empty session
+# list once every session is on disk, so a no-op run makes zero Polygon calls.
+#
+# No RandomizedDelaySec — jitter would eat the 25-minute EDT margin before the
+# deciding slot. Persistent=true so a missed fire (host asleep) runs on next
+# boot; the self-sizing top-up then catches up any gap.
 [Unit]
 Description=Trigger AlphaLens grouped-daily history top-up (O'Neil RS)
 After=network-online.target
 
 [Timer]
-OnCalendar=*-*-* 01:30:00 UTC
+OnCalendar=*-*-* 00:05:00 America/New_York
+OnCalendar=*-*-* 03:00:00 America/New_York
 Persistent=true
 Unit=alphalens-grouped-daily-topup.service
 
