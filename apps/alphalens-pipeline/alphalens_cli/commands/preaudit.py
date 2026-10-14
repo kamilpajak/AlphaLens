@@ -26,7 +26,7 @@ import typer
 # that ``import alphalens_cli.commands.preaudit`` (which fires whenever the
 # user runs *any* ``alphalens ...`` command) doesn't pull the research tier
 # into the import graph. Keeps the pipeline → research dependency direction
-# clean at workspace level; see CLAUDE.md "Lazy CLI imports" + alphalens-
+# clean at workspace level; see apps/alphalens-pipeline/CLAUDE.md "Lazy CLI imports" + alphalens-
 # pipeline's README for the rationale.
 
 # CLI surface duplicate of ``alphalens_research.preaudit.runner.DEFAULT_SMOKE_TIMEOUT_S``.

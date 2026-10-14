@@ -1,7 +1,7 @@
 """Operator-triggered EDGAR fundamentals validation gate.
 
-Implements the doctrine in ``CLAUDE.md > Research methodology > Data-vendor
-PIT validation gate``: ≥5 sector-diverse anchors × 2-source triangulation
+Implements the doctrine in ``docs/research/methodology-gates.md``
+(data-vendor PIT validation gate): ≥5 sector-diverse anchors × 2-source triangulation
 × ≤±1% delta (≤±5% on TTM fields) before SimFin can be deleted as the
 prior fundamentals vendor.
 
@@ -381,7 +381,7 @@ def format_memo(asof: dt.date, results: dict[str, list[FieldDiff]]) -> str:
     lines.append("")
     lines.append(
         "5-anchor × 2-source (EDGAR vs yfinance) PIT validation per "
-        "`CLAUDE.md > Research methodology > Data-vendor PIT validation gate`. "
+        "`docs/research/methodology-gates.md` (data-vendor PIT validation gate). "
         "Tolerance bands: ≤±1% instant balance-sheet fields, ≤±5% TTM fields "
         f"(fiscal-calendar drift). Price honors ±${_DOLLAR_FLOOR:.2f} dollar floor. "
         "`tax_rate` exempt (EDGAR clamps [0, 0.35]); `fcf_margin_5y_median` "

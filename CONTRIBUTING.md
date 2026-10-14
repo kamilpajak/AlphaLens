@@ -104,5 +104,5 @@ By making a contribution to this project, I certify that:
   or `just test` for the full Python + Django + web sweep, and `just lint` for linting.
 - **Source language is English** (comments, docstrings, identifiers) — enforced by
   `apps/alphalens-research/tests/test_no_polish_chars.py`.
-- Architecture, layer statuses, and conventions live in [`CLAUDE.md`](CLAUDE.md); read
+- Conventions, workflow and doctrine live in [`CLAUDE.md`](CLAUDE.md), which also indexes the per-area briefs (`apps/*/CLAUDE.md`); a package's lifecycle status is its own `__status__` and the layer map is in `apps/alphalens-research/README.md`. Read
   it before touching shared surfaces.

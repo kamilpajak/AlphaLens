@@ -85,7 +85,7 @@ The SvelteKit SPA is hosted on **Cloudflare Pages**; the Django API runs on a Li
 ## Docs
 
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to contribute, DCO sign-off, contribution licensing
-- [`CLAUDE.md`](CLAUDE.md) — architecture and contributor guide (layer statuses, conventions, doctrine)
+- [`CLAUDE.md`](CLAUDE.md) — the working spec: conventions, workflow, doctrine, and an index of the per-area briefs (`apps/*/CLAUDE.md`). A package's lifecycle status is its own `__status__`; the layer map is in [`apps/alphalens-research/README.md`](apps/alphalens-research/README.md)
 - [`docs/adr/`](docs/adr/) — architectural decision records
 - [`docs/research/paradigm_failures_postmortem.md`](docs/research/paradigm_failures_postmortem.md) — catalogue of closed factor paradigms with kill rationale
 
