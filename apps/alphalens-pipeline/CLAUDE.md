@@ -44,6 +44,40 @@ vendor stay in the root `CLAUDE.md`.
   `alphavantage_client.py:7`, `polygon_client.py:3`, `openrouter_client.py:52-57`). Read those
   before trusting the table; correct both when a plan changes.
 
+## broker CLI surface
+
+The arming door, the failure-code registry and the JSON envelope are all in
+`alphalens_cli/commands/broker.py`, so they are edited HERE even though the contract they serve
+lives in `apps/alphalens-broker-contract/`. Read that package's
+[`README.md`](../alphalens-broker-contract/README.md) `## The door` and `## The failure contract`
+before changing any of them; it is authoritative and the gate order, the pick-key state table and
+the TOCTOU residual are stated there, not here.
+
+- **One JSON contract.** Every JSON-emitting command takes `--format human|json` (never a bare
+  `--json`; the alias survives only on `reconcile` / `reconcile-fills`, which shipped before the
+  option), builds its payload with `_envelope(schema, env, ...)` so `schema` and `env` lead, and
+  prints it through `_emit_json`: ONE strict single-line JSON value on stdout, `allow_nan=False`
+  (NaN/inf and circular data are refused, not emitted), `default=str` for other unknown types.
+  Stdout is one value or empty. `arm` answers `alphalens.broker.arm/v2`.
+- A new JSON-emitting command must be added to `_JSON_COMMANDS` in
+  `apps/alphalens-research/tests/brokers/automanager/test_broker_json_contract_cli.py` with its
+  required body keys — the table test reads the commands off the Typer app, so forgetting is a CI
+  failure, not silent coverage loss. `auth`, `marketdata-auth`, `price-reader` and `manage` take
+  no `--format`.
+- `--help` renders without Rich frames whenever stdout is not a TTY: one `_help_markup_mode()`
+  assignment on the ROOT app in `alphalens_cli/main.py` covers every group.
+- **Branch on `code`, never on `retryable`.** `retryable` means "safe to re-run WITHOUT reconciling
+  first", not "the cause was transient" — `write_outcome_unknown` has a transient cause and a
+  forbidden retry, because the order may already rest at the broker.
+- **The code registry is SPLIT and stays split:** `broker_contract/failure.py` owns the nine
+  contract codes, `commands/broker.py:158` (`_CLI_FAILURE_CODES`) owns the CLI concepts. Putting a
+  CLI concept in the shared package is the #1122 mistake again. A `_fail_with` call with an
+  unregistered code is a CI failure (AST gate) and a logged warning at runtime.
+- **Only `broker manage` places or amends orders.** An AST gate over `alphalens_cli` bars every
+  other module from the broker's place/amend surface (#1466) and allows only cancelling. The one
+  exception is `apps/alphalens-research/scripts/first_fill/`, which places SIM orders through the
+  wrapper.
+
 ## Calendars
 
 - `alphalens_pipeline/market/calendar.py` is exchange-parametrized: every helper takes

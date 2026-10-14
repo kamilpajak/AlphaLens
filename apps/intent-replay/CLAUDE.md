@@ -10,6 +10,20 @@ it is NOT re-injected after `/compact`.
   got three values wrong over two days: the FX rate, `costs.exit_edge_min_bps`, and the calendar
   MIC. On a Mac there is no LIVE broker journal, so pass `--entry-trails <entry_trails.jsonl>` —
   `entry_trail_bps` is the one value the trades record does not carry.
+- **Derived from the document, imported from the daemon, read from the record — never written as a
+  literal.** This is the rule the script exists to enforce, so a hand-edited config breaks it:
+  the calendar from `instrument.mic`; the day-1 anchor from `meta.source` (a manual pick's
+  `trade_date` IS day 1, a brief's is the session before); the fee card from `costs.fee_card_for`
+  by venue; the cost and FX constants by IMPORTING `costs` / `execution`; the rate, its as-of, its
+  source and the instrument currency off the record; the direction token from the engine's own
+  `Fx.pair_unit()`. The bar window obeys it too: grid and ticker from `instrument.{mic, ticker}`,
+  the required end from `config.entry_deadline` plus one session of that venue's calendar, the
+  anchor from the record's `exits[-1].venue_time`, the action-window padding from
+  `corporate_actions.ACTION_WINDOW_{PRE,POST}_CALENDAR_DAYS`, and the series' granularity
+  MEASURED from the series (its modal `t` spacing), never stated.
+- **The fields the door computes come from `supplied_derived_paths`**, never from a list written
+  out somewhere, so `authored_document` cannot drift from the `derived_field_supplied` refusal it
+  exists to avoid.
 - **The eight run-configuration keys** (`entry_deadline`, `walk_start`, `entry_trail_bps`,
   `ceiling_price`, `time_stop_t`, `oco`, `fx`, `costs`) and every refusal code:
   [`README.md`](README.md), `## Run configuration` (line 13) and `## Refusal codes` (line 549).

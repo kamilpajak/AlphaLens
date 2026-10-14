@@ -48,6 +48,7 @@ RELOCATION_TARGETS = (
     REPO_ROOT / "apps/intent-replay/CLAUDE.md",
     REPO_ROOT / "apps/web/CLAUDE.md",
     REPO_ROOT / "docs/research/methodology-gates.md",
+    REPO_ROOT / "docs/research/CLAUDE.md",
     REPO_ROOT / "docs/workflow/issues-and-board.md",
     REPO_ROOT / "docs/runtime-data-layout.md",
 )
