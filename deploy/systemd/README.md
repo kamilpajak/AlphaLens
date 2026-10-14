@@ -15,7 +15,7 @@ hosts where launchd is unavailable.
 | `alphalens-feedback-shadow-returns.{service,timer}` | daily 06:30 UTC | host-venv `alphalens feedback backfill-shadow-returns` — runs the broker-free population monitor over its own ~42-session window (price-path replay over Polygon minute bars) and the benchmark-excess + size-field enrichment tail. `Persistent=true` catch-up; idempotent re-stamp. Needs `POLYGON_API_KEY`. NOT trading-day-gated (the per-date maturity guard handles non-trading dates). The unit + command name are retained for the existing timer; the per-decision ladder replay (Track A click ledger) was removed (#465), so the command now drives only the population monitor — a rename is a deferred follow-up. Replay mechanics: `apps/alphalens-pipeline/alphalens_pipeline/feedback/README.md`. |
 | `alphalens-form4-backfill.service` | long-running | SEC EDGAR Form-4 bulk backfill (resume-safe) — the one-time historical seed (DONE 2026-05-08) |
 | `alphalens-form4-incremental.{service,timer}` | daily 02:30 UTC | Form-4 daily incremental ingest — keeps `~/.alphalens/form4_parquet/` fresh after the seed froze. Self-sizing lookback (min 3 days, auto-extends to the store's newest filing, capped at `--max-catchup-days`) via the SEC daily form index; overlap dedups on `accession_number`. Needs `SEC_EDGAR_USER_AGENT`. **First run auto-catches-up the seed→today gap — no manual step** (see section below). |
-| `alphalens-grouped-daily-topup.{service,timer}` | daily 01:30 UTC | Appends the latest missing session(s) to the split-adjusted (`adjusted=true`) whole-market grouped-daily store that feeds the O'Neil **R** (relative-strength) term at the thematic `score` stage. Self-sizing catch-up; the free-tier entitlement cliff (`NOT_AUTHORIZED` past ~21–24 mo) stops cleanly. Distinct from the population-monitor's `adjusted=false` cache. Needs `POLYGON_API_KEY`. |
+| `alphalens-grouped-daily-topup.{service,timer}` | 2× daily at 00:05 and 03:00 America/New_York (04:05 + 07:00 UTC in EDT, 05:05 + 08:00 UTC in EST) | Appends the latest missing session(s) to the split-adjusted (`adjusted=true`) whole-market grouped-daily store that feeds the O'Neil **R** (relative-strength) term at the thematic `score` stage. ET-anchored, not UTC: Polygon's "today" is the US/Eastern market day, so the old single 01:30 UTC fire asked inside it and was refused `403 NOT_AUTHORIZED` ("Attempted to request today's data before end of day") on 22 of 31 runs in the 30 days to 2026-10-14 — every trading session — leaving the store one session behind the asof. Self-sizing catch-up; the free-tier entitlement cliff (`NOT_AUTHORIZED` past ~21–24 mo) stops cleanly. Distinct from the population-monitor's `adjusted=false` cache. Needs `POLYGON_API_KEY`. |
 | `alphalens-broker-manager.service` | long-running daemon (poll 45 s) | SIM Saxo auto-manager (ADR 0014) — drains armed picks → places brackets + standalone disaster stops → reconciles live broker state → manages ladder exits / protective stops to terminal. `Type=simple` + `Restart=on-failure`. **Trades SIM only** — this is the SIM instance of the two-instance model (ADR 0016); the real-money twin is `alphalens-broker-manager-live.service` (§9, ADR 0017). The unit itself ships inert and at defaults — what the soak runs comes from the tracked drop-in directory `alphalens-broker-manager.service.d/` (#1136), including the `ALLOW_ORDERS=1` arm. See the "Saxo auto-manager (SIM)" runbook below. |
 | `alphalens-broker-manager-live.service` | long-running daemon (poll 45 s) | LIVE twin of the auto-manager — places **REAL-MONEY** orders on Saxo LIVE under the ADR 0017 standing account-bound grant; `ALPHALENS_BROKER_ENVIRONMENT=live` pinned in-unit; the unit itself ships INERT (`ALLOW_ORDERS=0`) and conservative — what production runs comes from the tracked drop-in directory `alphalens-broker-manager-live.service.d/`, read both. Runbook: §9. |
 | `alphalens-saxo-refresh.{service,timer}` | ~every 20 min | Saxo OAuth idle keep-alive (`broker auth --refresh`) — refreshes the SIM token inside its 40 min window so the broker-manager daemon never loses auth. **Re-added 2026-07 under ADR 0014** (the identically-named paper-chain unit was decommissioned 2026-06-03 — see the note below). Keeps only the SIM chain alive — the LIVE daemon's chain is kept by `alphalens-saxo-marketdata-refresh.timer` (§9.0). |
@@ -608,10 +608,49 @@ scorers. The incremental adds tens of KB/day.
 Appends the latest missing session(s) to the persistent split-adjusted
 (`adjusted=true`) whole-market grouped-daily store that feeds the O'Neil **R**
 (relative-strength) term — read disk-only at the thematic `score` stage via
-`rs_history.rs_percentile`. Daily oneshot at 01:30 UTC (`Persistent=true` so a
-missed day self-catches-up), one whole-market Polygon grouped-daily call per
-missing session, self-sizing from the newest snapshot on disk (capped
-`--max-catchup-days` 400). The free-tier entitlement cliff (`NOT_AUTHORIZED`
+`rs_history.rs_percentile`. Oneshot fired twice nightly, at 00:05 and 03:00
+America/New_York (`Persistent=true` so a missed day self-catches-up), one
+whole-market Polygon grouped-daily call per missing session, self-sizing from
+the newest snapshot on disk (capped `--max-catchup-days` 400).
+
+**Why the fires are anchored to Eastern time, not UTC.** Polygon's "today" is
+the US/Eastern market day. A call placed before that boundary is refused for the
+session that just closed: measured 2026-10-14, a request at 01:30 UTC (= 21:30
+ET of the same Eastern day) for session 2026-10-13 answered `403
+{"status":"NOT_AUTHORIZED","message":"Attempted to request today's data before
+end of day"}`. The unit used to fire once at that hour, so 22 of its 31 runs in
+the preceding 30 days — every trading session — ended on that 403, and the
+store's newest snapshot was always one session behind the asof (three across a
+weekend). The first fire, 00:05 ET, is the first instant past the boundary, and it clears
+the deciding thematic run in both regimes. The margin is measured against the
+instant the store is actually READ — the `score` stage, not the 04:30 UTC slot
+start. Over the 16 deciding-slot runs since the 2026-09-29 schedule change the
+read began between 05:10:09 and 07:00:12 UTC (`journalctl --user -u
+alphalens-thematic-build --utc | grep "Scoring"`), so the fire clears the
+earliest observed read by 65 min in EDT (04:05 UTC) and by 5 min in EST (05:05
+UTC). The EST margin is thin: on a day the deciding run reaches `score` faster
+than any run yet observed, that brief keeps the previous session — the same
+outcome as before this change, not a worse one.
+
+The 03:00 ET fire is the safety net for the 08:30 UTC repair slot, which it
+precedes year-round (07:00 UTC in EDT, 08:00 UTC in EST). It does NOT back up
+the first fire: both instants are at or past the latest observed deciding read.
+It sits near the only hour measured as actually served (12582 rows for
+2026-10-13 at 04:57 ET); the earliest availability hour between 00:00 ET and
+04:57 ET is still unmeasured, which is why a second attempt exists. It costs
+nothing on a night the first fire succeeded — the self-sizing top-up finds no
+missing session and makes zero Polygon calls.
+
+**What a second fire cannot repair.** A MISSING session, yes; a BAD one, no —
+nothing re-asks for a date already on disk. That is why the script refuses a
+payload thinner than `MIN_PLAUSIBLE_ROWS` (5000 rows, against a measured real
+minimum of 10579 over 523 stored sessions) and leaves it as a gap. Firing five
+minutes past Polygon's boundary is what made a partial end-of-day aggregate
+reachable at all; a partial snapshot would read as the ENTIRE market for that
+session, so every absent ticker would leave the candidate funnel as
+`not_listed` with no yfinance fetch.
+
+The free-tier entitlement cliff (`NOT_AUTHORIZED`
 past the ~21–24 mo window) stops cleanly. **Distinct from** the
 population-monitor's `adjusted=false` grouped cache — the two must NOT be merged
 (RS needs split-adjusted closes; the monitor needs raw closes for
@@ -649,9 +688,9 @@ whole-market snapshot per session). Monitoring: `AlphalensJobStale`@48h +
 ## alphalens-thematic-build.service / .timer
 
 End-to-end thematic pipeline (news → brief → JSON refresh) running inside the
-`alphalens-pipeline` docker image. Fires daily at 06:30 UTC via the companion
-timer; spaced from the AV backfill (00:05 UTC) so the two don't contend for
-the Alpha Vantage key.
+`alphalens-pipeline` docker image. Fires at 04:30 / 08:30 / 12:30 UTC via the
+companion timer — three morning slots since #1606, of which 04:30 is the
+deciding run and the later two repair a date whose brief is not yet published.
 
 Full operator recipe (image build, env file, Cloudflare wiring) lives at
 [`deploy/docker/README.md`](../docker/README.md). The systemd unit itself is

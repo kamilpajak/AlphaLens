@@ -14,9 +14,10 @@ Two modes over one store (``~/.alphalens/grouped_daily_history/``, adjusted=True
     outage auto-heals on the next run instead of leaving a permanent interior gap that nulls
     RS for ~252 asofs. Steady-state = ONE Polygon call/session.
 
-Idempotent/resumable: any date already on disk is skipped (never re-fetched). A fetch error
-or empty payload on a confirmed trading day is a GAP — NOT written (so the date retries next
-run), never an empty parquet (which would freeze a phantom empty market). Routes every fetch
+Idempotent/resumable: any date already on disk is skipped (never re-fetched). A fetch error,
+an empty payload, or a payload thinner than ``MIN_PLAUSIBLE_ROWS`` on a confirmed trading day
+is a GAP — NOT written (so the date retries next run), never an empty or truncated parquet
+(either would freeze a phantom market that no later run re-asks for). Routes every fetch
 through ``rs_history`` (the canonical PolygonClient) — no polygon.io URL literal here.
 """
 
@@ -37,6 +38,26 @@ logger = logging.getLogger("backfill_grouped_daily_history")
 
 _DEFAULT_SESSIONS = 440  # ≈21 months — the full reachable free-tier window
 _DEFAULT_MAX_CATCHUP_DAYS = 400
+
+# A whole-market snapshot thinner than this is a TRUNCATED payload, not a thin
+# market: measured 2026-10-14 over all 523 snapshots in the production store,
+# the smallest real session carries 10579 rows (2024-09-11), p01 10613, median
+# 11484. 5000 is under half the real minimum, so it cannot reject a healthy
+# session, and it rejects the shape that matters — a partial end-of-day
+# aggregate. The case to worry about is a session the market really serves thin,
+# because a rejected session gaps until a later run fetches it and nothing pages
+# on a gap. Measured on the five half-days in the store (13:00 ET close):
+# 2024-11-29 10662, 2024-12-24 10695, 2025-07-03 11105, 2025-11-28 11604,
+# 2025-12-24 11626 — a short session trades less, it does not list less, so the
+# floor stays unreachable for one that was served at all. Why the floor exists at all: the top-up now fires 5 minutes past
+# Polygon's Eastern day boundary, where a partial aggregate is reachable. Before
+# that it was not — a call placed earlier answered 403 and nothing was written.
+# A partial write is worse than a gap, because `skipped_existing` means no later
+# fire re-asks for that date, and `rs_history.was_listed_on_or_before` reads a
+# present snapshot as the ENTIRE market for the session, so every absent ticker
+# becomes NOT_LISTED and leaves the candidate funnel with no yfinance fetch
+# (`thematic/verification/mcap_filter.classify_by_mcap`).
+MIN_PLAUSIBLE_ROWS = 5000
 
 
 @dataclass
@@ -103,11 +124,16 @@ def run_backfill(
     *,
     grouped_fetch: rs_history.GroupedFetch,
     stop_on_entitlement: bool,
+    min_rows: int = MIN_PLAUSIBLE_ROWS,
 ) -> BackfillResult:
     """Fetch each session not already on disk; skip existing; gaps don't write.
 
     ``sessions_to_fetch`` is consumed in the given order. For the one-time backfill pass it
     is NEWEST→OLDEST so ``stop_on_entitlement`` halts cleanly at the free-tier history cliff.
+
+    ``min_rows`` is the truncated-snapshot floor (see :data:`MIN_PLAUSIBLE_ROWS`); a payload
+    below it is left as a gap for the next fire. It defaults ON — production wires no floor
+    explicitly, so the default is what protects the store.
     """
     result = BackfillResult()
     for date in sessions_to_fetch:
@@ -126,6 +152,17 @@ def run_backfill(
             continue
         if not payload:  # empty session payload on a confirmed trading day == gap, do NOT write
             logger.info("empty payload for %s; leaving as a gap to retry.", date)
+            result.gaps += 1
+            continue
+        # A truncated snapshot is a GAP, never a write (see MIN_PLAUSIBLE_ROWS).
+        if len(payload) < min_rows:
+            logger.warning(
+                "payload for %s carries %d rows, below the %d-row floor — treating as a "
+                "gap to retry rather than freezing a truncated market.",
+                date,
+                len(payload),
+                min_rows,
+            )
             result.gaps += 1
             continue
         rs_history.write_grouped_day_atomic(root, date, payload)

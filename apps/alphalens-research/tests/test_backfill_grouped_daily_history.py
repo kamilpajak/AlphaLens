@@ -50,6 +50,12 @@ class TestSessionEnumeration(unittest.TestCase):
 
 
 class TestRunBackfill(unittest.TestCase):
+    """The fetch loop's skip/gap/cliff semantics.
+
+    These pass ``min_rows=0`` because their one-ticker payloads are about the
+    LOOP, not about snapshot size; the size floor has its own class below.
+    """
+
     def test_fetch_writes_skip_existing(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -62,7 +68,7 @@ class TestRunBackfill(unittest.TestCase):
                 return {"AAA": _bar(2.0)}
 
             res = backfill.run_backfill(
-                root, [d1, d2], grouped_fetch=fetch, stop_on_entitlement=False
+                root, [d1, d2], grouped_fetch=fetch, stop_on_entitlement=False, min_rows=0
             )
             self.assertEqual(res.skipped_existing, 1)  # d1 skipped, not re-fetched
             self.assertEqual(res.fetched, 1)  # d2 fetched
@@ -90,7 +96,7 @@ class TestRunBackfill(unittest.TestCase):
                 return {"AAA": _bar(1.0)}
 
             res = backfill.run_backfill(
-                root, [d1, d2], grouped_fetch=fetch, stop_on_entitlement=False
+                root, [d1, d2], grouped_fetch=fetch, stop_on_entitlement=False, min_rows=0
             )
             self.assertEqual(res.gaps, 1)  # d1 gap
             self.assertEqual(res.fetched, 1)  # d2 still fetched (did not abort)
@@ -107,7 +113,7 @@ class TestRunBackfill(unittest.TestCase):
 
             # newest→oldest order; the old date trips the cliff and stops the loop.
             res = backfill.run_backfill(
-                root, [newest, oldest], grouped_fetch=fetch, stop_on_entitlement=True
+                root, [newest, oldest], grouped_fetch=fetch, stop_on_entitlement=True, min_rows=0
             )
             self.assertTrue(res.stopped_on_entitlement)
             self.assertEqual(res.fetched, 1)  # only the recent date
@@ -119,3 +125,67 @@ class TestRunBackfill(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestThinPayloadFloor(unittest.TestCase):
+    """A truncated whole-market snapshot must be refused, not frozen on disk.
+
+    Until the top-up fired past Polygon's Eastern day boundary this state was
+    UNREACHABLE: a call placed before the boundary answered 403, so the only
+    payloads that ever arrived were complete ones. Moving the fire to 00:05 ET
+    makes a partial end-of-day aggregate reachable, and a partial one is worse
+    than a gap, because nothing re-asks for a date already on disk
+    (``skipped_existing``) and ``rs_history.was_listed_on_or_before`` treats a
+    present snapshot as "the ENTIRE market for that session" — so every absent
+    ticker reads as ``NOT_LISTED`` and is dropped from the candidate funnel
+    with no yfinance fetch (``verification/mcap_filter.classify_by_mcap``).
+    """
+
+    def test_thin_payload_is_a_gap_not_written(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            d = dt.date(2026, 6, 12)
+            thin = {f"T{i:04d}": _bar(1.0) for i in range(10)}
+            res = backfill.run_backfill(
+                root, [d], grouped_fetch=lambda x: thin, stop_on_entitlement=False
+            )
+            self.assertEqual(res.gaps, 1)
+            self.assertEqual(res.fetched, 0)
+            # Not written, so the next fire re-asks for the same session.
+            self.assertIsNone(rs_history.read_grouped_day(root, d))
+
+    def test_the_floor_is_ON_by_default(self):
+        # The guard must not be a parameter a caller has to remember: main()
+        # wires no floor explicitly, so the default is what protects production.
+        import inspect
+
+        default = inspect.signature(backfill.run_backfill).parameters["min_rows"].default
+        self.assertEqual(default, backfill.MIN_PLAUSIBLE_ROWS)
+        self.assertGreater(backfill.MIN_PLAUSIBLE_ROWS, 0)
+
+    def test_the_floor_sits_below_every_session_ever_stored(self):
+        # Measured 2026-10-14 over all 523 snapshots in the production store
+        # (~/.alphalens/grouped_daily_history, pyarrow num_rows): min 10579
+        # (2024-09-11), p01 10613, median 11484, max 12624. A floor at or above
+        # the real minimum would reject healthy sessions, which is the failure
+        # mode that teaches an operator to switch the guard off.
+        #
+        # The half-days are the discriminating case, because a floor set from
+        # full sessions alone could reject them: 2024-11-29 10662, 2024-12-24
+        # 10695, 2025-07-03 11105, 2025-11-28 11604, 2025-12-24 11626. A short
+        # session trades less, it does not list less.
+        self.assertLess(backfill.MIN_PLAUSIBLE_ROWS, 10579)
+        self.assertLess(backfill.MIN_PLAUSIBLE_ROWS, 10662)  # thinnest half-day
+
+    def test_a_full_payload_still_writes(self):
+        # Positive control: the floor must not be satisfiable only by rejecting.
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            d = dt.date(2026, 6, 12)
+            full = {f"T{i:05d}": _bar(1.0) for i in range(backfill.MIN_PLAUSIBLE_ROWS)}
+            res = backfill.run_backfill(
+                root, [d], grouped_fetch=lambda x: full, stop_on_entitlement=False
+            )
+            self.assertEqual(res.fetched, 1)
+            self.assertEqual(res.gaps, 0)
+            self.assertIsNotNone(rs_history.read_grouped_day(root, d))

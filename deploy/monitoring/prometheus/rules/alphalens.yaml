@@ -373,9 +373,11 @@ groups:
           summary: "form4-incremental success metric missing"
           description: "No success metric for form4-incremental. The job has not run since metrics were enabled (e.g. a freshly installed unit before its first run), or the textfile collector / node_exporter scrape is broken. It does NOT fire after a failed run: the emitter carries the previous success line forward, so the staleness clock survives a failure and AlphalensJobFailed is the page for one. Clears after the first successful run."
 
-      # grouped-daily-topup runs daily at 01:30 UTC (split-adjusted grouped-daily
-      # history top-up that backs the O'Neil RS term). 172800s = 48h = 2× the daily
-      # cadence, matching the other nightly backfills. The self-sizing top-up makes a
+      # grouped-daily-topup fires twice nightly, at 00:05 and 03:00 America/New_York
+      # (split-adjusted grouped-daily history top-up that backs the O'Neil RS term;
+      # ET-anchored because Polygon's "today" is the US/Eastern market day). 172800s
+      # = 48h, still 2× the daily cadence at minimum — two fires a night refresh
+      # last_success more often, not less. The self-sizing top-up makes a
       # one-night miss self-heal on the next run, and the job exits 0 even on a
       # transient fetch night, so last_success refreshes nightly — staleness here
       # cleanly catches "the RS history top-up stopped running".

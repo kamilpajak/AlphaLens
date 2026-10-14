@@ -108,6 +108,11 @@ SAXO_MARKETDATA_REFRESH_TIMER = SYSTEMD_DIR / "alphalens-saxo-marketdata-refresh
 # build unit, same emit-hook contract, no timer file.
 SHADOW_MAP_SERVICE = SYSTEMD_DIR / "alphalens-thematic-shadow-map.service"
 
+# Split-adjusted grouped-daily history top-up (O'Neil RS term). Its schedule is
+# pinned by TestGroupedDailyTopupUnit at the bottom of this file.
+GROUPED_TOPUP_SERVICE = SYSTEMD_DIR / "alphalens-grouped-daily-topup.service"
+GROUPED_TOPUP_TIMER = SYSTEMD_DIR / "alphalens-grouped-daily-topup.timer"
+
 ACTIVE_SERVICES = (
     EDGAR_SERVICE,
     LIT_WEEKLY_SERVICE,
@@ -3169,3 +3174,202 @@ class TestPublicationRunsBeforeTheOptionalEnrichment(unittest.TestCase):
             RUN_ENRICH_SCRIPT.stat().st_mode & stat.S_IXUSR,
             "the unit invokes it through bash, but keep the bit set like its sibling",
         )
+
+
+# --- grouped-daily top-up fires (Polygon's Eastern day boundary) -----------
+# Polygon's "today" is the US/EASTERN market day, not a UTC day. Measured
+# 2026-10-14 against the live API: asked at 01:30 UTC on 2026-10-14 — which is
+# 21:30 America/New_York of session 2026-10-13, the SAME Eastern day — for the
+# grouped-daily snapshot of 2026-10-13, it answers
+#   HTTP 403 {"status":"NOT_AUTHORIZED",
+#             "message":"Attempted to request today's data before end of day"}
+# Under a UTC day boundary 2026-10-13 would already have been yesterday at that
+# instant and the call would have been served, so the 403 is what pins the
+# boundary to Eastern. 22 of the 31 runs in the preceding 30 days ended on that
+# same 403 — i.e. every trading session, every night.
+#
+# The fires are therefore expressed in America/New_York so they track DST on
+# their own. Timezone-suffixed OnCalendar is supported in production:
+# `systemd-analyze calendar "*-*-* 00:05:00 America/New_York"` was run on the
+# VPS (systemd 255) and resolved to 04:05 UTC.
+#
+# First fire: the first instant past that boundary.
+GROUPED_TOPUP_FIRE_ET_FIRST = dt.time(0, 5)
+# Safety net: 03:00 ET sits near the only hour measured as actually served
+# (12582 rows for session 2026-10-13 at 04:57 ET on 2026-10-14). The earliest
+# availability hour between 00:00 ET and 04:57 ET is UNMEASURED, which is why
+# the first fire alone is not trusted to land the session.
+GROUPED_TOPUP_FIRE_ET_SAFETY_NET = dt.time(3, 0)
+# EDT is UTC-4, EST is UTC-5. An ET-anchored fire moves one hour in UTC twice a
+# year, so any assertion against a UTC-anchored consumer slot has to hold under
+# BOTH — that is the whole point of the suffix.
+ET_UTC_OFFSET_HOURS_EDT = 4
+ET_UTC_OFFSET_HOURS_EST = 5
+
+# The instant that actually matters is NOT the thematic slot's start: the store
+# is read at the `score` stage, which runs after ingest + extract + map-themes.
+# Measured on the VPS over the 16 deciding-slot runs since the 2026-09-29
+# schedule change (#1606) — `journalctl --user -u alphalens-thematic-build
+# --utc | grep "Scoring N candidates"`, hours 04-08 — the read began between
+# 05:10:09 and 07:00:12 UTC. Asserting against the slot START instead would
+# understate every margin by 40-150 min and would have called the EST fire a
+# guaranteed miss when it in fact precedes all 16 observed reads.
+DECIDING_SCORE_READ_EARLIEST_UTC = dt.time(5, 10)
+
+
+def _oncalendar_et_regex(moment: dt.time) -> re.Pattern[str]:
+    """Directive-line regex for one ``America/New_York``-anchored daily fire.
+
+    Anchored with ``^``/``$`` under ``re.MULTILINE`` so a comment narrating the
+    schedule cannot satisfy it — only a real ``OnCalendar=`` directive can.
+    """
+    return re.compile(
+        rf"^OnCalendar=\*-\*-\* {moment:%H:%M:%S} America/New_York\s*$",
+        re.MULTILINE,
+    )
+
+
+def _utc_time_of_et_fire(moment: dt.time, offset_hours: int) -> dt.time:
+    """A wall-clock ET fire time rendered in UTC under a fixed ET offset."""
+    return (
+        dt.datetime.combine(dt.date(2026, 1, 1), moment) + dt.timedelta(hours=offset_hours)
+    ).time()
+
+
+class TestGroupedDailyTopupUnit(unittest.TestCase):
+    """The RS-history top-up must ask Polygon AFTER its Eastern day boundary.
+
+    Before this change the unit fired once at 01:30 UTC, which is 21:30 ET of
+    the session that had just closed — inside Polygon's own "today", so the
+    just-closed session was refused with 403 on every trading night. The store's
+    newest snapshot was therefore always ``asof - 1`` (``asof - 3`` across a
+    weekend), and the thematic ``score`` stage read a market_state computed from
+    the wrong session: the production brief for 2026-10-12 carries
+    ``dist200=0.076967`` and ``atr_pct_q=0.099206``, bit-identical to a recompute
+    at ``asof=2026-10-09``.
+    """
+
+    def test_timer_fires_twice_just_past_polygons_eastern_day_boundary(self) -> None:
+        text = GROUPED_TOPUP_TIMER.read_text()
+        self.assertRegex(text, _oncalendar_et_regex(GROUPED_TOPUP_FIRE_ET_FIRST))
+        self.assertRegex(text, _oncalendar_et_regex(GROUPED_TOPUP_FIRE_ET_SAFETY_NET))
+        # EXACTLY two. systemd UNIONS repeated OnCalendar= lines, so a patch
+        # that ADDS the two ET fires and leaves the old 01:30 UTC line in place
+        # still fires at 01:30 every night while both assertions above pass.
+        self.assertEqual(
+            len(_ONCALENDAR_LINE_RE.findall(text)),
+            2,
+            "the timer must carry exactly the two ET fires — systemd unions "
+            "OnCalendar= lines, so a leftover third line is a third fire",
+        )
+
+    def test_no_fire_is_anchored_to_utc(self) -> None:
+        # The DST-tracking intent, stated as a test rather than a comment. A
+        # later "simplify back to UTC" rewrite as 04:05 UTC looks identical
+        # today and is an hour early from the first Sunday in November, which
+        # puts the fire back inside Polygon's Eastern "today".
+        self.assertNotRegex(
+            GROUPED_TOPUP_TIMER.read_text(),
+            re.compile(r"^OnCalendar=.*\bUTC\s*$", re.MULTILINE),
+            "Polygon's day boundary is the US/Eastern market day, so the fires "
+            "must stay anchored to America/New_York, not to UTC",
+        )
+
+    def test_timer_is_wall_clock_anchored_and_carries_no_jitter(self) -> None:
+        text = GROUPED_TOPUP_TIMER.read_text()
+        _assert_wall_clock_anchored(self, text)
+        # No RandomizedDelaySec. The binding margin is in EST, where the first
+        # fire lands 05:05 UTC and the earliest measured deciding `score` read
+        # is 05:10 UTC — five minutes. A 5-min jitter (the value the consumer
+        # timer carries) would span exactly that, and a single grouped-daily
+        # call needs no spreading: this unit makes one request per missing
+        # session, not a burst.
+        self.assertEqual(_timer_randomized_delay(text), dt.timedelta(0))
+
+    def test_timer_carries_install_section(self) -> None:
+        text = GROUPED_TOPUP_TIMER.read_text()
+        self.assertRegex(text, re.compile(r"^\[Install\]\s*$", re.MULTILINE))
+        self.assertRegex(text, re.compile(r"^WantedBy=timers\.target\s*$", re.MULTILINE))
+
+    def test_the_first_fire_precedes_the_measured_deciding_read_in_both_dst_regimes(
+        self,
+    ) -> None:
+        """The fire the change exists for must beat the read it feeds.
+
+        Measured against :data:`DECIDING_SCORE_READ_EARLIEST_UTC`, not against
+        the 04:30 UTC slot start: the deciding run reads the grouped store at
+        its `score` stage, 40-150 min in. Under that measurement the first fire
+        clears the read in BOTH regimes — by 65 min in EDT and by 5 min in EST.
+        The EST margin is the tight one and is why the timer carries no jitter.
+        """
+        for offset in (ET_UTC_OFFSET_HOURS_EDT, ET_UTC_OFFSET_HOURS_EST):
+            fire_utc = _utc_time_of_et_fire(GROUPED_TOPUP_FIRE_ET_FIRST, offset)
+            self.assertLess(
+                fire_utc,
+                DECIDING_SCORE_READ_EARLIEST_UTC,
+                f"the first top-up fire lands {fire_utc} UTC at ET offset "
+                f"-{offset}, at or after the earliest measured deciding "
+                f"`score` read ({DECIDING_SCORE_READ_EARLIEST_UTC} UTC), so the "
+                "deciding brief could still carry the previous session",
+            )
+
+    def test_the_safety_net_fire_precedes_the_repair_slot_in_both_dst_regimes(self) -> None:
+        """The second fire's job is the repair slot, not the deciding one.
+
+        It cannot back up the first fire: 07:00 UTC in EDT and 08:00 UTC in EST
+        are both at or past the LATEST measured deciding `score` read (07:00:12
+        UTC). What it does cover is the 08:30 UTC repair slot, year-round.
+
+        The repair slot is selected by VALUE — the earliest thematic slot after
+        the deciding one — not by index. With positional selection a future slot
+        added before 04:30 UTC would silently re-point this assertion at a
+        different slot than the docstring names.
+        """
+        thematic_slots = _slot_times(TIMER_PATH.read_text())
+        deciding = min(s for s in thematic_slots if s >= DECIDING_SLOT_FLOOR_UTC)
+        later = [s for s in thematic_slots if s > deciding]
+        self.assertTrue(later, "the thematic timer should still have a repair slot")
+        repair_slot = min(later)
+        for offset in (ET_UTC_OFFSET_HOURS_EDT, ET_UTC_OFFSET_HOURS_EST):
+            fire_utc = _utc_time_of_et_fire(GROUPED_TOPUP_FIRE_ET_SAFETY_NET, offset)
+            self.assertLess(
+                fire_utc,
+                repair_slot,
+                f"the safety-net top-up fire lands {fire_utc} UTC at ET offset "
+                f"-{offset}, which is not before the {repair_slot} UTC thematic "
+                "repair slot — the RS store would stay a session behind for "
+                "that half of the year",
+            )
+
+    def test_service_is_a_oneshot_running_the_topup_script(self) -> None:
+        text = GROUPED_TOPUP_SERVICE.read_text()
+        self.assertIn("Type=oneshot", text)
+        self.assertRegex(
+            text,
+            re.compile(
+                r"^ExecStart=%h/AlphaLens/\.venv/bin/python\s*\\\n\s*"
+                r"apps/alphalens-research/scripts/backfill_grouped_daily_history\.py\s*\\\n"
+                r"\s*--topup\s*$",
+                re.MULTILINE,
+            ),
+            "ExecStart must run the top-up script on the host venv with --topup",
+        )
+        self.assertRegex(text, re.compile(r"^EnvironmentFile=/etc/alphalens/env\s*$", re.MULTILINE))
+
+    def test_no_unit_comment_still_claims_it_runs_before_the_form4_job(self) -> None:
+        """The ordering rationale both files carried is now false.
+
+        Both headers said the unit runs "BEFORE the 02:30 form4 job" so it never
+        collides with the heavier backfills. The new fires are 04:05/05:05 and
+        07:00/08:00 UTC, i.e. AFTER form4, so the claim inverted. The .service
+        header repeated the .timer's rationale verbatim, which is why both are
+        checked: a reader who opens only the service file would otherwise still
+        be told the old story.
+
+        Only the ordering claim is banned, not the digits of the old hour — the
+        new comment cites 01:30 UTC as the instant the 403 was MEASURED at,
+        which is the evidence for the change rather than a schedule claim.
+        """
+        for path in (GROUPED_TOPUP_TIMER, GROUPED_TOPUP_SERVICE):
+            with self.subTest(unit=path.name):
+                self.assertNotIn("form4", path.read_text())
