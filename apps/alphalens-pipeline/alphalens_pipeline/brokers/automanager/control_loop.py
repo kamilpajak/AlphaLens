@@ -7760,8 +7760,33 @@ def _send_stop_placed_page(
         level=action.stop_price,
         order_id=order_id or None,
     )
-    key = f"{_STOP_PLACED_ALERT_KEY_PREFIX}:{order_id or action.request_id}"
-    return throttle.emit(trade_alerts.render(event), uic=action.uic, reason=key)
+    return throttle.emit(
+        trade_alerts.render(event),
+        uic=action.uic,
+        reason=_stop_placed_alert_key(action, qty, order_id),
+    )
+
+
+def _stop_placed_alert_key(action: PlaceStop, qty: float, order_id: str) -> str:
+    """Throttle key identifying ONE confirmed stop placement.
+
+    The broker order id is what makes two placements distinct — a re-place after
+    a rotation or a supersede rests a NEW order the operator must hear about,
+    while a same-ref retry that reached the broker once does not. Same shape as
+    the existing ``stop-fill:{order_id}``.
+
+    The FALLBACK, for an adapter that confirms a place and returns no id, is not
+    the ref alone. The ref is deterministic per generation, so two genuinely
+    distinct placements under it — the first stop, then a supersede re-place at
+    a RAISED level — shared one key and the second was suppressed: the operator
+    was told the stop rests at the first level while it rests at the second.
+    That is the collapse the key exists to avoid (the #1766 orphan-key lesson),
+    reintroduced by the fallback. So the fallback carries what distinguishes the
+    two placements the broker will not: the level and the quantity ACTUALLY
+    placed, the same post-clamp number the page itself quotes."""
+    if order_id:
+        return f"{_STOP_PLACED_ALERT_KEY_PREFIX}:{order_id}"
+    return f"{_STOP_PLACED_ALERT_KEY_PREFIX}:{action.request_id}:{action.stop_price:.6f}:{qty:.6f}"
 
 
 def _execute_place_stop(

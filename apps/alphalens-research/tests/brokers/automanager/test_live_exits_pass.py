@@ -1304,6 +1304,41 @@ class TestStopRaisePagesTheOperator(_JournalCase):
             ["TRAIL KO SL - trailed stop resting 62.42 (raised from 50.64)"],
         )
 
+    def test_the_key_hides_a_repeat_and_lets_a_HIGHER_raise_through(self) -> None:
+        # What the key is FOR, as behaviour. Every other test in this class
+        # replaces the throttle with a lambda that always returns True, so a key
+        # that stopped discriminating while still rendering a plausible string
+        # would go unnoticed: all four single-edit mutations of
+        # `_stop_raised_alert_key` reddened only the literal-string test.
+        #
+        # Here a REAL `_AlertThrottle` with a frozen clock decides, so the
+        # observation is what the operator gets: the same level inside the
+        # interval is one page, and a higher level inside the same interval is
+        # another -- the page most worth having, and the one a level-less key
+        # would hide.
+        # The last pair differs only BELOW the two decimals the page renders, so
+        # it is also what makes the key's six decimals behavioural rather than a
+        # literal: at the rendered width those are one key and the second stop
+        # is hidden.
+        sent: list[str] = []
+        clock = {"t": 1000.0}
+        throttle = cl._AlertThrottle(sent.append, clock=lambda: clock["t"])
+        for level in (14.5, 14.5, 15.5, 15.0014, 15.0024):
+            raise_ = cl.StopRaise(
+                uic=40000,
+                previous=13.0,
+                level=level,
+                reason=ta.ExitReason.TRAILED_STOP,
+            )
+            throttle.emit(
+                f"stop at {level}", uic=raise_.uic, reason=cl._stop_raised_alert_key(raise_)
+            )
+            clock["t"] += 1.0  # well inside the re-alert interval
+
+        self.assertEqual(
+            sent, ["stop at 14.5", "stop at 15.5", "stop at 15.0014", "stop at 15.0024"]
+        )
+
     def test_a_level_that_does_not_raise_pages_nothing(self) -> None:
         broker = FakeBroker()
         uic = broker.uic_of("KO")

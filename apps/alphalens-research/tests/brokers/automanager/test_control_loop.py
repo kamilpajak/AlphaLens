@@ -5041,6 +5041,57 @@ class TestStopPlacedPagesTheOperator(IsolatedHomeTestCase):
             len(self._pages(throttle)), 1, "so the operator hears that it is protected"
         )
 
+    def test_an_adapter_that_returns_no_order_id_still_distinguishes_two_places(self) -> None:
+        # The key's fallback, which `_ProtBroker` could not reach because it
+        # always returns "S-1": removing `or action.request_id` entirely left
+        # the whole broker suite green, and the fallback it stands for COLLAPSED
+        # two distinct placements, the exact failure the key exists to avoid.
+        # The ref is deterministic, so the first stop and a supersede re-place
+        # at a RAISED level shared one key and the second was suppressed -- the
+        # operator told the stop rests at 216.48 while it rests at 230.00.
+        #
+        # Only Saxo places today and it raises rather than return an empty id,
+        # so this is about the next adapter. The fallback carries the LEVEL and
+        # the quantity now, which is what makes two placements under one ref
+        # distinct.
+        class _NoIdBroker(_ProtBroker):
+            def place_standalone_stop(
+                self,
+                uic: int,
+                side: str,
+                qty: float,
+                stop_price: float,
+                request_id: str | None = None,
+            ) -> PlacedOrder:
+                super().place_standalone_stop(uic, side, qty, stop_price, request_id)
+                return PlacedOrder(entry_order_id="", exit_order_ids=())
+
+        sent: list[str] = []
+        throttle = _KeyedThrottle(sent)
+        broker = _NoIdBroker(by_uic={_UIC: _pos(46.0)})
+        executor = cl._make_protection_executor(broker, throttle)
+        report = cl.TickReport()
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(
+                sj, "_standalone_stop_journal_path", lambda journal=journal: journal
+            ):
+                for level in (216.48, 230.00):
+                    executor(PlaceStop(_UIC, "SELL", 46.0, level, _TRAIL_STOP_REF), False, report)
+        cl._drain_pages(report)
+
+        pages = self._pages(throttle)
+        self.assertEqual(len(pages), 2, f"both placements were attempted; got {pages}")
+        self.assertNotEqual(pages[0][2], pages[1][2], "under two distinct keys")
+        self.assertEqual(
+            [a for a in sent if "stop placed" in a],
+            [
+                "PROTECTED KO SL 46 - stop placed 216.48",
+                "PROTECTED KO SL 46 - stop placed 230.00",
+            ],
+            "so the operator hears about the stop that actually rests",
+        )
+
     def test_no_page_on_any_path_that_did_not_place(self) -> None:
         failures = {
             "flat-skip": _ProtBroker(by_uic={_UIC: _pos(0.0)}),

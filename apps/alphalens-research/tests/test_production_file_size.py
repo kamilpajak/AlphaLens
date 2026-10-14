@@ -108,6 +108,13 @@ ALLOWED_EXCLUDED_FILE_PREFIXES = ("test_",)
 BASELINE: dict[str, int] = {
     "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3507,
     "apps/alphalens-pipeline/alphalens_cli/commands/thematic.py": 1708,
+    # Raised again, by 25, for the stop-placed key's fallback. The ref alone
+    # COLLAPSED two genuinely distinct placements -- the first stop and a
+    # supersede re-place at a raised level -- which is the hiding failure the
+    # key exists to avoid, reintroduced by its own fallback. It is a named
+    # function now, carrying the level and the placed quantity, with the
+    # collapse written down so the next reader does not simplify it back.
+    #
     # Raised again, by 21, for two more review findings. The stop-placed page
     # moved ahead of the supersede-cancel loop (a cancel that re-raises used to
     # cost the page for good, since the stop is already resting and no later
@@ -197,7 +204,7 @@ BASELINE: dict[str, int] = {
     # rather than either branch's own number. Counted with ``wc -l`` on the
     # merged file, not added up from the two diffs.
     #
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7873,
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7898,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3302,
