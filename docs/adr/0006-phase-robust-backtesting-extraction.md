@@ -118,6 +118,8 @@ AlphaLens wrapper delegate without spawning a subprocess.
 - **Apache 2.0 license** (per Perplexity recommendation in #39 strategic
   consult). Rejected — MIT matches AlphaLens's existing license and is
   simpler. No patent considerations apply to a small validation library.
+  *This rationale was false when written and the rejected option is what
+  shipped — see the 2026-10-14 amendment below.*
 
 ## References
 
@@ -155,3 +157,50 @@ Same-PR ledger cleanup forced canonical statuses on 3 drift-entries
 → `completed`/`abandoned`); rich values preserved under `status_extended`
 top-level key (auto-routed into `extras` via PRB v0.2.2). Also renamed the
 ev_fcff_yield outcome's `mean_excess_net_ann` → canonical `mean_excess_net`.
+
+## Amendment 2026-10-14 — the bundle ships Apache-2.0, and the MIT rationale was wrong when written
+
+The licence half of this ADR never described reality. Three facts, each with the
+command that produced it.
+
+**The published bundle has been Apache-2.0 since its first commit.** It was never
+MIT, so there is no divergence that happened later:
+
+```
+$ gh api repos/kamilpajak/phase-robust-backtesting/license --jq .license.spdx_id
+Apache-2.0
+$ gh api 'repos/kamilpajak/phase-robust-backtesting/commits?path=LICENSE' \
+    --jq '.[]|"\(.commit.author.date[0:10]) \(.sha[0:8])"'
+2026-05-01 f59e64f8
+```
+
+**The stated reason was false on the day it was written.** This ADR is dated
+2026-04-29, and AlphaLens's own `LICENSE` on that date was the Apache License
+2.0 — the very option the bullet rejected:
+
+```
+$ git show "$(git rev-list -1 --before='2026-04-29 23:59' main)":LICENSE | head -2
+                                 Apache License
+                           Version 2.0, January 2004
+```
+
+So "MIT matches AlphaLens's existing license" had it backwards: Apache 2.0 was
+the matching licence, and it is what the bundle shipped two days later. The
+alternatives bullet stands as the record of what was argued; this amendment
+records that the argument was mistaken.
+
+**And the "matches" test no longer decides anything.** AlphaLens moved to
+PolyForm Noncommercial 1.0.0 on 2026-06-16 (#610, `36b1fb85`), so neither MIT
+nor Apache-2.0 matches this repo today. A licence choice for the bundle has to
+be argued on its own terms — the patent grant and the NOTICE requirement that
+the Perplexity consult raised, not symmetry with a licence that has since
+changed twice.
+
+**Decision as implemented: Apache-2.0.** Nothing needs to change in the
+published repository. What needed changing is the record, plus the two places
+that repeated it: the root `CLAUDE.md` called the bundle MIT-licensed until
+#1773, and this ADR until now.
+
+Found by the adversarial audit of `CLAUDE.md` (2026-10-14), which flagged the
+`CLAUDE.md` sentence; the reviewer then went one level down and found the ADR's
+own rationale carried the same error.
