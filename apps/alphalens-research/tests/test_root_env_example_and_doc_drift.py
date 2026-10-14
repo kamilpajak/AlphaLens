@@ -51,6 +51,7 @@ RELOCATION_TARGETS = (
     REPO_ROOT / "docs/research/CLAUDE.md",
     REPO_ROOT / "docs/workflow/issues-and-board.md",
     REPO_ROOT / "docs/runtime-data-layout.md",
+    REPO_ROOT / "deploy/systemd/README.md",
 )
 
 # A ``KEY=value`` line in a dotenv-style file; value half optional. Anchored to

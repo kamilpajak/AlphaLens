@@ -26,8 +26,11 @@ Access requirements), local dev, `dev:vps`, the test split and the OpenAPI codeg
 ## Storybook is the component catalog and the spec
 
 Storybook 10 (`storybook` and `@storybook/sveltekit` 10.6.0, `@storybook/addon-svelte-csf` 5.1.3)
-is a devDependency only and is never imported by `src/`, so it is absent from the production
-Cloudflare Pages build.
+is a devDependency. The 32 `.stories.svelte` files under `src/lib/` DO import it
+(`defineMeta` from `@storybook/addon-svelte-csf`), and nothing in `svelte.config.js` or
+`vite.config.ts` excludes them — they stay out of the production Cloudflare Pages bundle
+because no route reaches them, i.e. they are tree-shaken, not configured out. Import
+Storybook from a route-reachable module and it ships.
 
 - Every new or changed component ships a `.stories.svelte` beside it, one `<Story>` per meaningful
   state (default / empty / loading / error / edge). Never one kitchen-sink story.

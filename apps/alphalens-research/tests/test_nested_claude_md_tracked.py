@@ -72,7 +72,13 @@ def _tracked_memory_files() -> set[Path]:
 
 def _is_ignored(path: Path) -> bool:
     proc = subprocess.run(
-        ["git", "check-ignore", "-q", str(path)],
+        # --no-index is load-bearing: by default check-ignore consults the INDEX and
+        # reports a TRACKED path as not-ignored even when a rule matches it. Measured
+        # on git 2.54.0: a force-added file under an ignored directory gives rc=1
+        # without the flag and rc=0 with it. Without it this assertion has no power
+        # of its own — the only shape left to catch is already caught by the
+        # tracked-ness test, so it would die only jointly with that one.
+        ["git", "check-ignore", "-q", "--no-index", str(path)],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,

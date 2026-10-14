@@ -149,7 +149,8 @@ internal inconsistency, so quote §5: §5 and the §9 changelog lock `N_FIXED=15
   2026-10-14, the module defines only `load_sp1500_pit_for_date` (line 87) and
   `load_sp1500_pit_union` (line 128). Write it alongside the first paradigm that needs it.
 - The two delisted stores are Mac-only and unequal: `delisted_2021_2026.parquet` is the one code
-  reads today (`screeners/options_implied/target.py` plus five research scripts),
+  reads today (`screeners/options_implied/target.py` plus ten scripts under
+  `apps/alphalens-research/scripts/`, counted 2026-10-14),
   `delisted_2007_2018.parquet` has no code consumer yet. Their row counts are quoted in
   `event_sourced_lane_design_2026_09_03.md` (6 237 names) and
   `plan_C_survivorship_retrospective_2026_05_14.md` (2 051 names); neither was re-read here,
