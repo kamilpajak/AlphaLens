@@ -30,19 +30,13 @@ Three measurement layers (design memo §5.0), in priority order:
    path under a break-even-after-TP1 / lock-in-after-TP2 ratcheting stop. NEVER
    overrides the layer-2 headline -- we do not ship ratchet management, so a
    ratchet P&L would flatter / penalise the tool for a policy it never executes.
-   **DEPRECATED by owner decision, 2026-10-13** in favour of
-   ``apps/intent-replay``, together with ``breakeven_lenses`` and the grid entry
-   points here (``replay_ladder_grid`` and its ``_with_*`` helpers). Epic #1526
-   owns the retirement; see that module's docstring for the ordering and for why
-   it must not take layers 1-2 with it.
+   **DEPRECATED 2026-10-13** with ``breakeven_lenses`` and the grid entry points
+   here (``replay_ladder_grid`` + its ``_with_*`` helpers); epic #1526 owns it.
 
-**Layers 1 and 2 are NOT deprecated.** They are the realized population measure
-``/edge`` publishes, and a measurement on 2026-10-13 settled that the costed
-engine cannot move it: ``intent-replay`` subtracts no fee from its result, and
-its cost gate -- the one mechanism that could -- has a floor of at most 80 bps at
-the owner's position size against a nearest take-profit 91.2 bps above the blend
-(0 of 2553 tranches below either threshold). Working:
-``docs/research/population_replay_divergence_design_2026_10_13.md`` section 9.
+**Layers 1-2 are NOT deprecated** -- they are the realized measure ``/edge``
+publishes, and the costed engine provably cannot move them (see
+``breakeven_lenses`` and memo ``population_replay_divergence_design_2026_10_13``
+section 9). Retiring the what-if layer must not take them with it.
 
 Pure + deterministic: this module imports nothing from the store / Polygon /
 broker. It takes a parsed trade-setup dict + a list of OHLC bars and returns a

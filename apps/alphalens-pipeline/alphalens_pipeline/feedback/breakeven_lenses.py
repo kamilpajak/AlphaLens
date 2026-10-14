@@ -2,22 +2,16 @@
 
 DEPRECATED by owner decision, 2026-10-13, in favour of ``apps/intent-replay``:
 a what-if is a claim about a policy the system could ARM, so it must be measured
-by the engine that models what arming does. Tracked by epic #1526. Nothing here
-is removed yet, and the retirement is ORDERED on purpose -- reproduce these
-lenses through the replay, compare the two bases on the same episodes, swap the
-``/edge`` panel's source, and only then delete -- because the panel is
-user-visible: ``edge/api/serializers.py`` publishes ``what_if.lenses`` and
-``apps/web`` renders it, with a cross-language parity test over both registries.
+by the engine that models arming. Epic #1526 owns the retirement, and the order
+is load-bearing because the ``/edge`` panel is user-visible (``what_if.lenses``
+in ``edge/api/serializers.py``, ``WhatIfPanel.svelte``, plus a cross-language
+parity test): reproduce these lenses through the replay, compare the two bases
+on the same episodes, swap the panel's source, and only then delete.
 
-What is NOT deprecated, and must not be deleted with this: the REALIZED
-population measure in ``ladder_replay`` layers 1 and 2. Measured 2026-10-13, the
-costed engine cannot move it. The cost gate's floor is at most 80 bps at the
-owner's position size, while the nearest take-profit in the whole brief store
-sits 91.2 bps above the blended entry -- 0 of 2553 tranches fall below either
-threshold -- and ``intent-replay`` subtracts no fee from its result at all
-(``measures.py``: ``pnl_cash = _proceeds - spend``). So ``/edge`` keeps its own
-engine, and its published ``gross_of_cost`` is right on the evidence rather than
-only by doctrine. Full working:
+NOT deprecated, and not to be deleted with this: the realized population measure
+in ``ladder_replay`` layers 1-2. A 2026-10-13 measurement settled that the
+costed engine cannot move it, so ``/edge`` keeps its own engine and its published
+``gross_of_cost`` is right on the evidence. Working:
 ``docs/research/population_replay_divergence_design_2026_10_13.md`` section 9.
 
 Each lens is an alternative EXIT POLICY re-applied to the SAME picks and the SAME

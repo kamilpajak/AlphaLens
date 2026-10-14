@@ -122,7 +122,10 @@ BASELINE: dict[str, int] = {
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/saxo/client.py": 1141,
     "apps/alphalens-pipeline/alphalens_pipeline/data/alt_data/saxo_price_stream.py": 1395,
     "apps/alphalens-pipeline/alphalens_pipeline/feedback/ladder_chart.py": 1329,
-    "apps/alphalens-pipeline/alphalens_pipeline/feedback/ladder_replay.py": 1910,
+    # +7 for the deprecation marker on layer 3 and the sentence that fences off
+    # layers 1-2, so retiring the what-if layer cannot take the realized measure
+    # with it (owner decision 2026-10-13, epic #1526).
+    "apps/alphalens-pipeline/alphalens_pipeline/feedback/ladder_replay.py": 1917,
     "apps/alphalens-pipeline/alphalens_pipeline/feedback/population_ladder_monitor.py": 3347,
     "apps/alphalens-pipeline/alphalens_pipeline/feedback/selection_label.py": 1354,
     "apps/alphalens-pipeline/alphalens_pipeline/thematic/mapping/channel_assessor.py": 1267,
