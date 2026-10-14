@@ -10,9 +10,47 @@ from __future__ import annotations
 
 import unittest
 
+from alphalens_pipeline.brokers.automanager import position_manager as pm
+from alphalens_pipeline.brokers.automanager.position_manager import PlannedExit, ProtectionView
+
 from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
 
 from .world import ManagerWorld, a_divergence, order_cancelled
+
+_UIC = 43070
+
+
+def _unrestored_trail_message(*, plan_stop: float, trailed: float) -> str:
+    """The REAL text of the lost-trailed-level alert, taken from the production
+    function rather than written out, so a rewording of that alert moves this
+    fixture with it.
+
+    It is the one failure alert whose words overlap the protected-confirmation
+    page ("naked stop placed at the plan level ..."), which is what made a
+    substring exclusion in :meth:`ManagerWorld.assert_silent` swallow it."""
+    plan = PlannedExit(
+        uic=_UIC,
+        entry_crid="crid-KO-0",
+        side="SELL",
+        stop_price=plan_stop,
+        tp_price=None,
+        conflicting=False,
+        n_plans=1,
+    )
+    view = ProtectionView(
+        long_positions={},
+        all_positions={},
+        sell_legs_by_uic={},
+        planned_by_uic={_UIC: plan},
+        oco_unsupported=frozenset(),
+        amend_recently_failed=frozenset(),
+        peak_by_uic={},
+        last_price_by_uic={},
+        trailed_stop_by_uic={_UIC: trailed},
+    )
+    actions = pm._unrestored_trail_alert(_UIC, plan, view)
+    assert len(actions) == 1, f"the production alert did not fire: {actions}"
+    return actions[0].reason
 
 
 class ItNeverFailsSilently(IsolatedHomeTestCase):
@@ -96,6 +134,20 @@ class ItNeverFailsSilently(IsolatedHomeTestCase):
         world.broker_placement_fails_on("KO")
 
         world.run_tick()
+
+        with self.assertRaises(AssertionError):
+            world.assert_silent()
+
+    def test_the_quiet_check_still_sees_a_lost_trailed_level(self) -> None:
+        # The exclusion's WIDTH, which the positive control above cannot test:
+        # its own failure alert reads "stop placement rejected", and the word
+        # that matters is "placed". `_unrestored_trail_alert` is the one
+        # production alert that CONTAINS the confirmation page's phrase --
+        # "uic N: naked stop placed at the plan level 44.00; trailed level 51.20
+        # not restored" -- so a substring exclusion on "stop placed" hid the one
+        # message that makes a lost ratchet floor visible.
+        world = ManagerWorld(self)
+        world._captured_alert_events.append(_unrestored_trail_message(plan_stop=44.0, trailed=51.2))
 
         with self.assertRaises(AssertionError):
             world.assert_silent()

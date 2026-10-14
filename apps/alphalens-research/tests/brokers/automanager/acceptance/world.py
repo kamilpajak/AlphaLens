@@ -39,12 +39,30 @@ from broker_contract.price_feed import PricePoint
 
 from .fake_broker import FakeBroker
 
-# The reason text of the ONE page a healthy tick is allowed to send: the
-# confirmation that a protective stop now rests (#1621 part 3). Rendered by the
-# formatter itself so this cannot drift from the real message.
+# The ONE page a healthy tick is allowed to send: the confirmation that a
+# protective stop now rests (#1621 part 3). Taken from the formatter itself,
+# WITH the field separator in front of it, which is the whole point.
+#
+# The bare words are not unique. The real lost-trailed-level failure alert
+# reads "uic 43070: naked stop placed at the plan level 44.00; trailed level
+# 51.20 not restored" — it CONTAINS "stop placed", so excluding on those words
+# let a real failure through this check and guarantee 5 could no longer see a
+# lost ratchet floor. The separator is what distinguishes a page's own middle
+# SLOT from the same words inside a sentence, so it is part of the phrase.
+#
+# One claim, not two: an "it also opens like a page" half was tried and
+# dropped, because either half alone kept every test green — they masked each
+# other, and a guard no test can refute is not a guard.
+_CONFIRMATION_TICKER_SENTINEL = "\x00ticker\x00"
 _CONFIRMATION_PHRASE = ta.render(
-    ta.TradeEvent(kind=ta.EventKind.STOP_PLACED, ticker="X", label=None)
-).split(" - ", 1)[1]
+    ta.TradeEvent(kind=ta.EventKind.STOP_PLACED, ticker=_CONFIRMATION_TICKER_SENTINEL, label=None)
+).split(_CONFIRMATION_TICKER_SENTINEL)[1]
+
+
+def _is_the_confirmation_page(alert: str) -> bool:
+    """``alert`` is the protected-confirmation page and not prose about a stop."""
+    return _CONFIRMATION_PHRASE in alert
+
 
 _DEFAULT_STOP = 44.0
 _DEFAULT_TP = 59.0
@@ -432,13 +450,18 @@ class ManagerWorld:
         Not "nothing was said": since #1621 part 3 a healthy tick that protects
         a fresh position sends ONE confirmation page, which is the whole point
         of that page — the operator could not otherwise tell "protected" from
-        "the daemon never ran". Guarantee 5 is about failures, so the
-        confirmation is excluded by name and EVERY other alert still fails here.
-        The phrase is taken from the formatter rather than written out, so
-        rewording the page cannot quietly widen this exclusion: the filter would
-        stop matching and this assert would go red."""
+        "the daemon never ran". Guarantee 5 is about failures, so that one page
+        is excluded and EVERY other alert still fails here.
+
+        What keeps the exclusion narrow is its SHAPE, not its source: it tracks
+        the formatter by construction, so a rewording moves the filter WITH the
+        page and this assert stays silent either way. The anti-drift guard is
+        the literal ``assert_alerted(containing=...)`` in
+        ``test_a_healthy_tick_is_quiet``, and the anti-widening guards are the
+        two positive controls beside it — one with a plain failure alert, one
+        with the lost-trailed-level alert, whose text overlaps this page's."""
         unexpected = [
-            alert for alert in self._captured_alert_events if _CONFIRMATION_PHRASE not in alert
+            alert for alert in self._captured_alert_events if not _is_the_confirmation_page(alert)
         ]
         if unexpected:
             raise AssertionError(f"expected no alerts, got: {unexpected}")
