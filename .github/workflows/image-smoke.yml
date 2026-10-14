@@ -22,6 +22,9 @@ on:
       - 'apps/alphalens-feedback/**'
       - 'apps/alphalens-pipeline/**'
       - 'apps/alphalens-django/**'
+      # A nested CLAUDE.md is a working brief for this directory, not build input.
+      # Without this exclusion every doc-only edit to one rebuilds the image.
+      - '!apps/**/CLAUDE.md'
       - 'deploy/docker/**'
       - 'pyproject.toml'
       - 'uv.lock'
@@ -32,6 +35,9 @@ on:
       - 'apps/alphalens-feedback/**'
       - 'apps/alphalens-pipeline/**'
       - 'apps/alphalens-django/**'
+      # A nested CLAUDE.md is a working brief for this directory, not build input.
+      # Without this exclusion every doc-only edit to one rebuilds the image.
+      - '!apps/**/CLAUDE.md'
       - 'deploy/docker/**'
       - 'pyproject.toml'
       - 'uv.lock'
