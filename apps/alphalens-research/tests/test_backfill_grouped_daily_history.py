@@ -169,7 +169,13 @@ class TestThinPayloadFloor(unittest.TestCase):
         # (2024-09-11), p01 10613, median 11484, max 12624. A floor at or above
         # the real minimum would reject healthy sessions, which is the failure
         # mode that teaches an operator to switch the guard off.
+        #
+        # The half-days are the discriminating case, because a floor set from
+        # full sessions alone could reject them: 2024-11-29 10662, 2024-12-24
+        # 10695, 2025-07-03 11105, 2025-11-28 11604, 2025-12-24 11626. A short
+        # session trades less, it does not list less.
         self.assertLess(backfill.MIN_PLAUSIBLE_ROWS, 10579)
+        self.assertLess(backfill.MIN_PLAUSIBLE_ROWS, 10662)  # thinnest half-day
 
     def test_a_full_payload_still_writes(self):
         # Positive control: the floor must not be satisfiable only by rejecting.

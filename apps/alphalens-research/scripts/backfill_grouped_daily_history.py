@@ -44,7 +44,12 @@ _DEFAULT_MAX_CATCHUP_DAYS = 400
 # the smallest real session carries 10579 rows (2024-09-11), p01 10613, median
 # 11484. 5000 is under half the real minimum, so it cannot reject a healthy
 # session, and it rejects the shape that matters — a partial end-of-day
-# aggregate. Why the floor exists at all: the top-up now fires 5 minutes past
+# aggregate. The case to worry about is a session the market really serves thin,
+# because a rejected session gaps until a later run fetches it and nothing pages
+# on a gap. Measured on the five half-days in the store (13:00 ET close):
+# 2024-11-29 10662, 2024-12-24 10695, 2025-07-03 11105, 2025-11-28 11604,
+# 2025-12-24 11626 — a short session trades less, it does not list less, so the
+# floor stays unreachable for one that was served at all. Why the floor exists at all: the top-up now fires 5 minutes past
 # Polygon's Eastern day boundary, where a partial aggregate is reachable. Before
 # that it was not — a call placed earlier answered 403 and nothing was written.
 # A partial write is worse than a gap, because `skipped_existing` means no later
