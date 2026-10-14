@@ -14,8 +14,9 @@ Guidance for Claude Code (claude.ai/code) when working in this repo.
 - Layer 1 SEC EDGAR detector — `alphalens-edgar-detect.{service,timer}`, fires every 15 min (`worker` archived per ADR 0008)
 - Literature review weekly + monthly Perplexity scan — `alphalens-literature-scan-{weekly,monthly}.{service,timer}`, auto-commit scan output to `main` via the `alphalens-literature-scan-publish` wrapper
 - VPS daily thematic pipeline + API rebuild (Django pulled from GHCR per migration B); SvelteKit dashboard hosted on Cloudflare Pages, fronted by Access (Google SSO, Path A same-domain cookies). See `## VPS backfills` + `## Production topology (migration B)`.
+- **The broker rail runs on REAL MONEY, in two instances.** `alphalens-broker-manager.service` is the SIM auto-manager the `## VPS backfills` table describes, and `alphalens-broker-manager-live.service` is a second, additive instance on the live account (`Environment=ALPHALENS_BROKER_ENVIRONMENT=live`, standing authorization per [ADR 0017](docs/adr/0017-standing-live-authorization.md)), each with its own `.d` drop-in directory. This file named neither the live unit nor ADR 0017 anywhere until 2026-10-14, so a session that read it as the system's description would not have known a money path exists. Every pick on that rail is hand-written (#1552), and `alphalens broker arm` is the only door onto the queue.
 
-**Everything else RESEARCH_ONLY** — code remains as reusable framework. Closed paradigms were extracted (reusable scorers promoted to live packages) and the rest removed per [ADR 0010](docs/adr/0010-archive-extracted-and-removed.md), superseding ADR 0005. Methodology bundle MIT-licensed as [`kamilpajak/phase-robust-backtesting`](https://github.com/kamilpajak/phase-robust-backtesting) per [ADR 0006](docs/adr/0006-phase-robust-backtesting-extraction.md). Search for better screeners stays open-ended — each new test raises the Bonferroni bar via ledger discipline, but "no further prospecting" is **not** a project position.
+**The closed FACTOR paradigms are RESEARCH_ONLY** — their code remains as reusable framework. Closed paradigms were extracted (reusable scorers promoted to live packages) and the rest removed per [ADR 0010](docs/adr/0010-archive-extracted-and-removed.md), superseding ADR 0005. Do NOT read that as "everything outside the live table is research": 20 packages declare `__status__ = "ACTIVE"` and **11 of them appear nowhere in either layer table**, among them `brokers/`, `brokers/automanager/`, `feedback/`, `experts/` and `paper/` (unit: packages whose `__init__.py` declares ACTIVE; a package counts as present when its name appears anywhere in the two tables, rows or Notes; counted 2026-10-14 — the stricter full-path reading gives 13). The tables are a digest, as **Layer status** says. Methodology bundle published as [`kamilpajak/phase-robust-backtesting`](https://github.com/kamilpajak/phase-robust-backtesting) per [ADR 0006](docs/adr/0006-phase-robust-backtesting-extraction.md) — **under Apache-2.0**, not the MIT that ADR chose: the published repository ships Apache-2.0 and this repository's own `LICENSE` is PolyForm Noncommercial 1.0.0, so all three differed until this line was corrected. ADR 0006's stated reason for MIT ("matches AlphaLens's existing license") is stale for the same reason and is corrected separately. Search for better screeners stays open-ended — each new test raises the Bonferroni bar via ledger discipline, but "no further prospecting" is **not** a project position.
 
 ## Layer status
 
@@ -44,7 +45,7 @@ The CLI binary `alphalens` is registered in `apps/alphalens-pipeline/pyproject.t
 | `alphalens_research/screeners/momentum_lowvol/` | RESEARCH_ONLY | Layer 2 mom + low-vol — strategy FAILed; scorer reused as base for Layer 4 vol-target overlay test |
 | `alphalens_research/gates/` | RESEARCH_ONLY | Layer 2 selection-gates wrapper |
 | `alphalens_research/backtest/` | ACTIVE | Layer 3 engine — engine, multi_phase, multiple_testing, weighting, theme_analysis, llm_scorers, historical_validation, metrics |
-| `alphalens_research/overlays/` | RESEARCH_ONLY | Layer 4 risk-overlays; single occupant `vol_target.py` |
+| `alphalens_research/overlays/` | RESEARCH_ONLY | Layer 4 risk-overlays; four modules (`vol_target`, `drawdown_control`, `credit_regime`, `assess`), and the package imports the first two at top level |
 | `alphalens_research/attribution/` | ACTIVE | Layer 5 — cost_model, factor_analysis, regime, diagnostics, report, walk_forward |
 | `alphalens_research/preaudit/` | ACTIVE | per-strategy SmokeProfile + coverage gate before audit launch |
 | `alphalens_research/diagnostics/` | ACTIVE | survivorship_pit, cyclicality screens |
@@ -87,10 +88,20 @@ Four facts about these boundaries that are easy to get wrong:
   answer: no store, no period total, no cross-check against the balance, and no
   coverage of account activity no pick armed. Open: #1689, designed in
   [`docs/research/account_cashbook_design_2026_10_05.md`](docs/research/account_cashbook_design_2026_10_05.md).
-- **`data/` is research-tier code writing a production store.** Its acquisition
-  modules are imported only by scripts, the lab and tests; the live reader
-  `thematic/sources/form4_store.py` opens `~/.alphalens/form4_parquet/` BY PATH
-  and imports nothing from `data/`. No import edge, no schema gate (#1679).
+- **`data/` is a live dependency, not a research-tier island.** An earlier
+  version of this bullet said its acquisition modules are "imported only by
+  scripts, the lab and tests". That is false, measured 2026-10-14: an AST walk
+  over `apps/alphalens-pipeline` excluding `data/` itself, its tests and
+  `scripts/` finds **30** `alphalens_pipeline.data.*` modules imported by
+  live-tier code, 16 of them acquisition clients under `data/alt_data/`
+  (`yfinance_client` 11 importer files, `polygon_client` 9, `parquet_io` 8,
+  `openrouter_client` 8). The decisive one is top-level on the 15-minute path:
+  `edgar_detector/sources/edgar.py:13` imports `sec_edgar_client`. The narrower
+  claim that IS true is ADR 0011's amendment: eleven `data/` modules are
+  referenced only by the research tier. What still holds is the Form-4 half —
+  the live reader `thematic/sources/form4_store.py` opens
+  `~/.alphalens/form4_parquet/` BY PATH and imports nothing from `data/`, so
+  that store has no import edge and no schema gate (#1679, closed).
 
 ## Layer architecture (active alpha experimentation)
 
@@ -140,7 +151,7 @@ Closed paradigms used to ship CLI replay tooling; that surface was removed per [
 **Dependency direction** — enforcement rules in `apps/alphalens-research/tests/test_module_dependencies.py`:
 - `alphalens_research.backtest.*` does NOT import from `alphalens_research.screeners.*`
 - `alphalens_research.backtest.*` does NOT import from `alphalens_research.attribution.*` (Layer 3 → Layer 5 direction; engine produces `BacktestReport`, attribution consumes)
-- `alphalens_pipeline.*` does NOT import from `alphalens_research.*` at top level (workspace DAG — lazy imports inside `alphalens_cli.commands.{audit,preaudit,preregister}` command bodies are the documented exception)
+- `alphalens_pipeline.*` does NOT import from `alphalens_research.*` at top level (workspace DAG — lazy imports inside `alphalens_cli.commands.{audit,doctrine,preaudit}` command bodies are the documented exception). Those three are the real set, measured 2026-10-14: `preregister` imports nothing from research (its lazy imports are `phase_robust_backtesting.ledger`), and `doctrine` was missing from this list. Note the exception is documentary rather than gated: `test_module_dependencies.py`'s own file set excludes `alphalens_cli`, so the rule never sees these modules and needs no exemption entry for them
 
 **Lazy CLI imports** — `alphalens_cli` command modules intentionally do NOT promote cross-function duplicates to top-level; the live exemplars are `apps/alphalens-pipeline/alphalens_cli/commands/broker.py:76-100` and `commands/feedback.py:9-11` (the module that first carried this rule, `commands/research.py`, went with the closed-paradigm tree in ADR 0010). Measured +913ms regression in `alphalens` startup time per invoke (Layer 1 edgar-detect cron fires often). The same pattern keeps `pipeline → research` from leaking into top-level imports across the workspace split.
 
@@ -232,7 +243,7 @@ Evidence it is right: the four comparable closed LIVE picks (VST, ASTS, SMMT, EW
 
 **Proceed continuously between phases** — approved plan = green light for all phases; chain N→N+1 without per-phase confirmation. Stop only on blocker or destructive action.
 
-**Cache iVolatility downloads** — persist raw API responses to `~/.alphalens/ivolatility_cache/` BEFORE processing; never re-fetch on retry/iteration ($399/mo metered).
+**Cache iVolatility downloads** — persist raw API responses BEFORE processing; never re-fetch on retry/iteration ($399/mo metered). The cache is NOT one directory: `~/.alphalens/ivolatility_cache/` has never existed and only this rule ever named it. The roots the pulling scripts really write are `ivolatility_smd/`, `ivolatility_ivs/` and `ivolatility_calendar/` (plus `ivolatility_smd_inventory.parquet` and two `*_retro_*` roots), each named in the script that owns it — so a new puller reuses the root for its endpoint rather than inventing a path from this line.
 
 **gh CLI repo scope** — always pass `--repo kamilpajak/AlphaLens` with `gh pr comment/view/create`. Why: ambiguous repo context (e.g. when checked into a sibling working tree) can silently target the wrong repo.
 
