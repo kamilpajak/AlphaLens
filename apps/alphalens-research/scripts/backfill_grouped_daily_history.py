@@ -149,9 +149,8 @@ def run_backfill(
             logger.info("empty payload for %s; leaving as a gap to retry.", date)
             result.gaps += 1
             continue
-        if (
-            len(payload) < min_rows
-        ):  # truncated snapshot == gap, do NOT write (see MIN_PLAUSIBLE_ROWS)
+        # A truncated snapshot is a GAP, never a write (see MIN_PLAUSIBLE_ROWS).
+        if len(payload) < min_rows:
             logger.warning(
                 "payload for %s carries %d rows, below the %d-row floor — treating as a "
                 "gap to retry rather than freezing a truncated market.",
