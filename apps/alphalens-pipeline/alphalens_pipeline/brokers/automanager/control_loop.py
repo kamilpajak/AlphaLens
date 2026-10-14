@@ -3207,7 +3207,11 @@ def _reconcile_one_standing_stop(
     event = trade_alerts.TradeEvent(
         kind=trade_alerts.EventKind.EXIT_FILLED,
         ticker=stop_journal._ticker_from_ref(stop.ref) or f"uic {uic}",
-        label=None,
+        # The same leg word the stop-placed and stop-raised pages carry (#1621
+        # part 3 introduced it). All three stop pages or none: an operator who
+        # learns that ``SL`` marks the protective stop would otherwise scan for
+        # it and miss the one of the three that cost or made money.
+        label=STOP_LABEL,
         qty=filled_qty,
         price=avg_price,
         reason=trade_alerts.stop_reason(marker.kind if marker else None),

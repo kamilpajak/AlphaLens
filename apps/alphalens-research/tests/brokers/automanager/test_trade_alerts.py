@@ -373,9 +373,10 @@ class RealMessagesFromIssue1621(unittest.TestCase):
         self.assertEqual(render(event), "BUY EWTX E1 11 @ 39.10 (order 5446900424)")
 
     def test_uber_plan_stop(self) -> None:
-        event = _exit(ticker="UBER", qty=8.0, price=67.99, order_id="5440923753")
+        event = _exit(ticker="UBER", label="SL", qty=8.0, price=67.99, order_id="5440923753")
         self.assertEqual(
-            render(event), "SELL UBER 8 @ 67.99 - plan stop - position closed (order 5440923753)"
+            render(event),
+            "SELL UBER SL 8 @ 67.99 - plan stop - position closed (order 5440923753)",
         )
 
     def test_smmt_take_profit(self) -> None:
@@ -396,6 +397,7 @@ class RealMessagesFromIssue1621(unittest.TestCase):
     def test_asts_trailed_stop(self) -> None:
         event = _exit(
             ticker="ASTS",
+            label="SL",
             qty=7.0,
             price=62.37,
             reason=ExitReason.TRAILED_STOP,
@@ -404,7 +406,7 @@ class RealMessagesFromIssue1621(unittest.TestCase):
         )
         self.assertEqual(
             render(event),
-            "SELL ASTS 7 @ 62.37 - trailed stop 62.42 - position closed (order 5446399206)",
+            "SELL ASTS SL 7 @ 62.37 - trailed stop 62.42 - position closed (order 5446399206)",
         )
 
     # The ASTS raise #1621 was written for lives in
