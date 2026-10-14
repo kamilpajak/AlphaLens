@@ -621,16 +621,34 @@ ET of the same Eastern day) for session 2026-10-13 answered `403
 end of day"}`. The unit used to fire once at that hour, so 22 of its 31 runs in
 the preceding 30 days — every trading session — ended on that 403, and the
 store's newest snapshot was always one session behind the asof (three across a
-weekend). The first fire, 00:05 ET, is the first instant past the boundary; in
-EDT that is 04:05 UTC, 25 min before the 04:30 UTC deciding thematic slot. In
-EST it is 05:05 UTC, i.e. after that slot, so in winter the deciding run still
-reads the previous session and the 08:30 UTC repair slot is the first to see the
-fresh snapshot. The 03:00 ET fire is the safety net: 07:00 UTC in EDT, 08:00 UTC
-in EST, before the repair slot year-round, and near the only hour measured as
-actually served (12582 rows for 2026-10-13 at 04:57 ET). It costs nothing on a
-night the first fire succeeded — the self-sizing top-up finds no missing session
-and makes zero Polygon calls. The earliest availability hour between 00:00 ET
-and 04:57 ET is still unmeasured.
+weekend). The first fire, 00:05 ET, is the first instant past the boundary, and it clears
+the deciding thematic run in both regimes. The margin is measured against the
+instant the store is actually READ — the `score` stage, not the 04:30 UTC slot
+start. Over the 16 deciding-slot runs since the 2026-09-29 schedule change the
+read began between 05:10:09 and 07:00:12 UTC (`journalctl --user -u
+alphalens-thematic-build --utc | grep "Scoring"`), so the fire clears the
+earliest observed read by 65 min in EDT (04:05 UTC) and by 5 min in EST (05:05
+UTC). The EST margin is thin: on a day the deciding run reaches `score` faster
+than any run yet observed, that brief keeps the previous session — the same
+outcome as before this change, not a worse one.
+
+The 03:00 ET fire is the safety net for the 08:30 UTC repair slot, which it
+precedes year-round (07:00 UTC in EDT, 08:00 UTC in EST). It does NOT back up
+the first fire: both instants are at or past the latest observed deciding read.
+It sits near the only hour measured as actually served (12582 rows for
+2026-10-13 at 04:57 ET); the earliest availability hour between 00:00 ET and
+04:57 ET is still unmeasured, which is why a second attempt exists. It costs
+nothing on a night the first fire succeeded — the self-sizing top-up finds no
+missing session and makes zero Polygon calls.
+
+**What a second fire cannot repair.** A MISSING session, yes; a BAD one, no —
+nothing re-asks for a date already on disk. That is why the script refuses a
+payload thinner than `MIN_PLAUSIBLE_ROWS` (5000 rows, against a measured real
+minimum of 10579 over 523 stored sessions) and leaves it as a gap. Firing five
+minutes past Polygon's boundary is what made a partial end-of-day aggregate
+reachable at all; a partial snapshot would read as the ENTIRE market for that
+session, so every absent ticker would leave the candidate funnel as
+`not_listed` with no yfinance fetch.
 
 The free-tier entitlement cliff (`NOT_AUTHORIZED`
 past the ~21–24 mo window) stops cleanly. **Distinct from** the
@@ -670,9 +688,9 @@ whole-market snapshot per session). Monitoring: `AlphalensJobStale`@48h +
 ## alphalens-thematic-build.service / .timer
 
 End-to-end thematic pipeline (news → brief → JSON refresh) running inside the
-`alphalens-pipeline` docker image. Fires daily at 06:30 UTC via the companion
-timer; spaced from the AV backfill (00:05 UTC) so the two don't contend for
-the Alpha Vantage key.
+`alphalens-pipeline` docker image. Fires at 04:30 / 08:30 / 12:30 UTC via the
+companion timer — three morning slots since #1606, of which 04:30 is the
+deciding run and the later two repair a date whose brief is not yet published.
 
 Full operator recipe (image build, env file, Cloudflare wiring) lives at
 [`deploy/docker/README.md`](../docker/README.md). The systemd unit itself is

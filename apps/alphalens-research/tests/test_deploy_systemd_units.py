@@ -3206,6 +3206,16 @@ GROUPED_TOPUP_FIRE_ET_SAFETY_NET = dt.time(3, 0)
 ET_UTC_OFFSET_HOURS_EDT = 4
 ET_UTC_OFFSET_HOURS_EST = 5
 
+# The instant that actually matters is NOT the thematic slot's start: the store
+# is read at the `score` stage, which runs after ingest + extract + map-themes.
+# Measured on the VPS over the 16 deciding-slot runs since the 2026-09-29
+# schedule change (#1606) — `journalctl --user -u alphalens-thematic-build
+# --utc | grep "Scoring N candidates"`, hours 04-08 — the read began between
+# 05:10:09 and 07:00:12 UTC. Asserting against the slot START instead would
+# understate every margin by 40-150 min and would have called the EST fire a
+# guaranteed miss when it in fact precedes all 16 observed reads.
+DECIDING_SCORE_READ_EARLIEST_UTC = dt.time(5, 10)
+
 
 def _oncalendar_et_regex(moment: dt.time) -> re.Pattern[str]:
     """Directive-line regex for one ``America/New_York``-anchored daily fire.
@@ -3268,9 +3278,12 @@ class TestGroupedDailyTopupUnit(unittest.TestCase):
     def test_timer_is_wall_clock_anchored_and_carries_no_jitter(self) -> None:
         text = GROUPED_TOPUP_TIMER.read_text()
         _assert_wall_clock_anchored(self, text)
-        # No RandomizedDelaySec: in EDT the first fire lands 04:05 UTC, only
-        # 25 min before the 04:30 UTC deciding thematic slot, and jitter would
-        # eat that margin.
+        # No RandomizedDelaySec. The binding margin is in EST, where the first
+        # fire lands 05:05 UTC and the earliest measured deciding `score` read
+        # is 05:10 UTC — five minutes. A 5-min jitter (the value the consumer
+        # timer carries) would span exactly that, and a single grouped-daily
+        # call needs no spreading: this unit makes one request per missing
+        # session, not a burst.
         self.assertEqual(_timer_randomized_delay(text), dt.timedelta(0))
 
     def test_timer_carries_install_section(self) -> None:
@@ -3278,21 +3291,45 @@ class TestGroupedDailyTopupUnit(unittest.TestCase):
         self.assertRegex(text, re.compile(r"^\[Install\]\s*$", re.MULTILINE))
         self.assertRegex(text, re.compile(r"^WantedBy=timers\.target\s*$", re.MULTILINE))
 
-    def test_the_safety_net_fire_precedes_a_thematic_slot_in_both_dst_regimes(self) -> None:
-        """Only the 03:00 ET fire clears a consumer slot year-round.
+    def test_the_first_fire_precedes_the_measured_deciding_read_in_both_dst_regimes(
+        self,
+    ) -> None:
+        """The fire the change exists for must beat the read it feeds.
 
-        The first fire does NOT: 00:05 ET is 04:05 UTC in EDT (25 min before the
-        04:30 UTC deciding slot) but 05:05 UTC in EST, which is AFTER it. So the
-        year-round guarantee rests on the safety net — 07:00 UTC in EDT, 08:00
-        UTC in EST, both before the 08:30 UTC repair slot. The consumer slots are
-        READ off the thematic-build timer rather than written here, so moving
-        them moves this assertion with them.
+        Measured against :data:`DECIDING_SCORE_READ_EARLIEST_UTC`, not against
+        the 04:30 UTC slot start: the deciding run reads the grouped store at
+        its `score` stage, 40-150 min in. Under that measurement the first fire
+        clears the read in BOTH regimes — by 65 min in EDT and by 5 min in EST.
+        The EST margin is the tight one and is why the timer carries no jitter.
+        """
+        for offset in (ET_UTC_OFFSET_HOURS_EDT, ET_UTC_OFFSET_HOURS_EST):
+            fire_utc = _utc_time_of_et_fire(GROUPED_TOPUP_FIRE_ET_FIRST, offset)
+            self.assertLess(
+                fire_utc,
+                DECIDING_SCORE_READ_EARLIEST_UTC,
+                f"the first top-up fire lands {fire_utc} UTC at ET offset "
+                f"-{offset}, at or after the earliest measured deciding "
+                f"`score` read ({DECIDING_SCORE_READ_EARLIEST_UTC} UTC), so the "
+                "deciding brief could still carry the previous session",
+            )
+
+    def test_the_safety_net_fire_precedes_the_repair_slot_in_both_dst_regimes(self) -> None:
+        """The second fire's job is the repair slot, not the deciding one.
+
+        It cannot back up the first fire: 07:00 UTC in EDT and 08:00 UTC in EST
+        are both at or past the LATEST measured deciding `score` read (07:00:12
+        UTC). What it does cover is the 08:30 UTC repair slot, year-round.
+
+        The repair slot is selected by VALUE — the earliest thematic slot after
+        the deciding one — not by index. With positional selection a future slot
+        added before 04:30 UTC would silently re-point this assertion at a
+        different slot than the docstring names.
         """
         thematic_slots = _slot_times(TIMER_PATH.read_text())
-        self.assertGreaterEqual(
-            len(thematic_slots), 2, "the thematic timer should still have a repair slot"
-        )
-        repair_slot = thematic_slots[1]
+        deciding = min(s for s in thematic_slots if s >= DECIDING_SLOT_FLOOR_UTC)
+        later = [s for s in thematic_slots if s > deciding]
+        self.assertTrue(later, "the thematic timer should still have a repair slot")
+        repair_slot = min(later)
         for offset in (ET_UTC_OFFSET_HOURS_EDT, ET_UTC_OFFSET_HOURS_EST):
             fire_utc = _utc_time_of_et_fire(GROUPED_TOPUP_FIRE_ET_SAFETY_NET, offset)
             self.assertLess(
