@@ -349,7 +349,7 @@ class TestStopFillAlertNamesTheStop(unittest.TestCase):
             outcome=_filled(order_id, 7.0, 62.37),
         )
         self.assertEqual(
-            text, "SELL ASTS 7 @ 62.37 - trailed stop 62.42 - position closed (order 5446399206)"
+            text, "SELL ASTS SL 7 @ 62.37 - trailed stop 62.42 - position closed (order 5446399206)"
         )
 
     def test_uber_28_09_real_journal_line_renders_the_plan_stop(self) -> None:
@@ -367,7 +367,7 @@ class TestStopFillAlertNamesTheStop(unittest.TestCase):
             outcome=_filled(order_id, 8.0, 67.99),
         )
         self.assertEqual(
-            text, "SELL UBER 8 @ 67.99 - plan stop - position closed (order 5440923753)"
+            text, "SELL UBER SL 8 @ 67.99 - plan stop - position closed (order 5440923753)"
         )
 
     def test_the_placed_level_is_shown_for_the_plan_stop(self) -> None:
@@ -442,7 +442,17 @@ class TestStopFillAlertNamesTheStop(unittest.TestCase):
         text = self._alert_for(
             _stop_placed(ref="some-classic-bracket-id"), outcome=_filled(_STOP_ID, 16.0, 17.1)
         )
-        self.assertTrue(text.startswith(f"SELL uic {_UIC} 16 @"), text)
+        self.assertTrue(text.startswith(f"SELL uic {_UIC} SL 16 @"), text)
+
+    def test_the_fill_page_carries_the_SL_leg_label(self) -> None:
+        # One leg vocabulary, E{n} / TP{n} / SL, with one home (`labels.py`).
+        # #1621 part 3 introduced `SL` as a rendered label and passed it on the
+        # two pages where nothing moved -- the stop placed and the stop raised
+        # -- while this page, the only one of the three that cost or made money,
+        # went out with no label. An operator who learns that `SL` marks the
+        # protective stop then scans for it and the stop FILL is what they miss.
+        text = self._alert_for(_stop_placed(), outcome=_filled(_STOP_ID, 16.0, 17.1))
+        self.assertTrue(text.startswith("SELL GME SL 16 @"), text)
 
 
 class TestSiblingRetireOnStopFill(unittest.TestCase):
@@ -727,7 +737,7 @@ class TestPartialStopFill(unittest.TestCase):
         self.assertEqual(len(filled), 1)
         self.assertTrue(filled[0]["partial"])
         self.assertEqual([ln for ln in _lines(entries) if ln["kind"] == "cancelled"], [])
-        self.assertTrue(any(a.startswith("SELL GME 8 @ 18.51") for a in alerts), alerts)
+        self.assertTrue(any(a.startswith("SELL GME SL 8 @ 18.51") for a in alerts), alerts)
         self.assertFalse(any("retired" in a for a in alerts))
 
 

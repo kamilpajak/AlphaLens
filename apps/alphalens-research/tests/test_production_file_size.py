@@ -108,6 +108,79 @@ ALLOWED_EXCLUDED_FILE_PREFIXES = ("test_",)
 BASELINE: dict[str, int] = {
     "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3507,
     "apps/alphalens-pipeline/alphalens_cli/commands/thematic.py": 1708,
+    # Raised again, by 8, to say that the raise page's ticker fallback is
+    # unreachable by construction. It sits beside the stop-PLACED page's
+    # fallback, which looks identical and IS reachable and tested, so without
+    # the note a reader comparing the two concludes both are exercised.
+    #
+    # Raised again, by 22, to put the governing plan's disaster stop in the
+    # stop-raised key. A ticker exited and re-armed the same session was hidden
+    # by the old position's page, which is the opposite of what
+    # ``_build_managed_exits`` intends when it clears the announce entry on the
+    # way out. The field's docstring says why it is not ``previous``.
+    #
+    # Raised again, by 13, to evict the throttle's dead dedup keys. The
+    # stop-raised key is the first keyed on a continuously varying NUMBER
+    # rather than an identifier, so the map grew at the trail-amend rate for
+    # the daemon's whole lifetime; the comment says why dropping a key older
+    # than the interval changes no decision.
+    #
+    # Raised again, by 4, for the ``SL`` leg label the stop-FILL page was
+    # missing while the two pages where nothing moved carried it.
+    #
+    # Raised again, by 25, for the stop-placed key's fallback. The ref alone
+    # COLLAPSED two genuinely distinct placements -- the first stop and a
+    # supersede re-place at a raised level -- which is the hiding failure the
+    # key exists to avoid, reintroduced by its own fallback. It is a named
+    # function now, carrying the level and the placed quantity, with the
+    # collapse written down so the next reader does not simplify it back.
+    #
+    # Raised again, by 21, for two more review findings. The stop-placed page
+    # moved ahead of the supersede-cancel loop (a cancel that re-raises used to
+    # cost the page for good, since the stop is already resting and no later
+    # tick re-places), and the "from" level of a raise became ONE comparison
+    # whose excluded case is now reported rather than relabelled -- a stop
+    # driven DOWN from the announced level read as a raise off the disaster
+    # stop. Both comments say what the old shape got wrong, because that is the
+    # part a reader cannot recover from the code.
+    #
+    # Raised again, by 89, for the review of #1621 part 3's money-path finding.
+    # The two pages were synchronous sink calls on protective paths, and the
+    # sink's own bound is 34 s when a read hangs, 64 s when connect and read
+    # each burn the 10 s window, and unbounded when DNS hangs. One page sat
+    # INSIDE the serial per-action protection loop, so it delayed every later
+    # uic's stop; the other sat ahead of the exits engine and the whole
+    # protection pass. They are now computed where their facts are and SENT
+    # after the tick's protective work: ``_queue_page`` (which carries the
+    # measurement, because a bound nobody states is a bound nobody checks),
+    # ``_drain_pages``, the two ``_send_*_page`` builders that let a render
+    # failure be contained with the delivery failure, a ``finally`` in
+    # ``run_once`` and one in the #1402 fill-wake pass, which has its own report
+    # and so its own queue. Measured with ``wc -l`` after ``ruff format``.
+    #
+    # Raised again, by 6, for the review of #1621 part 3: the stop-raised key's
+    # docstring claimed the level in the key dedups a daemon RESTART. It cannot
+    # -- the throttle is built per process, so its last-sent map dies with the
+    # announce map -- and the correction has to say why the page is worded as
+    # STATE instead, which is the decision that replaced persisting the map.
+    #
+    # Raised from 7559 for #1621 part 3, the two alerts the daemon never sent.
+    # The lines are the design, not decoration. STOP_RAISED needs an
+    # out-parameter (``StopRaise`` plus a ``raised`` argument threaded through
+    # two functions) because the pure build holds no alert sink and knows no
+    # tickers, so the page belongs to the caller (``_announce_stop_raises``) --
+    # the same split as the take-profit page. STOP_PLACED needs
+    # ``_page_stop_placed`` for the same reason: ``PlaceStop`` carries no
+    # ticker. Both need ``_page_best_effort``, and that is the half that earns
+    # its lines on the money path: these two pages sit BEFORE the live-exits
+    # engine and BETWEEN a confirmed place and the protection pass's remaining
+    # actions, and a sink exception is not a ``BrokerError``, so uncontained it
+    # would abort the tick mid-protection. The rest is the two throttle-key
+    # docstrings, which say what each key discriminates -- a collapsed key
+    # HIDES the second, higher raise, the page the operator most wants.
+    # Measured with ``wc -l`` after ``ruff format``, not added up from the diff.
+    # The previous entry's #1621-part-4 and #1525 history follows.
+    #
     # Raised from 7254 for #1621 part 4. Routing the orphan-sweep, orphan and
     # protection-failure alerts through the throttle turns three one-line
     # ``deps.alert`` calls into three ``if deps.alert_throttled(...)`` blocks
@@ -151,9 +224,7 @@ BASELINE: dict[str, int] = {
     # rather than either branch's own number. Counted with ``wc -l`` on the
     # merged file, not added up from the two diffs.
     #
-    # 5 more to correct the #1621 comment's cadence: it quoted the SIM
-    # daemon's tick rate for the LIVE one, and names the measured mechanism.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7559,
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7945,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3302,

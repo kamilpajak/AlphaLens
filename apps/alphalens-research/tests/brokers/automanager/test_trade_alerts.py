@@ -87,6 +87,174 @@ class RenderEachKind(unittest.TestCase):
         self.assertIn("- trailed stop 62.42 -", text)
 
 
+class RenderStopStateKinds(unittest.TestCase):
+    """The two stop-state kinds (#1621 part 3). Neither is a fill: one says a
+    protective stop now rests at the venue, the other that its level moved up.
+    Both put their levels in the one reason slot, so the fixed field order is
+    unchanged — but neither opens with a SIDE, because nothing was sold."""
+
+    def test_every_kind_declares_a_lead_word(self) -> None:
+        # render() indexes _LEAD_BY_KIND, so a kind added without a lead word is
+        # a KeyError on the money path rather than a missing word.
+        self.assertEqual(set(ta._LEAD_BY_KIND), set(EventKind))
+
+    def test_a_stop_state_page_never_opens_with_a_SIDE(self) -> None:
+        # The left edge is all a thumb-scroll reads, and `SELL SMMT SL 34` is
+        # grammatically the line `SELL SMMT TP1 34` — which IS a sale of 34
+        # shares. A resting stop and an amended level sold nothing, so the two
+        # stop-state kinds must not borrow the word for "your shares left".
+        # Both directions asserted: the three kinds where shares moved or an
+        # order went to market KEEP their side.
+        #
+        # Honest limit: no mutation kills this test ALONE — every single-value
+        # change to `_LEAD_BY_KIND` also breaks a golden string in this module.
+        # What it adds is that it states the RULE, so the next change cannot
+        # satisfy it by updating a literal to match whatever the code now says.
+        sides = {"BUY", "SELL"}
+        for kind in (EventKind.STOP_PLACED, EventKind.STOP_RAISED):
+            with self.subTest(kind=kind):
+                lead = render(TradeEvent(kind=kind, ticker="SMMT", label="SL")).split(" ", 1)[0]
+                self.assertNotIn(lead, sides)
+        for kind in (EventKind.ENTRY_FILLED, EventKind.EXIT_FILLED, EventKind.EXIT_SUBMITTED):
+            with self.subTest(kind=kind):
+                lead = render(TradeEvent(kind=kind, ticker="SMMT", label="SL")).split(" ", 1)[0]
+                self.assertIn(lead, sides)
+
+    def test_stop_placed_names_the_quantity_and_the_level(self) -> None:
+        event = TradeEvent(
+            kind=EventKind.STOP_PLACED,
+            ticker="ASTS",
+            label="SL",
+            qty=7.0,
+            level=50.64,
+            order_id="5446399206",
+        )
+        self.assertEqual(
+            render(event), "PROTECTED ASTS SL 7 - stop placed 50.64 (order 5446399206)"
+        )
+
+    def test_stop_raised_names_the_cause_and_BOTH_levels(self) -> None:
+        # The old level is the point: "62.42" alone does not say how much the
+        # raise locked in, which is the whole reason #1621 asked for this page.
+        event = TradeEvent(
+            kind=EventKind.STOP_RAISED,
+            ticker="ASTS",
+            label="SL",
+            qty=None,
+            reason=ExitReason.TRAILED_STOP,
+            level=62.42304,
+            previous_level=50.64,
+        )
+        self.assertEqual(
+            render(event), "TRAIL ASTS SL - trailed stop resting 62.42 (raised from 50.64)"
+        )
+
+    def test_a_reanchored_raise_says_which_floor_moved_it(self) -> None:
+        event = TradeEvent(
+            kind=EventKind.STOP_RAISED,
+            ticker="OLN",
+            label="SL",
+            qty=None,
+            reason=ExitReason.REANCHORED_STOP,
+            level=15.0,
+            previous_level=9.0,
+        )
+        self.assertEqual(
+            render(event), "TRAIL OLN SL - re-anchored stop resting 15.00 (raised from 9.00)"
+        )
+
+    def test_a_raise_with_no_named_cause_still_reads_as_a_raise(self) -> None:
+        event = TradeEvent(
+            kind=EventKind.STOP_RAISED,
+            ticker="OLN",
+            label="SL",
+            qty=None,
+            level=15.0,
+            previous_level=9.0,
+        )
+        self.assertEqual(render(event), "TRAIL OLN SL - stop resting 15.00 (raised from 9.00)")
+
+    def test_no_stop_move_renders_ANY_exit_reason_as_a_fill_reason(self) -> None:
+        # ExitReason is shared with the fill kinds, so without the stop-move
+        # branch owning the slot a raise would read "trailed stop 62.42" —
+        # exactly the text a FILL at that level produces.
+        #
+        # Over EVERY reason and both stop-move kinds, not one golden event: the
+        # single-event version asserted the absence of a substring from a string
+        # its sibling already pinned by equality, so no mutation could kill it
+        # alone. This version catches a new `ExitReason` leaking the fill shape,
+        # which the golden string cannot.
+        for kind in (EventKind.STOP_PLACED, EventKind.STOP_RAISED):
+            for reason in ExitReason:
+                with self.subTest(kind=kind, reason=reason):
+                    event = TradeEvent(
+                        kind=kind,
+                        ticker="ASTS",
+                        label="SL",
+                        reason=reason,
+                        level=62.42304,
+                        previous_level=50.64,
+                    )
+                    self.assertNotIn(f"{reason.value} {ta.format_price(62.42304)}", render(event))
+
+    def test_the_two_levels_of_a_move_share_one_decimal_width(self) -> None:
+        # Per-price widths put `0.9801 -> 1.04` on one line: four decimals then
+        # two, so the reader cannot compare them digit by digit and has to do
+        # the arithmetic. One width for the message instead.
+        event = TradeEvent(
+            kind=EventKind.STOP_RAISED,
+            ticker="XELA",
+            label="SL",
+            reason=ExitReason.TRAILED_STOP,
+            level=1.04,
+            previous_level=0.9801,
+        )
+        self.assertEqual(
+            render(event), "TRAIL XELA SL - trailed stop resting 1.0400 (raised from 0.9801)"
+        )
+
+    def test_a_move_too_small_to_show_at_two_decimals_widens_rather_than_lie(self) -> None:
+        # The re-anchor arm has no step gate (`TRAIL_STEP_EPS` gates only the
+        # trail, against the ratchet floor), so a small later fill can shift the
+        # blend by a fraction of a cent and raise the resting stop by that much.
+        # At two decimals the one page sent for that move said the stop did not
+        # move, which teaches the reader to discount the whole stream.
+        event = TradeEvent(
+            kind=EventKind.STOP_RAISED,
+            ticker="OLN",
+            label="SL",
+            reason=ExitReason.REANCHORED_STOP,
+            level=15.0024,
+            previous_level=15.0014,
+        )
+        self.assertEqual(
+            render(event),
+            "TRAIL OLN SL - re-anchored stop resting 15.0024 (raised from 15.0014)",
+        )
+
+    def test_a_move_with_only_the_new_level_known_still_names_it(self) -> None:
+        # The half-known shape `_stop_move_text` carries. No call site produces
+        # it today — `StopRaise` declares both levels as plain floats — but the
+        # fields are optional, so the branch is what keeps a `None` off the
+        # money path as a formatting crash. Pinned rather than left dead.
+        event = TradeEvent(
+            kind=EventKind.STOP_RAISED,
+            ticker="OLN",
+            label="SL",
+            reason=ExitReason.TRAILED_STOP,
+            level=15.0,
+            previous_level=None,
+        )
+        self.assertEqual(render(event), "TRAIL OLN SL - trailed stop resting 15.00")
+
+    def test_an_omitted_quantity_leaves_no_dangling_separator(self) -> None:
+        event = TradeEvent(kind=EventKind.STOP_PLACED, ticker="ASTS", label="SL", qty=None)
+        text = render(event)
+        self.assertNotIn("None", text)
+        self.assertNotIn("  ", text)
+        self.assertEqual(text, "PROTECTED ASTS SL - stop placed")
+
+
 class RenderMissingFields(unittest.TestCase):
     """A field that is not known is left out. It is never printed as ``None``,
     and leaving it out never leaves a dangling separator behind."""
@@ -205,9 +373,10 @@ class RealMessagesFromIssue1621(unittest.TestCase):
         self.assertEqual(render(event), "BUY EWTX E1 11 @ 39.10 (order 5446900424)")
 
     def test_uber_plan_stop(self) -> None:
-        event = _exit(ticker="UBER", qty=8.0, price=67.99, order_id="5440923753")
+        event = _exit(ticker="UBER", label="SL", qty=8.0, price=67.99, order_id="5440923753")
         self.assertEqual(
-            render(event), "SELL UBER 8 @ 67.99 - plan stop - position closed (order 5440923753)"
+            render(event),
+            "SELL UBER SL 8 @ 67.99 - plan stop - position closed (order 5440923753)",
         )
 
     def test_smmt_take_profit(self) -> None:
@@ -228,6 +397,7 @@ class RealMessagesFromIssue1621(unittest.TestCase):
     def test_asts_trailed_stop(self) -> None:
         event = _exit(
             ticker="ASTS",
+            label="SL",
             qty=7.0,
             price=62.37,
             reason=ExitReason.TRAILED_STOP,
@@ -236,8 +406,16 @@ class RealMessagesFromIssue1621(unittest.TestCase):
         )
         self.assertEqual(
             render(event),
-            "SELL ASTS 7 @ 62.37 - trailed stop 62.42 - position closed (order 5446399206)",
+            "SELL ASTS SL 7 @ 62.37 - trailed stop 62.42 - position closed (order 5446399206)",
         )
+
+    # The ASTS raise #1621 was written for lives in
+    # ``test_live_exits_pass.TestStopRaisePagesTheOperator``, driven through the
+    # real pass from its journal values. Restating it here as a hand-built
+    # event made it byte-identical to
+    # ``RenderStopStateKinds.test_stop_raised_names_the_cause_and_BOTH_levels``
+    # -- every mutation killed both, so it counted a formatter unit test twice
+    # in the class a reviewer reads for end-to-end realism.
 
 
 if __name__ == "__main__":

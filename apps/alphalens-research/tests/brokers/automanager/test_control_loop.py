@@ -4140,6 +4140,95 @@ class TestBrokerErrorBoundary(IsolatedHomeTestCase):
             self.assertEqual(deps.audit_budget.spent, 0, "budget resets at tick start")
             self.assertEqual(report.audits_deferred, 0)
 
+    def test_the_pages_are_sent_after_the_protection_pass_and_even_if_it_raises(self) -> None:
+        # Where the two stop pages of #1621 part 3 actually go out. They are
+        # queued where their facts are and drained HERE, because the sink is a
+        # synchronous POST bounded at 34-64 s (unbounded when DNS hangs) and
+        # `_run_protection_pass` is the never-naked backstop.
+        #
+        # Two claims. The drain runs AFTER both passes -- a drain before them
+        # would put the sink back in front of protection, which is the whole
+        # defect. And it runs even when a pass raises something that is not a
+        # `BrokerError`, because a page the operator never gets is the loss this
+        # part exists to fix; `run_once` has no boundary of its own at its
+        # caller, so the `finally` is what guarantees it.
+        for label, boom in (("a clean pass", None), ("a pass that raises", RuntimeError("boom"))):
+            with self.subTest(label):
+                order: list[str] = []
+                with TemporaryDirectory() as d:
+                    deps = _deps(
+                        _StubBroker(),
+                        kill_file=Path(d) / "KILL",
+                        verdicts=[],
+                        place_calls=[],
+                        alerts=[],
+                    )
+
+                    def _exits(_deps: Any, _report: Any, order: list[str] = order) -> None:
+                        order.append("live-exits")
+
+                    def _protection(
+                        *_a: Any, _boom: Any = boom, order: list[str] = order, **_k: Any
+                    ) -> None:
+                        order.append("protection")
+                        if _boom is not None:
+                            raise _boom
+
+                    def _drain(_report: Any, order: list[str] = order) -> None:
+                        order.append("drain")
+
+                    with mock.patch.object(cl, "_run_live_exits_pass", _exits):
+                        with mock.patch.object(cl, "_run_protection_pass", _protection):
+                            with mock.patch.object(cl, "_drain_pages", _drain):
+                                if boom is None:
+                                    cl.run_once(deps)
+                                else:
+                                    with self.assertRaises(RuntimeError):
+                                        cl.run_once(deps)
+
+                # The WHOLE order, not just the last entry: a drain added before
+                # the protection pass still leaves "drain" last, because the
+                # `finally` drains the (now empty) queue again.
+                self.assertEqual(order, ["live-exits", "protection", "drain"])
+
+    def test_the_fill_wake_protection_pass_drains_its_own_pages(self) -> None:
+        # The #1402 fast protection pass runs OUTSIDE a tick, on its own report,
+        # and it PLACES stops -- so it computes stop-placed pages. Nothing else
+        # ever sees that report, so if it does not drain, the page for the stop
+        # that the fast pass placed is dropped and never retried (the next full
+        # tick finds the stop already resting and places nothing). Asserted for
+        # the raising pass too: the broad catch there must not eat the page.
+        for label, boom in (("a clean pass", None), ("a pass that raises", RuntimeError("boom"))):
+            with self.subTest(label):
+                sent: list[str] = []
+
+                def _protection(
+                    _deps: Any,
+                    _records: Any,
+                    _kill: Any,
+                    report: Any,
+                    *,
+                    _boom: Any = boom,
+                    sent: list[str] = sent,
+                    **_k: Any,
+                ) -> None:
+                    cl._queue_page(lambda: bool(sent.append("page")) or True, report, what="x")
+                    if _boom is not None:
+                        raise _boom
+
+                with TemporaryDirectory() as d:
+                    deps = _deps(
+                        _StubBroker(),
+                        kill_file=Path(d) / "KILL",
+                        verdicts=[],
+                        place_calls=[],
+                        alerts=[],
+                    )
+                    with mock.patch.object(cl, "_run_protection_pass", _protection):
+                        cl._run_fill_wake_protection(deps)  # must not raise
+
+                self.assertEqual(sent, ["page"], "the fast pass's page still goes out")
+
     def test_run_once_reports_the_pass_deferral_counter(self) -> None:
         with TemporaryDirectory() as d:
             deps = _deps(
@@ -4764,6 +4853,303 @@ class TestExecutePlaceStopJournalsStopPlaced(IsolatedHomeTestCase):
                 self.assertEqual(lines, [], f"no stop_placed on the {label} path")
 
 
+class _KeyedThrottle(cl._AlertThrottle):
+    """An ``_AlertThrottle`` that records every emit attempt with its KEY, so a
+    test can assert on what the key discriminates and not only on the text."""
+
+    def __init__(self, sent: list[str]) -> None:
+        super().__init__(sent.append)
+        self.calls: list[tuple[str, int | None, str | None]] = []
+
+    def emit(self, message: str, *, uic: int | None = None, reason: str | None = None) -> bool:
+        self.calls.append((message, uic, reason))
+        return super().emit(message, uic=uic, reason=reason)
+
+
+_TRAIL_STOP_REF = "KO-2026-08-01-entry-t0-stop-1"
+
+
+class TestStopPlacedPagesTheOperator(IsolatedHomeTestCase):
+    """#1621 part 3 (B): a confirmed standalone-stop placement must reach the
+    operator. Before this the success branch only counted the place, recorded it
+    and journaled it — every alert in ``_execute_place_stop`` was a failure or a
+    defer branch, so the one thing the owner cannot infer from silence (that a
+    fresh position is now protected) was the one thing never said.
+
+    It matters more than the issue knew: the window between an entry filling at
+    the venue and its disaster stop being journaled was measured at 6.2-18.8 s
+    over 7 LIVE entries (#1402). This page is what closes that window for the
+    operator, and its ABSENCE after an expected entry is the signal."""
+
+    def _place(
+        self,
+        *,
+        broker: _ProtBroker,
+        ref: str = _TRAIL_STOP_REF,
+        qty: float = 46.0,
+        supersede_ids: tuple[str, ...] = (),
+    ) -> tuple[_KeyedThrottle, cl.TickReport]:
+        sent: list[str] = []
+        throttle = _KeyedThrottle(sent)
+        executor = cl._make_protection_executor(broker, throttle)
+        action = PlaceStop(_UIC, "SELL", qty, 216.48, ref, supersede_ids=supersede_ids)
+        report = cl.TickReport()
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(
+                sj, "_standalone_stop_journal_path", lambda journal=journal: journal
+            ):
+                executor(action, False, report)
+        # The page is QUEUED by the action and sent by the drain, which in
+        # production runs after every protective action of the tick. Nothing
+        # reaches the sink until it does — that is asserted on its own in
+        # ``test_the_page_is_not_sent_inside_the_protection_action``.
+        cl._drain_pages(report)
+        return throttle, report
+
+    def _pages(self, throttle: _KeyedThrottle) -> list[tuple[str, int | None, str | None]]:
+        return [call for call in throttle.calls if "stop placed" in call[0]]
+
+    def test_the_page_carries_the_ticker_quantity_and_level(self) -> None:
+        throttle, report = self._place(broker=_ProtBroker(by_uic={_UIC: _pos(46.0)}))
+        pages = self._pages(throttle)
+        self.assertEqual(len(pages), 1, f"exactly one page; got {throttle.calls}")
+        self.assertEqual(pages[0][0], "PROTECTED KO SL 46 - stop placed 216.48 (order S-1)")
+        self.assertEqual(report.alerts, 1)
+
+    def test_a_re_place_of_the_same_order_dedups_and_is_not_counted_twice(self) -> None:
+        # The shared daemon-lifetime throttle suppresses the repeat, and a page
+        # that was SUPPRESSED is not a page the operator got — so it must not
+        # land in report.alerts either. Both emits are attempted; only one is
+        # sent.
+        sent: list[str] = []
+        throttle = _KeyedThrottle(sent)
+        broker = _ProtBroker(by_uic={_UIC: _pos(46.0)})
+        executor = cl._make_protection_executor(broker, throttle)
+        action = PlaceStop(_UIC, "SELL", 46.0, 216.48, _TRAIL_STOP_REF)
+        report = cl.TickReport()
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(
+                sj, "_standalone_stop_journal_path", lambda journal=journal: journal
+            ):
+                executor(action, False, report)
+                executor(action, False, report)
+        cl._drain_pages(report)
+        self.assertEqual(len(self._pages(throttle)), 2, "both emits were attempted")
+        self.assertEqual(len([a for a in sent if "stop placed" in a]), 1, "one went out")
+        self.assertEqual(report.alerts, 1, "only the page that went out is counted")
+
+    def test_the_page_names_the_uic_when_the_ref_carries_no_ticker(self) -> None:
+        # A classic bracket ref is not the entry-trail shape, so no ticker can
+        # be recovered from it. The page must still identify the instrument —
+        # the same fallback the stop-FILL alert uses.
+        throttle, _report = self._place(
+            broker=_ProtBroker(by_uic={_UIC: _pos(46.0)}), ref="crid-0-stop-0"
+        )
+        self.assertEqual(
+            self._pages(throttle)[0][0],
+            f"PROTECTED uic {_UIC} SL 46 - stop placed 216.48 (order S-1)",
+        )
+
+    def test_the_page_carries_the_qty_ACTUALLY_placed(self) -> None:
+        # The execute-time re-check clips 46 -> 20. A page quoting the stale
+        # action qty would tell the operator that 46 shares are covered.
+        throttle, _report = self._place(broker=_ProtBroker(by_uic={_UIC: _pos(20.0)}))
+        self.assertIn("SL 20 ", self._pages(throttle)[0][0])
+
+    def test_the_throttle_key_is_the_broker_order_id(self) -> None:
+        # The order id is what makes two placements distinct: a re-place after a
+        # rotation or a supersede reuses neither the id nor the resting order,
+        # and the operator needs to hear about the replacement. Keying on the
+        # uic alone would page for the first stop of the session and hide every
+        # later one (the #1766 orphan-key lesson); keying on the ref alone would
+        # merge a same-gen retry with the real second place.
+        throttle, _report = self._place(broker=_ProtBroker(by_uic={_UIC: _pos(46.0)}))
+        self.assertEqual(self._pages(throttle)[0][1:], (_UIC, "stop-placed:S-1"))
+
+    def test_the_page_is_not_sent_inside_the_protection_action(self) -> None:
+        # The money-path rule, and the reason the page is queued rather than
+        # sent where it is computed. `_execute_place_stop` runs inside the
+        # SERIAL per-action loop of `_run_protection_pass`, and the real sink is
+        # a synchronous POST: the canonical `TelegramClient` is built with no
+        # timeout, so 10 s applies over 3 attempts with 1 s + 3 s backoffs --
+        # 34 s of block when the read hangs, 64 s when connect and read each
+        # burn the window, and unbounded when name resolution hangs, because
+        # `socket.getaddrinfo` runs before the connect timeout applies. Sent
+        # here, that lands between THIS uic's confirmed stop and the NEXT uic's,
+        # so with three uics the last one is naked for over a minute.
+        #
+        # So: the action may only APPEND. Nothing reaches the sink until the
+        # drain, which `run_once` calls after the protection pass.
+        sent: list[str] = []
+        throttle = _KeyedThrottle(sent)
+        broker = _ProtBroker(by_uic={_UIC: _pos(46.0)})
+        executor = cl._make_protection_executor(broker, throttle)
+        action = PlaceStop(_UIC, "SELL", 46.0, 216.48, _TRAIL_STOP_REF)
+        report = cl.TickReport()
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(
+                sj, "_standalone_stop_journal_path", lambda journal=journal: journal
+            ):
+                executor(action, False, report)
+
+        self.assertEqual(len(broker.placed), 1, "the stop went to the broker")
+        self.assertEqual(throttle.calls, [], "no sink call inside the protective action")
+        self.assertEqual(report.alerts, 0, "and nothing counted yet")
+        self.assertEqual(
+            [what for what, _send in report.pending_pages],
+            ["stop-placed"],
+            "the page is queued for the drain instead",
+        )
+        cl._drain_pages(report)
+        self.assertEqual(len(self._pages(throttle)), 1, "and the drain is what sends it")
+        self.assertEqual(report.pending_pages, [], "a drained queue does not re-send")
+
+    def test_a_supersede_cancel_that_raises_does_not_cost_the_page(self) -> None:
+        # The page used to be the LAST statement of the success branch, behind
+        # the supersede loop, and `_idempotent_cancel` re-raises a cancel error
+        # that is not "already gone". The stop IS resting, so the next tick
+        # places nothing and never re-pages: the page was not delayed, it was
+        # gone -- in exactly the scenario where two live sell stops may now sit
+        # on the same shares (#878) and the operator most needs to be told.
+        #
+        # Queued immediately after the confirmed place instead. That does not
+        # break the confirmed-place -> supersede-cancel adjacency the comment
+        # there protects, because a queue append is not fallible and not a
+        # network call; it is the SEND that may not sit in that window, and the
+        # send is the drain, after the whole protection pass.
+        sent: list[str] = []
+        throttle = _KeyedThrottle(sent)
+        broker = _ProtBroker(
+            by_uic={_UIC: _pos(46.0)}, cancel_errors={"old-stop": BrokerError("saxo 503 on cancel")}
+        )
+        executor = cl._make_protection_executor(broker, throttle)
+        action = PlaceStop(_UIC, "SELL", 46.0, 216.48, _TRAIL_STOP_REF, supersede_ids=("old-stop",))
+        report = cl.TickReport()
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(
+                sj, "_standalone_stop_journal_path", lambda journal=journal: journal
+            ):
+                with self.assertRaises(BrokerError):
+                    executor(action, False, report)
+        self.assertEqual(len(broker.placed), 1, "the stop did go to the broker")
+        cl._drain_pages(report)
+        self.assertEqual(
+            len(self._pages(throttle)), 1, "so the operator hears that it is protected"
+        )
+
+    def test_an_adapter_that_returns_no_order_id_still_distinguishes_two_places(self) -> None:
+        # The key's fallback, which `_ProtBroker` could not reach because it
+        # always returns "S-1": removing `or action.request_id` entirely left
+        # the whole broker suite green, and the fallback it stands for COLLAPSED
+        # two distinct placements, the exact failure the key exists to avoid.
+        # The ref is deterministic, so the first stop and a supersede re-place
+        # at a RAISED level shared one key and the second was suppressed -- the
+        # operator told the stop rests at 216.48 while it rests at 230.00.
+        #
+        # Only Saxo places today and it raises rather than return an empty id,
+        # so this is about the next adapter. The fallback carries the LEVEL and
+        # the quantity now, which is what makes two placements under one ref
+        # distinct.
+        class _NoIdBroker(_ProtBroker):
+            def place_standalone_stop(
+                self,
+                uic: int,
+                side: str,
+                qty: float,
+                stop_price: float,
+                request_id: str | None = None,
+            ) -> PlacedOrder:
+                super().place_standalone_stop(uic, side, qty, stop_price, request_id)
+                return PlacedOrder(entry_order_id="", exit_order_ids=())
+
+        sent: list[str] = []
+        throttle = _KeyedThrottle(sent)
+        broker = _NoIdBroker(by_uic={_UIC: _pos(46.0)})
+        executor = cl._make_protection_executor(broker, throttle)
+        report = cl.TickReport()
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(
+                sj, "_standalone_stop_journal_path", lambda journal=journal: journal
+            ):
+                for level in (216.48, 230.00):
+                    executor(PlaceStop(_UIC, "SELL", 46.0, level, _TRAIL_STOP_REF), False, report)
+        cl._drain_pages(report)
+
+        pages = self._pages(throttle)
+        self.assertEqual(len(pages), 2, f"both placements were attempted; got {pages}")
+        self.assertNotEqual(pages[0][2], pages[1][2], "under two distinct keys")
+        self.assertEqual(
+            [a for a in sent if "stop placed" in a],
+            [
+                "PROTECTED KO SL 46 - stop placed 216.48",
+                "PROTECTED KO SL 46 - stop placed 230.00",
+            ],
+            "so the operator hears about the stop that actually rests",
+        )
+
+    def test_no_page_on_any_path_that_did_not_place(self) -> None:
+        failures = {
+            "flat-skip": _ProtBroker(by_uic={_UIC: _pos(0.0)}),
+            "defer-sell-exist": _ProtBroker(
+                by_uic={_UIC: _pos(46.0)},
+                place_error=OrderRejectedError(
+                    "blocked", error_code="SellOrdersAlreadyExistForOwnedContracts"
+                ),
+            ),
+            "clean-reject": _ProtBroker(
+                by_uic={_UIC: _pos(46.0)}, place_error=OrderRejectedError("rejected")
+            ),
+            "broker-error": _ProtBroker(by_uic={_UIC: _pos(46.0)}, place_error=BrokerError("boom")),
+        }
+        for label, broker in failures.items():
+            with self.subTest(label):
+                throttle, report = self._place(broker=broker)
+                self.assertEqual(self._pages(throttle), [], f"no page on the {label} path")
+                self.assertEqual(report.exits_placed, 0)
+
+    def test_an_alert_sink_that_raises_never_aborts_the_protection_pass(self) -> None:
+        # The page is off the per-action path now, but a raise out of the drain
+        # would still escape the per-action ``except BrokerError`` boundary in
+        # ``_run_protection_pass`` and abort the tick before the pages of the
+        # actions behind it.
+        class _ExplodingThrottle(cl._AlertThrottle):
+            def emit(
+                self, message: str, *, uic: int | None = None, reason: str | None = None
+            ) -> bool:
+                raise RuntimeError("telegram down")
+
+        broker = _ProtBroker(by_uic={_UIC: _pos(46.0)})
+        executor = cl._make_protection_executor(broker, _ExplodingThrottle(lambda _m: None))
+        action = PlaceStop(_UIC, "SELL", 46.0, 216.48, _TRAIL_STOP_REF, supersede_ids=("old-stop",))
+        report = cl.TickReport()
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(
+                sj, "_standalone_stop_journal_path", lambda journal=journal: journal
+            ):
+                with self.assertLogs(cl.logger, level="WARNING") as captured:
+                    executor(action, False, report)  # must NOT raise
+                    cl._drain_pages(report)  # nor must this
+                placed_lines = [
+                    line
+                    for line in sj._iter_standalone_stop_journal()
+                    if line.get("kind") == "stop_placed"
+                ]
+        self.assertEqual(len(broker.placed), 1, "the stop still went to the broker")
+        self.assertEqual(broker.cancelled, ["old-stop"], "the supersede cancel still ran")
+        self.assertEqual(len(placed_lines), 1, "the outcome record was still written")
+        self.assertEqual(report.alerts, 0, "a page that never went out is not counted")
+        self.assertTrue(
+            any("stop-placed page failed" in line for line in captured.output),
+            f"the swallowed failure must still be visible; got {captured.output}",
+        )
+
+
 class TestOutcomeJournalIoFailureNeverBlocksProtection(IsolatedHomeTestCase):
     """The ``stop_placed`` / ``amend_ok`` outcome records are observability-only,
     so a fallible journal append (OSError: disk full, ENOSPC on fsync, permission)
@@ -4930,6 +5316,44 @@ class TestAlertThrottleByUicReason(IsolatedHomeTestCase):
         clock["t"] = 1801.0
         self.assertTrue(throttle.emit("naked", uic=1, reason="deficit"))
         self.assertEqual(len(sent), 3)
+
+    def test_keys_older_than_the_interval_are_not_kept(self) -> None:
+        # The dedup map used to grow for the daemon's whole lifetime. That was
+        # harmless while every key was an IDENTIFIER minting a few entries a day
+        # (`stop-fill:<order id>`, `entry-trail:fired:<crid>`), and the
+        # stop-raised key is the first keyed on a continuously varying NUMBER:
+        # the trail amends on every 2-cent advance (`TRAIL_STEP_EPS`), so one
+        # trending afternoon mints a key per step, and a month between deploys
+        # reaches tens of thousands of entries (measured: 50 000 keys hold
+        # ~10 MB). Nothing read them -- a key older than the interval can no
+        # longer suppress anything -- so dropping them changes no decision.
+        sent: list[str] = []
+        clock = {"t": 0.0}
+        throttle = cl._AlertThrottle(sent.append, clock=lambda: clock["t"], interval_s=1800.0)
+        for step in range(50):
+            throttle.emit("raised", uic=1, reason=f"stop-raised:1:{14.0 + 0.02 * step:.6f}")
+            clock["t"] += 45.0  # one poll tick apart
+        self.assertEqual(len(sent), 50, "every new level still pages")
+
+        clock["t"] += 1801.0  # the whole interval elapses
+        throttle.emit("raised", uic=1, reason="stop-raised:1:99.000000")
+
+        # The one key that can still suppress a repeat is the one just sent.
+        self.assertEqual(
+            list(throttle._last_sent), [(1, "stop-raised:1:99.000000")], "the rest are dropped"
+        )
+
+    def test_a_key_inside_the_interval_survives_a_later_emit(self) -> None:
+        # The other half of the eviction: it must not drop a key that can still
+        # suppress a repeat, or the throttle stops throttling.
+        sent: list[str] = []
+        clock = {"t": 0.0}
+        throttle = cl._AlertThrottle(sent.append, clock=lambda: clock["t"], interval_s=1800.0)
+        self.assertTrue(throttle.emit("a", uic=1, reason="first"))
+        clock["t"] += 10.0
+        self.assertTrue(throttle.emit("b", uic=1, reason="second"))
+        self.assertFalse(throttle.emit("a", uic=1, reason="first"), "still suppressed")
+        self.assertEqual(len(sent), 2)
 
     def test_consecutive_failures_escalate_once_then_backoff(self) -> None:
         sent: list[str] = []

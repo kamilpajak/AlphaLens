@@ -18,7 +18,8 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import stop_journal as sj
-from broker_contract.contract import InstrumentRef, Position
+from alphalens_pipeline.brokers.automanager import trade_alerts as ta
+from broker_contract.contract import BrokerError, InstrumentRef, Position
 from broker_contract.price_feed import PricePoint
 from broker_contract.sizing import TpTranchePlan
 
@@ -1077,6 +1078,537 @@ class TestOpenPositionsStayManagedWhenTheTrailIsDisabled(_JournalCase):
             cl._run_live_exits_pass(deps, report)
         self.assertEqual(report.exits_placed, 1)
         self.assertEqual(broker.get_positions_by_uic(uic).quantity, 0.0)
+
+
+class TestStopRaisePagesTheOperator(_JournalCase):
+    """#1621 part 3 (A): a stop that RAISES must reach the operator.
+
+    On 2026-09-29 an ASTS stop moved 50.64 -> 62.42, locking in +0.36R, and the
+    first message the owner saw was the fill hours later. The raise was already
+    computed and already de-noised once per level in ``_journaled_stop_floor``;
+    its only sink was ``logger.info``, which on the VPS means journald and
+    nobody.
+
+    The emit is the CALLER's, not the pure build's: ``_build_managed_exits``
+    holds no alert sink and knows no tickers (the ``_announce_fired_tranches``
+    precedent), so the raise travels out on ``raised`` and is rendered here.
+    """
+
+    _PLAN_STOP = 13.0
+    _TRAILED = 14.5
+
+    def _pages(self) -> tuple[list[tuple[str, str]], cl.TickReport, int]:
+        broker = FakeBroker()
+        uic = broker.uic_of("KO")
+        broker.set_position("KO", 100, avg_price=15.0)
+        broker.add_resting_sell("KO", 100, self._PLAN_STOP, order_type="StopIfTraded")
+        # A target far above the feed price, so the only thing this tick does is
+        # the raise — the tranche-fired page would otherwise confound the count.
+        self._seed_tranche_plan(
+            uic,
+            tranches=(_tr(0, 99.0, 0.5),),
+            reference_qty=100.0,
+            stop_price=self._PLAN_STOP,
+            pick_key="KO:2026-09-29",
+        )
+        sj._journal_trailed(uic, self._TRAILED, peak=14.9, last_price=14.8)
+        pages: list[tuple[str, str]] = []
+        deps = _deps(
+            broker,
+            alerts=[],
+            live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 16.5}),
+            alert_throttled=lambda msg, reason: pages.append((msg, reason)) or True,
+        )
+        report = cl.TickReport()
+        with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+            cl._run_live_exits_pass(deps, report)
+        # The pass QUEUES the page; ``run_once`` drains after the protection
+        # pass, so nothing reaches the sink inside the pass itself. That
+        # ordering has its own test below.
+        cl._drain_pages(report)
+        return pages, report, uic
+
+    def test_the_page_carries_the_ticker_the_label_and_both_levels(self) -> None:
+        pages, _report, _uic = self._pages()
+        raised = [msg for msg, _key in pages if "raised" in msg]
+        self.assertEqual(len(raised), 1, f"exactly one raise page; got {pages}")
+        self.assertEqual(raised[0], "TRAIL KO SL - trailed stop resting 14.50 (raised from 13.00)")
+
+    def test_the_page_is_counted_in_the_report(self) -> None:
+        _pages, report, _uic = self._pages()
+        self.assertEqual(report.alerts, 1)
+
+    def test_a_restart_re_pages_the_same_raise_and_the_text_is_still_true(self) -> None:
+        # Both suppressors are PROCESS-local: ``stop_raises_announced`` is a
+        # field on the per-daemon deps and the throttle's last-sent map is built
+        # per process. So a deploy or one `Restart=on-failure` bounce re-derives
+        # the held raise from the journal and pages it AGAIN. The decision was to
+        # word the page so that repeat is not a lie, rather than to persist the
+        # announce map: the page states where the stop RESTS, which is true
+        # whether it just moved or moved on Monday, and still carries the level
+        # it came from.
+        #
+        # A past-tense event sentence here read as "the stop just jumped 1.50",
+        # which is the #1621 point-7 defect class in the page part 3 adds to fix
+        # point 6.
+        broker = FakeBroker()
+        uic = broker.uic_of("KO")
+        broker.set_position("KO", 100, avg_price=15.0)
+        broker.add_resting_sell("KO", 100, self._PLAN_STOP, order_type="StopIfTraded")
+        self._seed_tranche_plan(
+            uic, tranches=(_tr(0, 99.0, 0.5),), reference_qty=100.0, stop_price=self._PLAN_STOP
+        )
+        sj._journal_trailed(uic, self._TRAILED, peak=14.9, last_price=14.8)
+        pages: list[tuple[str, str]] = []
+
+        def _a_fresh_daemon() -> cl.LoopDeps:
+            """What a restart leaves: an empty announce map and a new throttle."""
+            return _deps(
+                broker,
+                alerts=[],
+                live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 16.5}),
+                alert_throttled=lambda msg, reason: pages.append((msg, reason)) or True,
+            )
+
+        def _tick(deps: cl.LoopDeps) -> None:
+            report = cl.TickReport()
+            cl._run_live_exits_pass(deps, report)
+            cl._drain_pages(report)
+
+        with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+            _tick(_a_fresh_daemon())
+            second = _a_fresh_daemon()  # the daemon restarted; nothing was persisted
+            _tick(second)
+
+            raised = [msg for msg, _key in pages if "resting" in msg]
+            self.assertEqual(len(raised), 2, f"the restart re-pages; got {pages}")
+            self.assertEqual(raised[0], raised[1], "the same fact must read the same way twice")
+            self.assertIn("resting 14.50", raised[1], "a state line, true on a restart echo")
+
+            # And the "from" level after a restart is the PLAN stop, not the
+            # level the previous process announced -- there is nowhere to read
+            # that from. Second phase: the SAME process sees a further raise to
+            # 15.50 and reads "from" off its own announce map, then the daemon
+            # restarts and re-derives. The echo says "resting 15.50 (raised from
+            # 13.00)", which the state wording keeps TRUE -- the stop does rest
+            # at 15.50, and over this position's life it did come from 13.00.
+            # The event wording would have claimed a 2.50 jump this instant.
+            sj._journal_trailed(uic, 15.5, peak=15.9, last_price=15.8)
+            _tick(second)
+            _tick(_a_fresh_daemon())
+
+        resting = [msg for msg, _key in pages if "resting" in msg]
+        self.assertEqual(
+            resting[2:],
+            [
+                "TRAIL KO SL - trailed stop resting 15.50 (raised from 14.50)",
+                "TRAIL KO SL - trailed stop resting 15.50 (raised from 13.00)",
+            ],
+            f"within a process it reads from the announced level, after a restart "
+            f"from the plan stop; got {resting}",
+        )
+
+    def test_the_throttle_key_carries_the_uic_and_the_level(self) -> None:
+        # The level is IN the key on purpose. Each distinct level is a distinct
+        # fact (it says how much was locked in), and the orphan-key lesson of
+        # #1766 is that a key built from less than the distinguishing facts
+        # pages for the first event and HIDES the rest. The once-per-level
+        # ``announced`` guard already suppresses the steady state, so the only
+        # thing a level-less key could add is suppressing a SECOND, higher
+        # raise — the page the operator most wants.
+        pages, _report, uic = self._pages()
+        keys = [key for msg, key in pages if "raised" in msg]
+        self.assertEqual(keys, [f"stop-raised:{uic}:13.000000:14.500000"])
+
+    def test_a_re_anchored_floor_pages_its_OWN_cause(self) -> None:
+        # Every other fixture in this class journals only a `trailed` level, so
+        # the cause column is uniform and the page cannot tell a real read of
+        # the winning floor from a constant: hard-coding
+        # `reason=ExitReason.TRAILED_STOP` on the `StopRaise` left all 3588
+        # broker tests green, as did having the re-anchored arm report the
+        # trailed cause, as did `raises[0]` in place of `raises[-1]`.
+        #
+        # Here the only journaled floor is a RE-ANCHORED one, so the two arms
+        # are distinguishable, and the second case drives BOTH arms in one tick
+        # with the re-anchor higher -- which is what pins `raises[-1]`, the rule
+        # that the LAST arm to fire owns the level actually placed.
+        for label, trailed, expected in (
+            (
+                "re-anchor alone",
+                None,
+                "TRAIL KO SL - re-anchored stop resting 15.00 (raised from 13.00)",
+            ),
+            (
+                "both arms, the re-anchor last",
+                14.0,
+                "TRAIL KO SL - re-anchored stop resting 15.00 (raised from 13.00)",
+            ),
+        ):
+            with self.subTest(label):
+                broker = FakeBroker()
+                uic = broker.uic_of("KO")
+                broker.set_position("KO", 100, avg_price=15.0)
+                broker.add_resting_sell("KO", 100, self._PLAN_STOP, order_type="StopIfTraded")
+                self._seed_tranche_plan(
+                    uic,
+                    tranches=(_tr(0, 99.0, 0.5),),
+                    reference_qty=100.0,
+                    stop_price=self._PLAN_STOP,
+                )
+                if trailed is not None:
+                    sj._journal_trailed(uic, trailed, peak=16.0, last_price=15.9)
+                sj._journal_reanchored(uic, avg_price=15.0, stop_price=15.0)
+                pages: list[tuple[str, str]] = []
+                deps = _deps(
+                    broker,
+                    alerts=[],
+                    live_exits_feed_factory=lambda m, *, scope, uic=uic: _FakeFeed({uic: 16.5}),
+                    alert_throttled=(
+                        lambda msg, reason, pages=pages: pages.append((msg, reason)) or True
+                    ),
+                )
+                report = cl.TickReport()
+                with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+                    cl._run_live_exits_pass(deps, report)
+                cl._drain_pages(report)
+                self.assertEqual([msg for msg, _k in pages if "resting" in msg], [expected])
+
+    def test_the_asts_raise_the_owner_was_never_told_about(self) -> None:
+        # 2026-09-29, the case #1621 was written for: the stop moved 50.64 ->
+        # 62.42, locking in +0.36R, and the first message the owner saw was the
+        # fill hours later. The two levels are the ones that position's real
+        # `tranche_plan` and `trailed` journal lines carry, and the page is
+        # produced by the pass rather than by a hand-built formatter event --
+        # restated as an event it was byte-identical to a formatter unit test.
+        broker = FakeBroker()
+        uic = broker.uic_of("KO")  # the fake's instrument; the levels are ASTS's
+        broker.set_position("KO", 7, avg_price=55.0)
+        broker.add_resting_sell("KO", 7, 50.64, order_type="StopIfTraded")
+        self._seed_tranche_plan(
+            uic, tranches=(_tr(0, 999.0, 0.5),), reference_qty=7.0, stop_price=50.64
+        )
+        sj._journal_trailed(uic, 62.42304, peak=65.0, last_price=64.0)
+        pages: list[tuple[str, str]] = []
+        deps = _deps(
+            broker,
+            alerts=[],
+            live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 64.0}),
+            alert_throttled=lambda msg, reason: pages.append((msg, reason)) or True,
+        )
+        report = cl.TickReport()
+        with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+            cl._run_live_exits_pass(deps, report)
+        cl._drain_pages(report)
+        self.assertEqual(
+            [msg for msg, _k in pages if "resting" in msg],
+            ["TRAIL KO SL - trailed stop resting 62.42 (raised from 50.64)"],
+        )
+
+    def test_the_key_hides_a_repeat_and_lets_a_HIGHER_raise_through(self) -> None:
+        # What the key is FOR, as behaviour. Every other test in this class
+        # replaces the throttle with a lambda that always returns True, so a key
+        # that stopped discriminating while still rendering a plausible string
+        # would go unnoticed: all four single-edit mutations of
+        # `_stop_raised_alert_key` reddened only the literal-string test.
+        #
+        # Here a REAL `_AlertThrottle` with a frozen clock decides, so the
+        # observation is what the operator gets: the same level inside the
+        # interval is one page, and a higher level inside the same interval is
+        # another -- the page most worth having, and the one a level-less key
+        # would hide.
+        # The last pair differs only BELOW the two decimals the page renders, so
+        # it is also what makes the key's six decimals behavioural rather than a
+        # literal: at the rendered width those are one key and the second stop
+        # is hidden.
+        sent: list[str] = []
+        clock = {"t": 1000.0}
+        throttle = cl._AlertThrottle(sent.append, clock=lambda: clock["t"])
+        for level in (14.5, 14.5, 15.5, 15.0014, 15.0024):
+            raise_ = cl.StopRaise(
+                uic=40000,
+                plan_stop=13.0,
+                previous=13.0,
+                level=level,
+                reason=ta.ExitReason.TRAILED_STOP,
+            )
+            throttle.emit(
+                f"stop at {level}", uic=raise_.uic, reason=cl._stop_raised_alert_key(raise_)
+            )
+            clock["t"] += 1.0  # well inside the re-alert interval
+
+        self.assertEqual(
+            sent, ["stop at 14.5", "stop at 15.5", "stop at 15.0014", "stop at 15.0024"]
+        )
+
+    def test_a_NEW_position_on_the_same_uic_is_not_hidden_by_the_old_one(self) -> None:
+        # `_build_managed_exits` deliberately clears the announce entry for a
+        # uic that left `managed`, "so a later position on the uic is announced
+        # afresh" -- and the throttle key defeated that, because it carried only
+        # the uic and the level. A ticker exited and re-armed the same session
+        # whose new trail reached the same round level inside the re-alert
+        # interval sent NO page, so the operator believed the fresh position's
+        # stop was still at its disaster level. The two pages even differ in
+        # text, since the new plan carries its own stop.
+        #
+        # The plan's own disaster stop is in the key now. It changes with the
+        # plan generation, and two raises that share a uic, a plan stop AND a
+        # level are genuinely the same fact.
+        sent: list[str] = []
+        clock = {"t": 1000.0}
+        throttle = cl._AlertThrottle(sent.append, clock=lambda: clock["t"])
+        for plan_stop in (13.0, 13.5):
+            raise_ = cl.StopRaise(
+                uic=40000,
+                plan_stop=plan_stop,
+                previous=plan_stop,
+                level=14.5,
+                reason=ta.ExitReason.TRAILED_STOP,
+            )
+            event = ta.TradeEvent(
+                kind=ta.EventKind.STOP_RAISED,
+                ticker="KO",
+                label="SL",
+                reason=raise_.reason,
+                level=raise_.level,
+                previous_level=raise_.previous,
+            )
+            throttle.emit(
+                ta.render(event), uic=raise_.uic, reason=cl._stop_raised_alert_key(raise_)
+            )
+            clock["t"] += 60.0  # well inside the interval
+
+        self.assertEqual(
+            sent,
+            [
+                "TRAIL KO SL - trailed stop resting 14.50 (raised from 13.00)",
+                "TRAIL KO SL - trailed stop resting 14.50 (raised from 13.50)",
+            ],
+        )
+
+    def test_a_level_that_does_not_raise_pages_nothing(self) -> None:
+        broker = FakeBroker()
+        uic = broker.uic_of("KO")
+        broker.set_position("KO", 100, avg_price=15.0)
+        broker.add_resting_sell("KO", 100, self._PLAN_STOP, order_type="StopIfTraded")
+        self._seed_tranche_plan(
+            uic, tranches=(_tr(0, 99.0, 0.5),), reference_qty=100.0, stop_price=self._PLAN_STOP
+        )
+        sj._journal_trailed(uic, 1.0, peak=1.1, last_price=1.0)  # below the plan stop
+        pages: list[tuple[str, str]] = []
+        deps = _deps(
+            broker,
+            alerts=[],
+            live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 16.5}),
+            alert_throttled=lambda msg, reason: pages.append((msg, reason)) or True,
+        )
+        report = cl.TickReport()
+        with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+            cl._run_live_exits_pass(deps, report)
+        cl._drain_pages(report)
+        self.assertEqual([msg for msg, _key in pages if "raised" in msg], [])
+
+    def test_a_held_raise_pages_once_not_on_every_tick(self) -> None:
+        # The guard that already exists (`stop_raises_announced`) is the one
+        # that must do this. Duplicating it here, or ignoring it, would page
+        # once per tick for the whole session — the LIVE VST 2026-10-01 shape.
+        broker = FakeBroker()
+        uic = broker.uic_of("KO")
+        broker.set_position("KO", 100, avg_price=15.0)
+        broker.add_resting_sell("KO", 100, self._PLAN_STOP, order_type="StopIfTraded")
+        self._seed_tranche_plan(
+            uic, tranches=(_tr(0, 99.0, 0.5),), reference_qty=100.0, stop_price=self._PLAN_STOP
+        )
+        sj._journal_trailed(uic, self._TRAILED, peak=14.9, last_price=14.8)
+        pages: list[tuple[str, str]] = []
+        deps = _deps(
+            broker,
+            alerts=[],
+            live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 16.5}),
+            alert_throttled=lambda msg, reason: pages.append((msg, reason)) or True,
+        )
+
+        def _tick() -> None:
+            report = cl.TickReport()
+            cl._run_live_exits_pass(deps, report)
+            cl._drain_pages(report)
+
+        with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+            _tick()
+            _tick()
+            self.assertEqual(len([m for m, _k in pages if "raised" in m]), 1)
+            # A NEW level is a new fact and pages again.
+            sj._journal_trailed(uic, 15.5, peak=15.9, last_price=15.8)
+            _tick()
+        raised = [(m, k) for m, k in pages if "raised" in m]
+        self.assertEqual(len(raised), 2, f"the second level pages too; got {raised}")
+        # The key's plan-stop component is the PLAN's disaster stop, which is
+        # not `previous`: on this second raise `previous` is the 14.50 the first
+        # page announced while the plan stop is still 13.00. Keying on
+        # `previous` instead would make the key vary with every ratchet step
+        # while the position's identity has not changed.
+        self.assertEqual(
+            [k for _m, k in raised],
+            [f"stop-raised:{uic}:13.000000:14.500000", f"stop-raised:{uic}:13.000000:15.500000"],
+        )
+        raised = [m for m, _k in raised]
+        # The second page reads from the level the FIRST one announced, not from
+        # the plan stop: that level is the one resting at the broker, so
+        # "13.00 -> 15.50" would overstate the move the operator just missed.
+        self.assertIn("resting 15.50 (raised from 14.50)", raised[1])
+
+    def test_the_raise_is_queued_before_the_engine_so_an_engine_failure_cannot_eat_it(
+        self,
+    ) -> None:
+        # The PR's headline ordering decision, which nothing pinned: moving the
+        # announce call to the END of the pass -- behind `if not managed: return`
+        # and behind `except BrokerError: return` -- left all 3588 broker tests
+        # green.
+        #
+        # The raise is a JOURNAL fact and the once-per-level guard inside the
+        # build has ALREADY consumed it, so a page the engine's failure skips is
+        # lost for good rather than sent late. Here the engine raises, the pass
+        # returns early, and the page must nonetheless be on the queue that
+        # `run_once` drains in its `finally`.
+        broker = FakeBroker()
+        uic = broker.uic_of("KO")
+        broker.set_position("KO", 100, avg_price=15.0)
+        broker.add_resting_sell("KO", 100, self._PLAN_STOP, order_type="StopIfTraded")
+        self._seed_tranche_plan(
+            uic, tranches=(_tr(0, 99.0, 0.5),), reference_qty=100.0, stop_price=self._PLAN_STOP
+        )
+        sj._journal_trailed(uic, self._TRAILED, peak=14.9, last_price=14.8)
+        pages: list[tuple[str, str]] = []
+        deps = _deps(
+            broker,
+            alerts=[],
+            live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 16.5}),
+            alert_throttled=lambda msg, reason: pages.append((msg, reason)) or True,
+        )
+        report = cl.TickReport()
+        with mock.patch.object(cl, "run_live_exits", side_effect=BrokerError("engine down")):
+            with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+                cl._run_live_exits_pass(deps, report)
+
+        self.assertEqual(
+            [what for what, _send in report.pending_pages],
+            ["stop-raised"],
+            "the raise was computed and queued before the engine ran",
+        )
+        self.assertEqual(
+            [msg for msg, _key in pages if "resting" in msg],
+            [],
+            "and the page did not reach the sink inside the pass: the feed-scope "
+            "write, the engine and the whole protection pass sit below that call, "
+            "and the sink blocks for tens of seconds per page. (The pass's own "
+            "engine-failure alert is pre-existing and must go out.)",
+        )
+        cl._drain_pages(report)
+        self.assertEqual(
+            [msg for msg, _key in pages if "resting" in msg],
+            ["TRAIL KO SL - trailed stop resting 14.50 (raised from 13.00)"],
+            "and the operator is told, even though the engine failed",
+        )
+
+    def test_an_alert_sink_that_raises_does_not_stop_the_drain_or_the_tick(self) -> None:
+        # Observability may never endanger the money path. The drain runs after
+        # the protection pass, so an uncontained sink failure there would abort
+        # the tick between the pass and the rest of ``run_once`` and would also
+        # cost the pages of the raises behind it. The tranche target stays out of
+        # reach here so the only page is the raise: the tranche-fired page is
+        # pre-existing and uncontained, and widening its containment is not this
+        # change.
+        broker = FakeBroker()
+        uic = broker.uic_of("KO")
+        broker.set_position("KO", 100, avg_price=15.0)
+        broker.add_resting_sell("KO", 100, self._PLAN_STOP, order_type="StopIfTraded")
+        self._seed_tranche_plan(
+            uic, tranches=(_tr(0, 99.0, 0.5),), reference_qty=100.0, stop_price=self._PLAN_STOP
+        )
+        sj._journal_trailed(uic, self._TRAILED, peak=14.9, last_price=14.8)
+
+        def _explode(message: str, reason: str) -> bool:
+            raise RuntimeError("telegram down")
+
+        deps = _deps(
+            broker,
+            alerts=[],
+            live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 16.5}),
+            alert_throttled=_explode,
+        )
+        report = cl.TickReport()
+        with mock.patch.object(cl, "run_live_exits", return_value=[]) as engine:
+            with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+                with self.assertLogs(cl.logger, level="WARNING") as captured:
+                    cl._run_live_exits_pass(deps, report)  # must not raise
+                    cl._drain_pages(report)  # nor must this
+        engine.assert_called_once()
+        self.assertEqual(report.alerts, 0, "a page that never went out is not counted")
+        self.assertTrue(
+            any("stop-raised page failed" in line for line in captured.output),
+            f"the swallowed failure must still be visible; got {captured.output}",
+        )
+
+
+class TestTheFromLevelOnAStopRaise(unittest.TestCase):
+    """Which level the page quotes as "from", straight off
+    ``_journaled_stop_floor`` -- reachable with an ``announced`` dict and a
+    ``raised`` list, no broker and no journal.
+
+    The choice used to be one condition with two halves,
+    ``plan_stop <= last_announced < stop_price``, and either half could be
+    deleted on its own with the whole broker suite green: they masked each
+    other, so neither was pinned. One comparison decides the level now, and the
+    formatter decides the DIRECTION word, and each has its own case below."""
+
+    _UIC = 40000
+
+    def _raise(self, *, plan_stop: float, trailed: float, announced: float | None) -> cl.StopRaise:
+        raised: list[cl.StopRaise] = []
+        cl._journaled_stop_floor(
+            self._UIC,
+            plan_stop,
+            trailed,
+            None,
+            {} if announced is None else {self._UIC: announced},
+            raised,
+        )
+        self.assertEqual(len(raised), 1, "the floor did raise the stop")
+        return raised[0]
+
+    def test_the_level_resting_at_the_broker_beats_the_plan_stop(self) -> None:
+        # The announced level is the one resting at the venue, so quoting the
+        # plan stop would overstate the move the operator just missed.
+        self.assertEqual(self._raise(plan_stop=13.0, trailed=15.5, announced=14.5).previous, 14.5)
+
+    def test_the_plan_stop_wins_when_nothing_was_announced_yet(self) -> None:
+        # The first raise of a position, and the first raise after a restart.
+        self.assertEqual(self._raise(plan_stop=13.0, trailed=14.5, announced=None).previous, 13.0)
+
+    def test_an_announced_level_BELOW_the_plan_stop_is_not_quoted(self) -> None:
+        # A new-generation plan can carry a HIGHER disaster stop than the level
+        # the previous generation announced. The resting stop is then the plan
+        # stop, so quoting 12.00 would overstate what the move locked in.
+        self.assertEqual(self._raise(plan_stop=13.0, trailed=14.5, announced=12.0).previous, 13.0)
+
+    def test_a_stop_driven_DOWN_from_the_announced_level_says_so(self) -> None:
+        # The case worth waking up for, and the one the old guard silently
+        # relabelled: it fell back to the plan stop, so a stop moving 14.50 ->
+        # 14.00 -- a ratchet floor LOST, the #1324 hazard this code warns about
+        # -- was reported as a raise from 13.00. The level is carried honestly
+        # and the formatter names the direction.
+        raise_ = self._raise(plan_stop=13.0, trailed=14.0, announced=14.5)
+        self.assertEqual(raise_.previous, 14.5)
+        event = ta.TradeEvent(
+            kind=ta.EventKind.STOP_RAISED,
+            ticker="OLN",
+            label="SL",
+            reason=raise_.reason,
+            level=raise_.level,
+            previous_level=raise_.previous,
+        )
+        self.assertEqual(
+            ta.render(event), "TRAIL OLN SL - trailed stop resting 14.00 (lowered from 14.50)"
+        )
 
 
 class TestLiveExitsPassCapabilityGuard(IsolatedHomeTestCase):
