@@ -108,6 +108,11 @@ ALLOWED_EXCLUDED_FILE_PREFIXES = ("test_",)
 BASELINE: dict[str, int] = {
     "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3507,
     "apps/alphalens-pipeline/alphalens_cli/commands/thematic.py": 1708,
+    # Raised again, by 8, to say that the raise page's ticker fallback is
+    # unreachable by construction. It sits beside the stop-PLACED page's
+    # fallback, which looks identical and IS reachable and tested, so without
+    # the note a reader comparing the two concludes both are exercised.
+    #
     # Raised again, by 22, to put the governing plan's disaster stop in the
     # stop-raised key. A ticker exited and re-armed the same session was hidden
     # by the old position's page, which is the opposite of what
@@ -219,7 +224,7 @@ BASELINE: dict[str, int] = {
     # rather than either branch's own number. Counted with ``wc -l`` on the
     # merged file, not added up from the two diffs.
     #
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7937,
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7945,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3302,

@@ -1607,6 +1607,14 @@ def _announce_stop_raises(
     would otherwise wait behind a hung Telegram POST, once per raising uic. See
     :func:`_queue_page`."""
     for raise_ in raises:
+        # The default is UNREACHABLE today, and that is worth writing down next
+        # to the stop-PLACED page's fallback, which looks the same and is both
+        # reachable and tested. ``uic_to_instrument`` and ``_build_managed_exits``
+        # are built from one ``long_positions`` list under one exclusion
+        # (``_position_uic(pos) is None``), so every raising uic is in the map;
+        # removing the default leaves the whole broker suite green. It stays
+        # because the two sites are free to diverge and a bare subscript would
+        # be a ``KeyError`` where a page should be.
         ticker = uic_to_instrument.get(raise_.uic, (f"uic {raise_.uic}", None))[0]
         _queue_page(
             functools.partial(_send_stop_raised_page, deps, raise_, ticker),
