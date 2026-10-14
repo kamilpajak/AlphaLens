@@ -47,7 +47,8 @@ class EventKind(enum.Enum):
     # sell: the live-exit engine does not read the fill price).
     EXIT_SUBMITTED = "exit_submitted"
     # Neither of the two below is a fill. They are the protective stop's own
-    # state: it now rests at the venue, or its level moved UP.
+    # state: it now rests at the venue, or its level moved (usually UP; a lost
+    # ratchet floor can move it down, and the page says which).
     STOP_PLACED = "stop_placed"
     STOP_RAISED = "stop_raised"
 
@@ -181,9 +182,16 @@ def _stop_move_text(event: TradeEvent) -> str | None:
     if event.previous_level is None or event.level is None:
         # A half-known move is still worth saying; the full form needs both.
         return _with_level(f"{stop} resting", event.level)
+    # The DIRECTION is read off the two levels, never assumed from the kind. A
+    # protective stop can move down — a ``trailed`` fold reset by a new plan
+    # generation re-earns a level below the one already resting (#1324) — and
+    # that is the move the operator must not miss, so it may not be worded as a
+    # raise. Calling it a raise was the old defect: the call site dropped the
+    # higher previous level and quoted the plan stop instead.
+    moved = "lowered" if event.previous_level > event.level else "raised"
     return (
         f"{stop} resting {format_price(event.level)} "
-        f"(raised from {format_price(event.previous_level)})"
+        f"({moved} from {format_price(event.previous_level)})"
     )
 
 

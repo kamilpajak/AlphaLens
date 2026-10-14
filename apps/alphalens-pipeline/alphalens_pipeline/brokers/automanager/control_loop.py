@@ -974,12 +974,23 @@ def _journaled_stop_floor(
             # Where the stop was. The level last announced for this uic is the
             # one resting at the broker, so it beats the plan stop as the "from"
             # — and it is read BEFORE the update below, which is why this sits
-            # inside the guard. Only when it is between the plan stop and the
-            # new level: a stale lower value would render the move backwards,
-            # and an empty map (first raise, or a restart) has no last level.
+            # inside the guard. An empty map (the first raise, or a restart) has
+            # no last level; a value BELOW the plan stop is one a new-generation
+            # plan has already overtaken, and the resting stop is then the plan
+            # stop, so quoting it would overstate the move.
+            #
+            # ONE comparison, deliberately. It used to also require
+            # ``last_announced < stop_price``, and the two halves masked each
+            # other in test: either could be deleted with the whole broker suite
+            # green. Worse, that half SILENTLY RELABELLED the case it excluded.
+            # A stop driven DOWN from the announced level — a ratchet floor
+            # lost, the #1324 hazard — fell back to the plan stop and read as a
+            # raise off the disaster level, which is the one event here the
+            # operator must not miss. The level is carried honestly now and
+            # ``trade_alerts._stop_move_text`` names the direction.
             previous = plan_stop
             last_announced = None if announced is None else announced.get(uic)
-            if last_announced is not None and plan_stop <= last_announced < stop_price:
+            if last_announced is not None and last_announced > plan_stop:
                 previous = last_announced
             # The LAST arm that fired owns the level actually placed, so it is
             # the one the page names as the cause.
@@ -7807,6 +7818,22 @@ def _execute_place_stop(
 
     report.exits_placed += 1
     throttle.record_place_success(action.uic)
+    # #1621 part 3 (B): the position is now protected, and until this page the
+    # operator had no way to learn that except by inferring it from silence.
+    #
+    # QUEUED here, immediately after the confirmed place, NOT at the end of the
+    # branch. `_idempotent_cancel` below re-raises a cancel error that is not
+    # "already gone", and the stop is already resting, so the next tick places
+    # nothing and never re-pages — a page behind the loop was not delayed by a
+    # 503, it was gone, in exactly the case where two live sell stops may sit on
+    # the same shares and the operator most needs to be told.
+    #
+    # This does not break the confirmed-place -> supersede-cancel adjacency the
+    # comment below protects. A `_queue_page` call is a list append: it cannot
+    # raise, cannot reorder a broker call and makes no network call. What may
+    # not sit in that window is the SEND, and the send is `_drain_pages`, after
+    # the whole protection pass.
+    _page_stop_placed(throttle, action, qty, placed_stop.entry_order_id, report)
     # Cancel the OLD / stale / smaller stop only AFTER the new one is confirmed —
     # never a naked window on the shares that were already covered. The
     # confirmed-place -> supersede-cancel adjacency is safety-critical (a break
@@ -7833,12 +7860,6 @@ def _execute_place_stop(
         uic=action.uic,
         kind="stop_placed",
     )
-    # #1621 part 3 (B): the position is now protected, and until this page the
-    # operator had no way to learn that except by inferring it from silence.
-    # LAST in the branch, after the place, the supersede cancels and the record,
-    # and contained — an alert may not reorder or endanger any of them, nor
-    # abort the protection actions queued behind this uic.
-    _page_stop_placed(throttle, action, qty, placed_stop.entry_order_id, report)
 
 
 __all__ = [

@@ -18,6 +18,7 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import stop_journal as sj
+from alphalens_pipeline.brokers.automanager import trade_alerts as ta
 from broker_contract.contract import BrokerError, InstrumentRef, Position
 from broker_contract.price_feed import PricePoint
 from broker_contract.sizing import TpTranchePlan
@@ -1423,6 +1424,68 @@ class TestStopRaisePagesTheOperator(_JournalCase):
         self.assertTrue(
             any("stop-raised page failed" in line for line in captured.output),
             f"the swallowed failure must still be visible; got {captured.output}",
+        )
+
+
+class TestTheFromLevelOnAStopRaise(unittest.TestCase):
+    """Which level the page quotes as "from", straight off
+    ``_journaled_stop_floor`` -- reachable with an ``announced`` dict and a
+    ``raised`` list, no broker and no journal.
+
+    The choice used to be one condition with two halves,
+    ``plan_stop <= last_announced < stop_price``, and either half could be
+    deleted on its own with the whole broker suite green: they masked each
+    other, so neither was pinned. One comparison decides the level now, and the
+    formatter decides the DIRECTION word, and each has its own case below."""
+
+    _UIC = 40000
+
+    def _raise(self, *, plan_stop: float, trailed: float, announced: float | None) -> cl.StopRaise:
+        raised: list[cl.StopRaise] = []
+        cl._journaled_stop_floor(
+            self._UIC,
+            plan_stop,
+            trailed,
+            None,
+            {} if announced is None else {self._UIC: announced},
+            raised,
+        )
+        self.assertEqual(len(raised), 1, "the floor did raise the stop")
+        return raised[0]
+
+    def test_the_level_resting_at_the_broker_beats_the_plan_stop(self) -> None:
+        # The announced level is the one resting at the venue, so quoting the
+        # plan stop would overstate the move the operator just missed.
+        self.assertEqual(self._raise(plan_stop=13.0, trailed=15.5, announced=14.5).previous, 14.5)
+
+    def test_the_plan_stop_wins_when_nothing_was_announced_yet(self) -> None:
+        # The first raise of a position, and the first raise after a restart.
+        self.assertEqual(self._raise(plan_stop=13.0, trailed=14.5, announced=None).previous, 13.0)
+
+    def test_an_announced_level_BELOW_the_plan_stop_is_not_quoted(self) -> None:
+        # A new-generation plan can carry a HIGHER disaster stop than the level
+        # the previous generation announced. The resting stop is then the plan
+        # stop, so quoting 12.00 would overstate what the move locked in.
+        self.assertEqual(self._raise(plan_stop=13.0, trailed=14.5, announced=12.0).previous, 13.0)
+
+    def test_a_stop_driven_DOWN_from_the_announced_level_says_so(self) -> None:
+        # The case worth waking up for, and the one the old guard silently
+        # relabelled: it fell back to the plan stop, so a stop moving 14.50 ->
+        # 14.00 -- a ratchet floor LOST, the #1324 hazard this code warns about
+        # -- was reported as a raise from 13.00. The level is carried honestly
+        # and the formatter names the direction.
+        raise_ = self._raise(plan_stop=13.0, trailed=14.0, announced=14.5)
+        self.assertEqual(raise_.previous, 14.5)
+        event = ta.TradeEvent(
+            kind=ta.EventKind.STOP_RAISED,
+            ticker="OLN",
+            label="SL",
+            reason=raise_.reason,
+            level=raise_.level,
+            previous_level=raise_.previous,
+        )
+        self.assertEqual(
+            ta.render(event), "TRAIL OLN SL - trailed stop resting 14.00 (lowered from 14.50)"
         )
 
 

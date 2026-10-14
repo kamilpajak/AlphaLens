@@ -5007,6 +5007,40 @@ class TestStopPlacedPagesTheOperator(IsolatedHomeTestCase):
         self.assertEqual(len(self._pages(throttle)), 1, "and the drain is what sends it")
         self.assertEqual(report.pending_pages, [], "a drained queue does not re-send")
 
+    def test_a_supersede_cancel_that_raises_does_not_cost_the_page(self) -> None:
+        # The page used to be the LAST statement of the success branch, behind
+        # the supersede loop, and `_idempotent_cancel` re-raises a cancel error
+        # that is not "already gone". The stop IS resting, so the next tick
+        # places nothing and never re-pages: the page was not delayed, it was
+        # gone -- in exactly the scenario where two live sell stops may now sit
+        # on the same shares (#878) and the operator most needs to be told.
+        #
+        # Queued immediately after the confirmed place instead. That does not
+        # break the confirmed-place -> supersede-cancel adjacency the comment
+        # there protects, because a queue append is not fallible and not a
+        # network call; it is the SEND that may not sit in that window, and the
+        # send is the drain, after the whole protection pass.
+        sent: list[str] = []
+        throttle = _KeyedThrottle(sent)
+        broker = _ProtBroker(
+            by_uic={_UIC: _pos(46.0)}, cancel_errors={"old-stop": BrokerError("saxo 503 on cancel")}
+        )
+        executor = cl._make_protection_executor(broker, throttle)
+        action = PlaceStop(_UIC, "SELL", 46.0, 216.48, _TRAIL_STOP_REF, supersede_ids=("old-stop",))
+        report = cl.TickReport()
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(
+                sj, "_standalone_stop_journal_path", lambda journal=journal: journal
+            ):
+                with self.assertRaises(BrokerError):
+                    executor(action, False, report)
+        self.assertEqual(len(broker.placed), 1, "the stop did go to the broker")
+        cl._drain_pages(report)
+        self.assertEqual(
+            len(self._pages(throttle)), 1, "so the operator hears that it is protected"
+        )
+
     def test_no_page_on_any_path_that_did_not_place(self) -> None:
         failures = {
             "flat-skip": _ProtBroker(by_uic={_UIC: _pos(0.0)}),

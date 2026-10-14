@@ -108,6 +108,15 @@ ALLOWED_EXCLUDED_FILE_PREFIXES = ("test_",)
 BASELINE: dict[str, int] = {
     "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3507,
     "apps/alphalens-pipeline/alphalens_cli/commands/thematic.py": 1708,
+    # Raised again, by 21, for two more review findings. The stop-placed page
+    # moved ahead of the supersede-cancel loop (a cancel that re-raises used to
+    # cost the page for good, since the stop is already resting and no later
+    # tick re-places), and the "from" level of a raise became ONE comparison
+    # whose excluded case is now reported rather than relabelled -- a stop
+    # driven DOWN from the announced level read as a raise off the disaster
+    # stop. Both comments say what the old shape got wrong, because that is the
+    # part a reader cannot recover from the code.
+    #
     # Raised again, by 89, for the review of #1621 part 3's money-path finding.
     # The two pages were synchronous sink calls on protective paths, and the
     # sink's own bound is 34 s when a read hangs, 64 s when connect and read
@@ -188,7 +197,7 @@ BASELINE: dict[str, int] = {
     # rather than either branch's own number. Counted with ``wc -l`` on the
     # merged file, not added up from the two diffs.
     #
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7852,
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7873,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3302,
