@@ -96,8 +96,12 @@ Check those with `systemctl --user status` and their own liveness signals
 (`AlphalensBrokerManagerHeartbeatStale` for the broker manager) instead.
 
 This matters most for the two long units: `alphalens-thematic-build.service`
-(~12-20 min, `TimeoutStartSec=75min`) and
+(~12-20 min typical, but the product stages alone reached 100 min on a heavy
+`map-themes` day, so `TimeoutStartSec=210min`) and
 `alphalens-feedback-shadow-returns.service` (~5-30 min, `TimeoutStartSec=90min`).
+Read a limit off the unit file rather than this paragraph: it said `75min` until
+2026-10-14, a value superseded three times (110 -> 150 in #1330, 150 -> 210 in
+#1628), and an operator who believes it reads a 90-minute run as a timeout.
 Both feed user-facing surfaces, so a false "verified" hides a broken deploy
 until `AlphalensJobStale` (48h) or `AlphalensEdgeStale` (36h) fires.
 
@@ -765,7 +769,10 @@ four times the whole product pipeline — and it sat between `map-themes` and
 unit (see that section below). `TimeoutStartSec` was raised 110 → 150 min at
 the same time: the 14-day journal read showed the product stages alone
 reaching 100 min on a heavy `map-themes` day, and ExecStartPost counts
-toward the budget on a oneshot.
+toward the budget on a oneshot. It went 150 → 210 min on 2026-09-30 (#1628),
+after the first scheduled deciding run on the #1606 schedule hit the 150 cap,
+so **210 is the current value** — this paragraph records the history, and the
+unit file is what holds the number.
 
 ### The unit supervises the container, not the docker client (#1330)
 
