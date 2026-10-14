@@ -332,7 +332,7 @@ Mega-cap-vs-small-cap dominance during 2017-2022 was a slow cumulative drift tha
 
 - 8/8 paradigm failures, including the first real test of pre-registration (PASS as a methodology — caught the FAIL).
 - 4 anti-pattern mechanisms newly identified post-pivot (phase-aliasing, ledger discipline, coverage diagnostics, structural-drift-vs-regime distinction).
-- Reusable methodology bundle extracted to `kamilpajak/phase-robust-backtesting` (MIT) — see `docs/anti_patterns.md` in that repo for the 5 failure mechanisms documented for community use.
+- Reusable methodology bundle extracted to `kamilpajak/phase-robust-backtesting` (Apache-2.0, since its first commit — ADR 0006 chose MIT and its 2026-10-14 amendment records why that was wrong) — see `docs/anti_patterns.md` in that repo for the 5 failure mechanisms documented for community use.
 
 **Path B confirmed 2026-04-29:** AlphaLens is research infrastructure + decision-support tooling, not active alpha. The methodology bundle is the actual product. Active strategy prospecting on this universe is closed; future tests would be inbound validation (replicating published strategies) rather than outbound prospecting.
 
