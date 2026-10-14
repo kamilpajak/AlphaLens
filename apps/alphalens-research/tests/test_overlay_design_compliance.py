@@ -1,7 +1,7 @@
 """CI gate: Layer 4 overlay design memos must run vol-regime pre-screen.
 
-Per CLAUDE.md "Research methodology / Layer 4 overlay design pre-screen
-(mandatory)" — any new overlay design memo in `docs/research/` must call
+Per docs/research/methodology-gates.md, the Layer 4 overlay design pre-screen
+(mandatory) — any new overlay design memo in `docs/research/` must call
 ``alphalens_research.attribution.signal_vol_regime.classify_cyclicality()`` on the
 base signal AND quote the verdict verbatim in the memo body. This test
 fails CI if a future overlay memo lacks the pre-screen evidence.

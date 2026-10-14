@@ -2,10 +2,11 @@
 
 ## Orientation
 
-- Research + decision-support repo for one investor. Capital deployment is OFF-TABLE and no strategy holds a standing PASS: never propose deploying capital or automating a pick.
+- Research + decision-support repo for one investor. No BACKTESTED strategy holds a standing PASS, and none earns capital — never propose deploying capital behind a screener or automating a pick. The live rail is a separate thing: it trades hand-written picks only (see `## Money path`).
 - The thematic tool AUGMENTS the owner's judgement (he cherry-picks, the group discusses, each member decides); never describe it as a replacement.
 - uv workspace. New code goes to `apps/alphalens-pipeline/alphalens_pipeline/<name>/` (infra, live services, data clients, scorers), `apps/alphalens-research/alphalens_research/<name>/` (lab, backtest, attribution, overlays, preaudit) or `apps/alphalens-pipeline/alphalens_cli/` (CLI commands) — never at the repo top level (ADR 0011).
-- IMPORTANT: `alphalens_pipeline.*` never imports `alphalens_research.*` at top level; lazy imports inside `alphalens_cli.commands.{audit,preaudit,preregister}` bodies are the only exception. Gate: `apps/alphalens-research/tests/test_module_dependencies.py`.
+- IMPORTANT: `alphalens_pipeline.*` never imports `alphalens_research.*` at top level. The only exception is a lazy import inside the body of `alphalens_cli.commands.{audit,doctrine,preaudit}` — and it is NOT gated, because `test_module_dependencies.py` walks `alphalens_pipeline` only, never `alphalens_cli`. Gate for the package rule: `apps/alphalens-research/tests/test_module_dependencies.py`.
+- `alphalens_research.backtest.*` imports neither `screeners.*` nor `attribution.*`: Layer 3 produces a `BacktestReport` and Layer 5 consumes it, never the reverse. Same gate.
 - A package's lifecycle status is its own `__status__` in `__init__.py`, never a table in this file.
 - Layer vocabulary (ADR 0007): 1 screener, 2 selection-gate, 3 backtest engine, 4 risk overlay, 5 attribution; every failure attributes to exactly one layer. Current paths: `apps/alphalens-research/README.md`.
 - Seven bounded contexts, one entry point each: read `docs/research/architecture_audit_2026_10_02.md` section 1.3 before moving code between apps.
@@ -14,14 +15,15 @@
 
 ## Commands
 
-- Tests are `unittest`, never pytest: `uv run python -m unittest discover -s apps/alphalens-research/tests -t apps/alphalens-research -v`.
+- The research + pipeline suites are `unittest`: `uv run python -m unittest discover -s apps/alphalens-research/tests -t apps/alphalens-research -v`. The Django app is the exception and runs `pytest` (`just test-django`); never convert one to the other.
 - Setup is `uv sync` (one workspace venv at `./.venv`). Recipes: `just sync | test | lint | dev-django | dev-web | up | down | probe-live`.
-- Run `alphalens --help`, then `alphalens <group> --help`, before quoting any subcommand. Never write a command from memory: two `literature` subcommands named in this file for months did not exist.
+- Run `.venv/bin/alphalens --help`, then `... <group> --help`, before quoting any subcommand (the entry point is not on `PATH`). Never write a command from memory: two `literature` subcommands named in this file for months did not exist.
 
 ## Code conventions
 
-- Code, comments, docstrings and identifiers in ENGLISH; math notation (α, ρ, ×, −) stays. Polish prose belongs in CLAUDE.md, memory, commits and postmortems. Gate: `tests/test_no_polish_chars.py`.
-- Every external-vendor call goes through that vendor's canonical client under `alphalens_pipeline/data/` (plus `literature_scanner/perplexity_client.py`, `telegram_client.py`) — never raw `requests`/`httpx` against a vendor URL. One `tests/test_no_raw_<vendor>_http.py` per vendor enforces it; a new vendor ships that test with its client.
+- Code, comments, docstrings and identifiers in ENGLISH; math notation (α, ρ, ×, −) stays. Polish prose belongs in CLAUDE.md, memory, commits and postmortems. Gate: `apps/alphalens-research/tests/test_no_polish_chars.py`.
+- Every external-vendor call goes through that vendor's canonical client under `alphalens_pipeline/data/` (the one outside it is `literature_scanner/perplexity_client.py`) — never raw `requests`/`httpx` against a vendor URL. One `apps/alphalens-research/tests/test_no_raw_<vendor>_http.py` per vendor enforces it; a new vendor ships that test with its client.
+- Two call sites have NO client by design and are not violations: the display-only og:title fetch in `thematic/sources/canonical_title.py` (multi-host, no quota'd vendor) and RSS via `feedparser` behind the single `_parse_feed` seam in `thematic/sources/rss.py`.
 - Never ask an LLM for a numeric or time-sensitive value (price, market cap, date, threshold): compute it from yfinance / EDGAR / Polygon / the Form-4 store and inject the fact. Never put a bracket constraint in a prompt — filter in Python afterwards.
 - TDD always: red, green, refactor, even for a two-line fix.
 - Extract magic numbers and strings into named constants; one assertion concept per test.
@@ -58,7 +60,7 @@
 - A number from a single day is provisional: count from Postgres and record the read timestamp beside it.
 - Adversarial review of the LOCKED design memo before any run over one hour of compute — your own lens-split pass for its internal logic, Perplexity for the literature it rests on; `alphalens preaudit <strategy>` before any audit over one hour.
 - Pre-register before testing and pay Bonferroni at PROGRAM level — a model-class swap on the same features and holdout does not cleanse multiplicity. Literature is not an informative prior here.
-- A new data vendor passes the PIT validation gate before pre-registration, and a Layer 4 overlay quotes its `classify_cyclicality_excess` verdict in the memo (gate: `tests/test_overlay_design_compliance.py`). Both procedures: `docs/research/methodology-gates.md`.
+- A new data vendor passes the PIT validation gate before pre-registration, and a Layer 4 overlay quotes its `classify_cyclicality_excess` verdict in the memo (gate: `apps/alphalens-research/tests/test_overlay_design_compliance.py`). Both procedures: `docs/research/methodology-gates.md`.
 - A universe over 100 tickers uses the true PIT panel from day one.
 
 ## Doctrine
@@ -69,7 +71,7 @@
 ## Known issues worth a standing reminder
 
 - The Layer 2a prescreener is UNVALIDATED (45% fundamentals weight needs PIT historicals the Polygon plan does not serve): manual ad-hoc only, never quote it as a performance claim.
-- GDELT theme queries must use multi-word quoted phrases (`"CUDA toolkit"`, never `"CUDA"`): a single-word quoted token returns HTTP 200 with "The specified phrase is too short." Lint: `tests/thematic/test_gdelt.py`.
+- GDELT theme queries must use multi-word quoted phrases (`"CUDA toolkit"`, never `"CUDA"`): a single-word quoted token returns HTTP 200 with "The specified phrase is too short." Lint: `apps/alphalens-research/tests/thematic/test_gdelt.py`.
 
 ## Where to find why
 
@@ -82,7 +84,7 @@
 Each loads when you read or edit a file in its area, and is NOT re-injected after `/compact` — re-read it after a compaction.
 
 - `apps/web/CLAUDE.md` — SPA: no-wrap atomic tokens, Storybook catalog doctrine, build-before-compose.
-- `apps/alphalens-research/CLAUDE.md` — lab: layer map, `__status__` requirement, preaudit smoke profiles, methodology gates.
+- `apps/alphalens-research/CLAUDE.md` — lab: the `__status__` lifecycle marker, the evidence a CLOSED/ARCHIVED package must carry, and how to run that gate. (Layer map: `apps/alphalens-research/README.md`. Smoke profiles and the research gates: `docs/research/methodology-gates.md`.)
 - `apps/alphalens-pipeline/CLAUDE.md` — live tier: lazy CLI imports, per-vendor quota SCOPES, the calendar MIC argument, and the `alphalens broker` CLI surface (JSON envelope, failure-code registry, the place/amend AST gate) — that code is in `alphalens_cli/commands/broker.py`, so it is briefed here, not in the contract package.
 - `apps/alphalens-django/CLAUDE.md` — DRF docstrings are published schema; regenerate the OpenAPI snapshot in the same commit.
 - `apps/alphalens-broker-contract/CLAUDE.md` — the shared contract: which half of the failure-code registry lives where, the legacy register, and pointers into `README.md` for the arming door and the gate order (that README is authoritative; this file never restates it).
