@@ -22,6 +22,13 @@ _ENTRY_LABEL_PREFIX = "E"
 _TP_LABEL_PREFIX = "TP"
 _FIRE_SUFFIX = "-fire"
 
+# The protective stop's own label, the third word in the operator's leg
+# vocabulary beside ``E{n}`` and ``TP{n}``. A constant rather than a literal at
+# the two alert sites that say a stop was placed or raised: the vocabulary has
+# ONE home, and ``tp_label_from_tag("sl")`` happens to return the same string
+# through its non-tranche fallback, which is a coincidence, not this fact.
+STOP_LABEL = "SL"
+
 # The crid is ``<ticker>-<briefdate>-entry-t<i>`` and the fire id appends
 # ``-fire``; capture the 0-based tier index anchored at the end.
 _ENTRY_CRID_RE = re.compile(r"-entry-t(\d+)(?:" + re.escape(_FIRE_SUFFIX) + r")?$")
@@ -95,6 +102,7 @@ def _ticker_prefix(ref: str) -> str:
 
 
 __all__ = [
+    "STOP_LABEL",
     "entry_label_from_crid",
     "entry_tier_index_from_crid",
     "human_entry_label",

@@ -85,11 +85,30 @@ class ItNeverFailsSilently(IsolatedHomeTestCase):
         world.assert_protected("KO")
         world.assert_silent()
 
+    def test_the_quiet_check_itself_still_catches_a_real_failure(self) -> None:
+        # Positive control for assert_silent. It now excludes ONE message by
+        # name — the protected-confirmation page (#1621 part 3) — and an
+        # exclusion that nothing tests is an exclusion that can widen to
+        # everything: emptying the filter left all 49 acceptance tests green.
+        # Here a genuine failure alert is present, and the check must refuse.
+        world = ManagerWorld(self)
+        world.entry_fills("KO", shares=100)
+        world.broker_placement_fails_on("KO")
+
+        world.run_tick()
+
+        with self.assertRaises(AssertionError):
+            world.assert_silent()
+
     def test_a_healthy_tick_is_quiet(self) -> None:
         world = ManagerWorld(self)
-        # A normal fill that protects cleanly should NOT spam alerts.
+        # A normal fill that protects cleanly should NOT spam alerts. Since
+        # #1621 part 3 it does send exactly ONE page, the confirmation that the
+        # position is now protected, and nothing else. Asserted both ways here
+        # so the exclusion inside assert_silent cannot become vacuous.
         world.entry_fills("KO", shares=100)
         world.run_tick()
+        world.assert_alerted(containing="stop placed")
         world.assert_silent()
 
 

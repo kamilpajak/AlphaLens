@@ -87,6 +87,88 @@ class RenderEachKind(unittest.TestCase):
         self.assertIn("- trailed stop 62.42 -", text)
 
 
+class RenderStopStateKinds(unittest.TestCase):
+    """The two stop-state kinds (#1621 part 3). Neither is a fill: one says a
+    protective stop now rests at the venue, the other that its level moved up.
+    Both are SELLs — a protective exit of a long — and both put their levels in
+    the one reason slot, so the fixed field order is unchanged."""
+
+    def test_every_kind_declares_a_side(self) -> None:
+        # render() indexes _SIDE_BY_KIND, so a kind added without a side is a
+        # KeyError on the money path rather than a missing word.
+        self.assertEqual(set(ta._SIDE_BY_KIND), set(EventKind))
+
+    def test_stop_placed_names_the_quantity_and_the_level(self) -> None:
+        event = TradeEvent(
+            kind=EventKind.STOP_PLACED,
+            ticker="ASTS",
+            label="SL",
+            qty=7.0,
+            level=50.64,
+            order_id="5446399206",
+        )
+        self.assertEqual(render(event), "SELL ASTS SL 7 - stop placed 50.64 (order 5446399206)")
+
+    def test_stop_raised_names_the_cause_and_BOTH_levels(self) -> None:
+        # The old level is the point: "62.42" alone does not say how much the
+        # raise locked in, which is the whole reason #1621 asked for this page.
+        event = TradeEvent(
+            kind=EventKind.STOP_RAISED,
+            ticker="ASTS",
+            label="SL",
+            qty=None,
+            reason=ExitReason.TRAILED_STOP,
+            level=62.42304,
+            previous_level=50.64,
+        )
+        self.assertEqual(render(event), "SELL ASTS SL - trailed stop raised 50.64 -> 62.42")
+
+    def test_a_reanchored_raise_says_which_floor_moved_it(self) -> None:
+        event = TradeEvent(
+            kind=EventKind.STOP_RAISED,
+            ticker="OLN",
+            label="SL",
+            qty=None,
+            reason=ExitReason.REANCHORED_STOP,
+            level=15.0,
+            previous_level=9.0,
+        )
+        self.assertEqual(render(event), "SELL OLN SL - re-anchored stop raised 9.00 -> 15.00")
+
+    def test_a_raise_with_no_named_cause_still_reads_as_a_raise(self) -> None:
+        event = TradeEvent(
+            kind=EventKind.STOP_RAISED,
+            ticker="OLN",
+            label="SL",
+            qty=None,
+            level=15.0,
+            previous_level=9.0,
+        )
+        self.assertEqual(render(event), "SELL OLN SL - stop raised 9.00 -> 15.00")
+
+    def test_a_stop_move_never_renders_an_exit_reason_as_a_fill_reason(self) -> None:
+        # ExitReason is shared with the fill kinds, so without the stop-move
+        # branch owning the slot a raise would read "trailed stop 62.42" —
+        # exactly the text a FILL at that level produces.
+        event = TradeEvent(
+            kind=EventKind.STOP_RAISED,
+            ticker="ASTS",
+            label="SL",
+            qty=None,
+            reason=ExitReason.TRAILED_STOP,
+            level=62.42304,
+            previous_level=50.64,
+        )
+        self.assertNotIn("trailed stop 62.42", render(event))
+
+    def test_an_omitted_quantity_leaves_no_dangling_separator(self) -> None:
+        event = TradeEvent(kind=EventKind.STOP_PLACED, ticker="ASTS", label="SL", qty=None)
+        text = render(event)
+        self.assertNotIn("None", text)
+        self.assertNotIn("  ", text)
+        self.assertEqual(text, "SELL ASTS SL - stop placed")
+
+
 class RenderMissingFields(unittest.TestCase):
     """A field that is not known is left out. It is never printed as ``None``,
     and leaving it out never leaves a dangling separator behind."""
@@ -238,6 +320,21 @@ class RealMessagesFromIssue1621(unittest.TestCase):
             render(event),
             "SELL ASTS 7 @ 62.37 - trailed stop 62.42 - position closed (order 5446399206)",
         )
+
+    def test_the_asts_raise_the_owner_was_never_told_about(self) -> None:
+        # 2026-09-29: the stop moved 50.64 -> 62.42 and the first message the
+        # owner saw was the fill above, hours later. The two levels are the
+        # ones the journal's `tranche_plan` and `trailed` lines carry.
+        event = TradeEvent(
+            kind=EventKind.STOP_RAISED,
+            ticker="ASTS",
+            label="SL",
+            qty=None,
+            reason=ExitReason.TRAILED_STOP,
+            level=62.42304,
+            previous_level=50.64,
+        )
+        self.assertEqual(render(event), "SELL ASTS SL - trailed stop raised 50.64 -> 62.42")
 
 
 if __name__ == "__main__":

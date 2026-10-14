@@ -66,6 +66,7 @@ from alphalens_pipeline.brokers.automanager.costs import (
     cost_gate_facts,
 )
 from alphalens_pipeline.brokers.automanager.labels import (
+    STOP_LABEL,
     entry_label_from_crid,
     human_label_from_external_reference,
     tp_label_from_tag,
@@ -846,12 +847,35 @@ def _live_exits_orders_allowed() -> bool:
     return os.environ.get(safety.ALLOW_ORDERS_ENV) == "1"
 
 
+@dataclass(frozen=True)
+class StopRaise:
+    """One managed-exit stop-floor raise, as the pure build REPORTS it (#1621).
+
+    The build knows the uic and the levels; it holds no alert sink and knows no
+    tickers, so the raise travels out to the caller on
+    ``_build_managed_exits(raised=...)`` and ``_announce_stop_raises`` renders
+    the page. Same out-parameter shape as ``dispositions`` on
+    ``run_live_exits``: the engine states what happened, the pass says it.
+
+    ``previous`` is where the stop was BEFORE this raise and ``level`` where it
+    is now; ``reason`` names the floor that won. "Before" is the level last
+    announced for the uic when there is one, because that is the level resting
+    at the broker — the plan's disaster stop is the fallback for the first raise
+    and for a daemon that just restarted with an empty announce map."""
+
+    uic: int
+    previous: float
+    level: float
+    reason: trade_alerts.ExitReason
+
+
 def _journaled_stop_floor(
     uic: int,
     stop_price: float,
     trailed_level: float | None,
     reanchored_level: float | None,
     announced: dict[int, float] | None,
+    raised: list[StopRaise] | None = None,
 ) -> float:
     """The managed exit's stop: the plan stop raised to the higher of the
     journaled trailed and reanchored levels, when either sits above it.
@@ -859,6 +883,12 @@ def _journaled_stop_floor(
     ``announced`` is ``_build_managed_exits``'s uic -> last announced raised
     stop, so a raise is logged once per uic and level instead of on every
     tick while it holds; without it every raise is logged.
+
+    ``raised`` collects the same raises for the CALLER to page the operator
+    about (#1621 part 3). It is appended to under the SAME once-per-level
+    guard as the log line: a second list would be a second notion of "new",
+    and the operator would get one page per tick for a level that has not
+    moved.
 
     All three numeric inputs arrive FINITE-FILTERED, and that is what makes
     the chain below safe: ``trailed_level`` from
@@ -877,7 +907,9 @@ def _journaled_stop_floor(
     is inert, here it is the level actually placed, which for a long position
     is a sell stop above the market. So the finite gate belongs at the folds,
     and removing one of them is not a local change."""
-    raises: list[tuple[str, tuple[object, ...]]] = []
+    # The stop before any floor touched it, kept for the page's "from" level.
+    plan_stop = stop_price
+    raises: list[tuple[str, tuple[object, ...], trade_alerts.ExitReason]] = []
     if trailed_level is not None and trailed_level > stop_price:
         # The journaled ratchet floor outranks the plan's disaster stop, so
         # THIS is the level that gets placed. Announced because #1324 made
@@ -892,6 +924,7 @@ def _journaled_stop_floor(
                 "uic %s: managed-exit stop raised by the journaled trailed level "
                 "%.4f (plan stop %.4f)",
                 (uic, trailed_level, stop_price),
+                trade_alerts.ExitReason.TRAILED_STOP,
             )
         )
         stop_price = trailed_level
@@ -913,12 +946,29 @@ def _journaled_stop_floor(
                     stop_price,
                     "trailed level" if trailed_level is not None else "plan stop",
                 ),
+                trade_alerts.ExitReason.REANCHORED_STOP,
             )
         )
         stop_price = reanchored_level
     if raises and (announced is None or announced.get(uic) != stop_price):
-        for message, args in raises:
+        for message, args, _reason in raises:
             logger.info(message, *args)
+        if raised is not None:
+            # Where the stop was. The level last announced for this uic is the
+            # one resting at the broker, so it beats the plan stop as the "from"
+            # — and it is read BEFORE the update below, which is why this sits
+            # inside the guard. Only when it is between the plan stop and the
+            # new level: a stale lower value would render the move backwards,
+            # and an empty map (first raise, or a restart) has no last level.
+            previous = plan_stop
+            last_announced = None if announced is None else announced.get(uic)
+            if last_announced is not None and plan_stop <= last_announced < stop_price:
+                previous = last_announced
+            # The LAST arm that fired owns the level actually placed, so it is
+            # the one the page names as the cause.
+            raised.append(
+                StopRaise(uic=uic, previous=previous, level=stop_price, reason=raises[-1][2])
+            )
     if announced is not None:
         if raises:
             announced[uic] = stop_price
@@ -936,6 +986,7 @@ def _build_managed_exits(
     plan_currencies: Mapping[int, tuple[str | None, str | None, str | None]] | None = None,
     reanchored: Mapping[int, float] | None = None,
     announced: dict[int, float] | None = None,
+    raised: list[StopRaise] | None = None,
 ) -> list[ManagedExit]:
     """Build this tick's managed-position list. Pure — no broker/journal I/O.
 
@@ -944,6 +995,11 @@ def _build_managed_exits(
     uic and level instead of on every tick while it holds; without it (direct
     callers, tests) every raise is logged. Entries for uics that are no longer
     managed are dropped, so a later position on the uic is announced afresh.
+
+    ``raised`` is the out-parameter the caller pages the operator from (#1621
+    part 3). It stays an out-parameter because this function must keep knowing
+    nothing about tickers or alert sinks — the same reason the take-profit alert
+    is rendered by ``_announce_fired_tranches`` and not by the exit engine.
 
     A live long position whose uic has a folded ``tranche_plan`` (Task 1)
     becomes ONE ``ManagedExit``; a live long with NO ``tranche_plan`` on record
@@ -980,7 +1036,7 @@ def _build_managed_exits(
             skipped += 1
             continue
         stop_price = _journaled_stop_floor(
-            uic, stop_price, trailed.get(uic), (reanchored or {}).get(uic), announced
+            uic, stop_price, trailed.get(uic), (reanchored or {}).get(uic), announced, raised
         )
         instrument_ccy, sizing_ccy, exchange_mic = (plan_currencies or {}).get(
             uic, (None, None, None)
@@ -1274,6 +1330,7 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
             report.alerts += 1
         return
     journal_lines = list(stop_journal._iter_standalone_stop_journal())
+    stop_raises: list[StopRaise] = []
     managed = _build_managed_exits(
         long_positions=long_positions,
         tranche_plans=stop_journal.fold_tranche_plans(journal_lines),
@@ -1282,6 +1339,7 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
         plan_currencies=fold_tranche_plan_currencies(journal_lines),
         reanchored=_fold_reanchored_stop_levels(journal_lines),
         announced=deps.stop_raises_announced,
+        raised=stop_raises,
     )
     # uic -> (ticker, venue) off the live positions just read. The venue must
     # survive: resolving a LIVE instrument by bare ticker is ambiguous for
@@ -1291,6 +1349,13 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
         for pos in long_positions
         if (uic := _position_uic(pos)) is not None
     }
+    # Here, and not after the engine run: the raise is a JOURNAL fact that
+    # holds whether or not the engine gets to run this tick, and the
+    # once-per-level guard inside the build has ALREADY consumed it — so a page
+    # placed behind any of the early returns below would be lost for good
+    # rather than sent late. The emit is contained, which is what keeps the
+    # feed-scope write and the engine run below it safe (#1621 part 3).
+    _announce_stop_raises(deps, stop_raises, uic_to_instrument, report)
     # Built BEFORE the managed check on purpose: the build writes this pass's
     # "exits" slice of the shared price-stream subscription off the live long
     # positions, and that write must happen on quiet ticks too — when the last
@@ -1431,6 +1496,67 @@ def _announce_fired_tranches(
                 report,
                 trigger=f"tranche {tp_label_from_tag(tranche.tag)} closed the position",
             )
+
+
+_STOP_RAISED_ALERT_KEY_PREFIX = "stop-raised"
+_STOP_PLACED_ALERT_KEY_PREFIX = "stop-placed"
+
+
+def _stop_raised_alert_key(raise_: StopRaise) -> str:
+    """Throttle key identifying ONE stop raise: the uic AND the level.
+
+    The level is in the key deliberately. Each level is a distinct fact — it is
+    what says how much the raise locked in — and the #1766 orphan-key lesson is
+    that a key built from less than the distinguishing facts pages for the first
+    event and HIDES the rest. Here the hidden one would be a SECOND, higher
+    raise inside the re-alert interval, which is the page the operator most
+    wants.
+
+    Nothing is lost on the other side: the once-per-level ``announced`` guard
+    already suppresses the steady state, so this key only ever sees a level that
+    just changed. What it still buys is a daemon RESTART, which empties
+    ``announced`` and re-derives the same raise from the journal — that repeat
+    carries the same level, so it dedups, while a genuinely higher level does
+    not.
+
+    Six decimals, not :func:`trade_alerts.format_price`: the rendered text
+    rounds to two, and two levels 0.004 apart are the same key under that
+    rounding while being two different stops."""
+    return f"{_STOP_RAISED_ALERT_KEY_PREFIX}:{raise_.uic}:{raise_.level:.6f}"
+
+
+def _announce_stop_raises(
+    deps: LoopDeps,
+    raises: Sequence[StopRaise],
+    uic_to_instrument: Mapping[int, tuple[str, str | None]],
+    report: TickReport,
+) -> None:
+    """#1621 part 3 (A): a raised stop announces itself — ONE throttled page per
+    uic and level, rendered HERE rather than in ``_build_managed_exits``, which
+    is pure, holds no alert sink and knows no tickers (the
+    ``_announce_fired_tranches`` precedent).
+
+    The page carries NO quantity. The only one this site holds is the ladder's
+    reference qty, which is not the resting stop's size, and the live snapshot
+    is per LEG rather than per exposure — a number that looks like the protected
+    size and is not would be worse than its absence."""
+    for raise_ in raises:
+        ticker = uic_to_instrument.get(raise_.uic, (f"uic {raise_.uic}", None))[0]
+        event = trade_alerts.TradeEvent(
+            kind=trade_alerts.EventKind.STOP_RAISED,
+            ticker=ticker,
+            label=STOP_LABEL,
+            reason=raise_.reason,
+            level=raise_.level,
+            previous_level=raise_.previous,
+        )
+        _page_best_effort(
+            functools.partial(
+                deps.alert_throttled, trade_alerts.render(event), _stop_raised_alert_key(raise_)
+            ),
+            report,
+            what="stop-raised",
+        )
 
 
 def _uics_moving_their_stop(journal_lines: Iterable[Mapping[str, Any]]) -> frozenset[int]:
@@ -6979,6 +7105,29 @@ def _emit_alert(
         report.alerts += 1
 
 
+def _page_best_effort(send: Callable[[], bool], report: TickReport, *, what: str) -> None:
+    """Emit one observability-only operator page, CONTAINED, counting it in
+    ``report`` iff it actually went out (#1621 part 3).
+
+    Same reasoning as :func:`_journal_outcome_best_effort`, for the other
+    observability sink. The production Telegram sink does not raise by design
+    (``_telegram_daemon_notify``: "send_message never raises, so a delivery blip
+    cannot crash a tick"), but the two pages routed through here sit ON money
+    paths — the stop-raised page runs before the live-exits feed write and the
+    engine, the stop-placed page after a confirmed place and before the
+    protection pass's remaining actions. A sink that someday DOES raise would
+    not be a ``BrokerError``, so it would blow through the per-action boundary
+    in ``_run_protection_pass`` and abort the tick mid-protection. An alert is
+    never worth a naked position, so a failure costs the page plus one WARNING
+    and nothing else. The catch is ``Exception``, not a narrower class, for the
+    same reason the journal helper's is; ``BaseException`` still propagates."""
+    try:
+        if send():
+            report.alerts += 1
+    except Exception:
+        logger.warning("alert: the %s page failed — the tick continues", what, exc_info=True)
+
+
 def _journal_outcome_best_effort(
     append: Callable[[], None],
     throttle: _AlertThrottle,
@@ -7466,6 +7615,49 @@ def _execute_amend_stop(
             )
 
 
+def _page_stop_placed(
+    throttle: _AlertThrottle,
+    action: PlaceStop,
+    qty: float,
+    order_id: str,
+    report: TickReport,
+) -> None:
+    """#1621 part 3 (B): one throttled page saying a protective stop now rests.
+
+    Rendered here rather than inside the reconciler for the same reason the
+    take-profit page is rendered in ``_announce_fired_tranches``: ``PlaceStop``
+    carries no ticker and the pure diff holds no alert sink. The ticker comes off
+    the deterministic stop ref, exactly as the stop-FILL page recovers it
+    (``stop_journal._ticker_from_ref``), and falls back to the uic rather than
+    going out unidentified.
+
+    ``qty`` is the quantity ACTUALLY placed (post execute-time clamp), never
+    ``action.qty``: a page quoting the stale number would tell the operator that
+    more shares are covered than are.
+
+    The key is the broker order id. That is what makes two placements distinct —
+    a re-place after a rotation or a supersede rests a NEW order the operator
+    must hear about, while a same-ref retry that reached the broker once does
+    not. Keying on the uic alone would page for the session's first stop and
+    hide every later one (the #1766 orphan-key lesson). The ref is the fallback
+    for an adapter that returns no id, so the page is never keyed on an empty
+    string."""
+    event = trade_alerts.TradeEvent(
+        kind=trade_alerts.EventKind.STOP_PLACED,
+        ticker=stop_journal._ticker_from_ref(action.request_id) or f"uic {action.uic}",
+        label=STOP_LABEL,
+        qty=qty,
+        level=action.stop_price,
+        order_id=order_id or None,
+    )
+    key = f"{_STOP_PLACED_ALERT_KEY_PREFIX}:{order_id or action.request_id}"
+    _page_best_effort(
+        functools.partial(throttle.emit, trade_alerts.render(event), uic=action.uic, reason=key),
+        report,
+        what="stop-placed",
+    )
+
+
 def _execute_place_stop(
     broker: Broker, throttle: _AlertThrottle, action: PlaceStop, report: TickReport
 ) -> None:
@@ -7546,6 +7738,12 @@ def _execute_place_stop(
         uic=action.uic,
         kind="stop_placed",
     )
+    # #1621 part 3 (B): the position is now protected, and until this page the
+    # operator had no way to learn that except by inferring it from silence.
+    # LAST in the branch, after the place, the supersede cancels and the record,
+    # and contained — an alert may not reorder or endanger any of them, nor
+    # abort the protection actions queued behind this uic.
+    _page_stop_placed(throttle, action, qty, placed_stop.entry_order_id, report)
 
 
 __all__ = [

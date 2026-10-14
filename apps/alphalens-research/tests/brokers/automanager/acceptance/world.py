@@ -33,10 +33,18 @@ from unittest import mock
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import safety, service
 from alphalens_pipeline.brokers.automanager import stop_journal as sj
+from alphalens_pipeline.brokers.automanager import trade_alerts as ta
 from broker_contract.contract import _QTY_EPS, OrderStatus
 from broker_contract.price_feed import PricePoint
 
 from .fake_broker import FakeBroker
+
+# The reason text of the ONE page a healthy tick is allowed to send: the
+# confirmation that a protective stop now rests (#1621 part 3). Rendered by the
+# formatter itself so this cannot drift from the real message.
+_CONFIRMATION_PHRASE = ta.render(
+    ta.TradeEvent(kind=ta.EventKind.STOP_PLACED, ticker="X", label=None)
+).split(" - ", 1)[1]
 
 _DEFAULT_STOP = 44.0
 _DEFAULT_TP = 59.0
@@ -419,8 +427,21 @@ class ManagerWorld:
             )
 
     def assert_silent(self) -> None:
-        if self._captured_alert_events:
-            raise AssertionError(f"expected no alerts, got: {self._captured_alert_events}")
+        """No alert says anything WENT WRONG this tick.
+
+        Not "nothing was said": since #1621 part 3 a healthy tick that protects
+        a fresh position sends ONE confirmation page, which is the whole point
+        of that page — the operator could not otherwise tell "protected" from
+        "the daemon never ran". Guarantee 5 is about failures, so the
+        confirmation is excluded by name and EVERY other alert still fails here.
+        The phrase is taken from the formatter rather than written out, so
+        rewording the page cannot quietly widen this exclusion: the filter would
+        stop matching and this assert would go red."""
+        unexpected = [
+            alert for alert in self._captured_alert_events if _CONFIRMATION_PHRASE not in alert
+        ]
+        if unexpected:
+            raise AssertionError(f"expected no alerts, got: {unexpected}")
 
     def assert_order_gone(self, order_id: str) -> None:
         if self.broker.has_order(order_id):

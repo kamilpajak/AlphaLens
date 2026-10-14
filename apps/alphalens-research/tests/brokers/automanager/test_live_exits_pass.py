@@ -1079,6 +1079,163 @@ class TestOpenPositionsStayManagedWhenTheTrailIsDisabled(_JournalCase):
         self.assertEqual(broker.get_positions_by_uic(uic).quantity, 0.0)
 
 
+class TestStopRaisePagesTheOperator(_JournalCase):
+    """#1621 part 3 (A): a stop that RAISES must reach the operator.
+
+    On 2026-09-29 an ASTS stop moved 50.64 -> 62.42, locking in +0.36R, and the
+    first message the owner saw was the fill hours later. The raise was already
+    computed and already de-noised once per level in ``_journaled_stop_floor``;
+    its only sink was ``logger.info``, which on the VPS means journald and
+    nobody.
+
+    The emit is the CALLER's, not the pure build's: ``_build_managed_exits``
+    holds no alert sink and knows no tickers (the ``_announce_fired_tranches``
+    precedent), so the raise travels out on ``raised`` and is rendered here.
+    """
+
+    _PLAN_STOP = 13.0
+    _TRAILED = 14.5
+
+    def _pages(self) -> tuple[list[tuple[str, str]], cl.TickReport, int]:
+        broker = FakeBroker()
+        uic = broker.uic_of("KO")
+        broker.set_position("KO", 100, avg_price=15.0)
+        broker.add_resting_sell("KO", 100, self._PLAN_STOP, order_type="StopIfTraded")
+        # A target far above the feed price, so the only thing this tick does is
+        # the raise — the tranche-fired page would otherwise confound the count.
+        self._seed_tranche_plan(
+            uic,
+            tranches=(_tr(0, 99.0, 0.5),),
+            reference_qty=100.0,
+            stop_price=self._PLAN_STOP,
+            pick_key="KO:2026-09-29",
+        )
+        sj._journal_trailed(uic, self._TRAILED, peak=14.9, last_price=14.8)
+        pages: list[tuple[str, str]] = []
+        deps = _deps(
+            broker,
+            alerts=[],
+            live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 16.5}),
+            alert_throttled=lambda msg, reason: pages.append((msg, reason)) or True,
+        )
+        report = cl.TickReport()
+        with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+            cl._run_live_exits_pass(deps, report)
+        return pages, report, uic
+
+    def test_the_page_carries_the_ticker_the_label_and_both_levels(self) -> None:
+        pages, _report, _uic = self._pages()
+        raised = [msg for msg, _key in pages if "raised" in msg]
+        self.assertEqual(len(raised), 1, f"exactly one raise page; got {pages}")
+        self.assertEqual(raised[0], "SELL KO SL - trailed stop raised 13.00 -> 14.50")
+
+    def test_the_page_is_counted_in_the_report(self) -> None:
+        _pages, report, _uic = self._pages()
+        self.assertEqual(report.alerts, 1)
+
+    def test_the_throttle_key_carries_the_uic_and_the_level(self) -> None:
+        # The level is IN the key on purpose. Each distinct level is a distinct
+        # fact (it says how much was locked in), and the orphan-key lesson of
+        # #1766 is that a key built from less than the distinguishing facts
+        # pages for the first event and HIDES the rest. The once-per-level
+        # ``announced`` guard already suppresses the steady state, so the only
+        # thing a level-less key could add is suppressing a SECOND, higher
+        # raise — the page the operator most wants.
+        pages, _report, uic = self._pages()
+        keys = [key for msg, key in pages if "raised" in msg]
+        self.assertEqual(keys, [f"stop-raised:{uic}:14.500000"])
+
+    def test_a_level_that_does_not_raise_pages_nothing(self) -> None:
+        broker = FakeBroker()
+        uic = broker.uic_of("KO")
+        broker.set_position("KO", 100, avg_price=15.0)
+        broker.add_resting_sell("KO", 100, self._PLAN_STOP, order_type="StopIfTraded")
+        self._seed_tranche_plan(
+            uic, tranches=(_tr(0, 99.0, 0.5),), reference_qty=100.0, stop_price=self._PLAN_STOP
+        )
+        sj._journal_trailed(uic, 1.0, peak=1.1, last_price=1.0)  # below the plan stop
+        pages: list[tuple[str, str]] = []
+        deps = _deps(
+            broker,
+            alerts=[],
+            live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 16.5}),
+            alert_throttled=lambda msg, reason: pages.append((msg, reason)) or True,
+        )
+        with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+            cl._run_live_exits_pass(deps, cl.TickReport())
+        self.assertEqual([msg for msg, _key in pages if "raised" in msg], [])
+
+    def test_a_held_raise_pages_once_not_on_every_tick(self) -> None:
+        # The guard that already exists (`stop_raises_announced`) is the one
+        # that must do this. Duplicating it here, or ignoring it, would page
+        # once per tick for the whole session — the LIVE VST 2026-10-01 shape.
+        broker = FakeBroker()
+        uic = broker.uic_of("KO")
+        broker.set_position("KO", 100, avg_price=15.0)
+        broker.add_resting_sell("KO", 100, self._PLAN_STOP, order_type="StopIfTraded")
+        self._seed_tranche_plan(
+            uic, tranches=(_tr(0, 99.0, 0.5),), reference_qty=100.0, stop_price=self._PLAN_STOP
+        )
+        sj._journal_trailed(uic, self._TRAILED, peak=14.9, last_price=14.8)
+        pages: list[tuple[str, str]] = []
+        deps = _deps(
+            broker,
+            alerts=[],
+            live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 16.5}),
+            alert_throttled=lambda msg, reason: pages.append((msg, reason)) or True,
+        )
+        with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+            cl._run_live_exits_pass(deps, cl.TickReport())
+            cl._run_live_exits_pass(deps, cl.TickReport())
+            self.assertEqual(len([m for m, _k in pages if "raised" in m]), 1)
+            # A NEW level is a new fact and pages again.
+            sj._journal_trailed(uic, 15.5, peak=15.9, last_price=15.8)
+            cl._run_live_exits_pass(deps, cl.TickReport())
+        raised = [m for m, _k in pages if "raised" in m]
+        self.assertEqual(len(raised), 2, f"the second level pages too; got {raised}")
+        # The second page reads from the level the FIRST one announced, not from
+        # the plan stop: that level is the one resting at the broker, so
+        # "13.00 -> 15.50" would overstate the move the operator just missed.
+        self.assertIn("14.50 -> 15.50", raised[1])
+
+    def test_an_alert_sink_that_raises_does_not_stop_the_exits_pass(self) -> None:
+        # Observability may never endanger the money path. The feed-scope write
+        # and the engine run both come AFTER this page in the pass, so an
+        # uncontained sink failure would cost the tick its exits. The tranche
+        # target stays out of reach here so the only page is the raise: the
+        # tranche-fired page is pre-existing and uncontained, and widening its
+        # containment is not this change.
+        broker = FakeBroker()
+        uic = broker.uic_of("KO")
+        broker.set_position("KO", 100, avg_price=15.0)
+        broker.add_resting_sell("KO", 100, self._PLAN_STOP, order_type="StopIfTraded")
+        self._seed_tranche_plan(
+            uic, tranches=(_tr(0, 99.0, 0.5),), reference_qty=100.0, stop_price=self._PLAN_STOP
+        )
+        sj._journal_trailed(uic, self._TRAILED, peak=14.9, last_price=14.8)
+
+        def _explode(message: str, reason: str) -> bool:
+            raise RuntimeError("telegram down")
+
+        deps = _deps(
+            broker,
+            alerts=[],
+            live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 16.5}),
+            alert_throttled=_explode,
+        )
+        report = cl.TickReport()
+        with mock.patch.object(cl, "run_live_exits", return_value=[]) as engine:
+            with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+                with self.assertLogs(cl.logger, level="WARNING") as captured:
+                    cl._run_live_exits_pass(deps, report)  # must not raise
+        engine.assert_called_once()
+        self.assertEqual(report.alerts, 0, "a page that never went out is not counted")
+        self.assertTrue(
+            any("stop-raised page failed" in line for line in captured.output),
+            f"the swallowed failure must still be visible; got {captured.output}",
+        )
+
+
 class TestLiveExitsPassCapabilityGuard(IsolatedHomeTestCase):
     """#1141: the pass narrows deps.broker to the engine's requirement set
     (LiveExitBroker) BEFORE any broker call. A non-conforming broker — possible

@@ -4764,6 +4764,170 @@ class TestExecutePlaceStopJournalsStopPlaced(IsolatedHomeTestCase):
                 self.assertEqual(lines, [], f"no stop_placed on the {label} path")
 
 
+class _KeyedThrottle(cl._AlertThrottle):
+    """An ``_AlertThrottle`` that records every emit attempt with its KEY, so a
+    test can assert on what the key discriminates and not only on the text."""
+
+    def __init__(self, sent: list[str]) -> None:
+        super().__init__(sent.append)
+        self.calls: list[tuple[str, int | None, str | None]] = []
+
+    def emit(self, message: str, *, uic: int | None = None, reason: str | None = None) -> bool:
+        self.calls.append((message, uic, reason))
+        return super().emit(message, uic=uic, reason=reason)
+
+
+_TRAIL_STOP_REF = "KO-2026-08-01-entry-t0-stop-1"
+
+
+class TestStopPlacedPagesTheOperator(IsolatedHomeTestCase):
+    """#1621 part 3 (B): a confirmed standalone-stop placement must reach the
+    operator. Before this the success branch only counted the place, recorded it
+    and journaled it — every alert in ``_execute_place_stop`` was a failure or a
+    defer branch, so the one thing the owner cannot infer from silence (that a
+    fresh position is now protected) was the one thing never said.
+
+    It matters more than the issue knew: the window between an entry filling at
+    the venue and its disaster stop being journaled was measured at 6.2-18.8 s
+    over 7 LIVE entries (#1402). This page is what closes that window for the
+    operator, and its ABSENCE after an expected entry is the signal."""
+
+    def _place(
+        self,
+        *,
+        broker: _ProtBroker,
+        ref: str = _TRAIL_STOP_REF,
+        qty: float = 46.0,
+        supersede_ids: tuple[str, ...] = (),
+    ) -> tuple[_KeyedThrottle, cl.TickReport]:
+        sent: list[str] = []
+        throttle = _KeyedThrottle(sent)
+        executor = cl._make_protection_executor(broker, throttle)
+        action = PlaceStop(_UIC, "SELL", qty, 216.48, ref, supersede_ids=supersede_ids)
+        report = cl.TickReport()
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(
+                sj, "_standalone_stop_journal_path", lambda journal=journal: journal
+            ):
+                executor(action, False, report)
+        return throttle, report
+
+    def _pages(self, throttle: _KeyedThrottle) -> list[tuple[str, int | None, str | None]]:
+        return [call for call in throttle.calls if "stop placed" in call[0]]
+
+    def test_the_page_carries_the_ticker_quantity_and_level(self) -> None:
+        throttle, report = self._place(broker=_ProtBroker(by_uic={_UIC: _pos(46.0)}))
+        pages = self._pages(throttle)
+        self.assertEqual(len(pages), 1, f"exactly one page; got {throttle.calls}")
+        self.assertEqual(pages[0][0], "SELL KO SL 46 - stop placed 216.48 (order S-1)")
+        self.assertEqual(report.alerts, 1)
+
+    def test_a_re_place_of_the_same_order_dedups_and_is_not_counted_twice(self) -> None:
+        # The shared daemon-lifetime throttle suppresses the repeat, and a page
+        # that was SUPPRESSED is not a page the operator got — so it must not
+        # land in report.alerts either. Both emits are attempted; only one is
+        # sent.
+        sent: list[str] = []
+        throttle = _KeyedThrottle(sent)
+        broker = _ProtBroker(by_uic={_UIC: _pos(46.0)})
+        executor = cl._make_protection_executor(broker, throttle)
+        action = PlaceStop(_UIC, "SELL", 46.0, 216.48, _TRAIL_STOP_REF)
+        report = cl.TickReport()
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(
+                sj, "_standalone_stop_journal_path", lambda journal=journal: journal
+            ):
+                executor(action, False, report)
+                executor(action, False, report)
+        self.assertEqual(len(self._pages(throttle)), 2, "both emits were attempted")
+        self.assertEqual(len([a for a in sent if "stop placed" in a]), 1, "one went out")
+        self.assertEqual(report.alerts, 1, "only the page that went out is counted")
+
+    def test_the_page_names_the_uic_when_the_ref_carries_no_ticker(self) -> None:
+        # A classic bracket ref is not the entry-trail shape, so no ticker can
+        # be recovered from it. The page must still identify the instrument —
+        # the same fallback the stop-FILL alert uses.
+        throttle, _report = self._place(
+            broker=_ProtBroker(by_uic={_UIC: _pos(46.0)}), ref="crid-0-stop-0"
+        )
+        self.assertEqual(
+            self._pages(throttle)[0][0], f"SELL uic {_UIC} SL 46 - stop placed 216.48 (order S-1)"
+        )
+
+    def test_the_page_carries_the_qty_ACTUALLY_placed(self) -> None:
+        # The execute-time re-check clips 46 -> 20. A page quoting the stale
+        # action qty would tell the operator that 46 shares are covered.
+        throttle, _report = self._place(broker=_ProtBroker(by_uic={_UIC: _pos(20.0)}))
+        self.assertIn("SL 20 ", self._pages(throttle)[0][0])
+
+    def test_the_throttle_key_is_the_broker_order_id(self) -> None:
+        # The order id is what makes two placements distinct: a re-place after a
+        # rotation or a supersede reuses neither the id nor the resting order,
+        # and the operator needs to hear about the replacement. Keying on the
+        # uic alone would page for the first stop of the session and hide every
+        # later one (the #1766 orphan-key lesson); keying on the ref alone would
+        # merge a same-gen retry with the real second place.
+        throttle, _report = self._place(broker=_ProtBroker(by_uic={_UIC: _pos(46.0)}))
+        self.assertEqual(self._pages(throttle)[0][1:], (_UIC, "stop-placed:S-1"))
+
+    def test_no_page_on_any_path_that_did_not_place(self) -> None:
+        failures = {
+            "flat-skip": _ProtBroker(by_uic={_UIC: _pos(0.0)}),
+            "defer-sell-exist": _ProtBroker(
+                by_uic={_UIC: _pos(46.0)},
+                place_error=OrderRejectedError(
+                    "blocked", error_code="SellOrdersAlreadyExistForOwnedContracts"
+                ),
+            ),
+            "clean-reject": _ProtBroker(
+                by_uic={_UIC: _pos(46.0)}, place_error=OrderRejectedError("rejected")
+            ),
+            "broker-error": _ProtBroker(by_uic={_UIC: _pos(46.0)}, place_error=BrokerError("boom")),
+        }
+        for label, broker in failures.items():
+            with self.subTest(label):
+                throttle, report = self._place(broker=broker)
+                self.assertEqual(self._pages(throttle), [], f"no page on the {label} path")
+                self.assertEqual(report.exits_placed, 0)
+
+    def test_an_alert_sink_that_raises_never_aborts_the_protection_pass(self) -> None:
+        # The page is the LAST thing in the branch, but a raise would still
+        # escape the per-action ``except BrokerError`` boundary in
+        # ``_run_protection_pass`` and strand every uic queued behind this one.
+        class _ExplodingThrottle(cl._AlertThrottle):
+            def emit(
+                self, message: str, *, uic: int | None = None, reason: str | None = None
+            ) -> bool:
+                raise RuntimeError("telegram down")
+
+        broker = _ProtBroker(by_uic={_UIC: _pos(46.0)})
+        executor = cl._make_protection_executor(broker, _ExplodingThrottle(lambda _m: None))
+        action = PlaceStop(_UIC, "SELL", 46.0, 216.48, _TRAIL_STOP_REF, supersede_ids=("old-stop",))
+        report = cl.TickReport()
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(
+                sj, "_standalone_stop_journal_path", lambda journal=journal: journal
+            ):
+                with self.assertLogs(cl.logger, level="WARNING") as captured:
+                    executor(action, False, report)  # must NOT raise
+                placed_lines = [
+                    line
+                    for line in sj._iter_standalone_stop_journal()
+                    if line.get("kind") == "stop_placed"
+                ]
+        self.assertEqual(len(broker.placed), 1, "the stop still went to the broker")
+        self.assertEqual(broker.cancelled, ["old-stop"], "the supersede cancel still ran")
+        self.assertEqual(len(placed_lines), 1, "the outcome record was still written")
+        self.assertEqual(report.alerts, 0, "a page that never went out is not counted")
+        self.assertTrue(
+            any("stop-placed page failed" in line for line in captured.output),
+            f"the swallowed failure must still be visible; got {captured.output}",
+        )
+
+
 class TestOutcomeJournalIoFailureNeverBlocksProtection(IsolatedHomeTestCase):
     """The ``stop_placed`` / ``amend_ok`` outcome records are observability-only,
     so a fallible journal append (OSError: disk full, ENOSPC on fsync, permission)

@@ -108,6 +108,23 @@ ALLOWED_EXCLUDED_FILE_PREFIXES = ("test_",)
 BASELINE: dict[str, int] = {
     "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3507,
     "apps/alphalens-pipeline/alphalens_cli/commands/thematic.py": 1708,
+    # Raised from 7559 for #1621 part 3, the two alerts the daemon never sent.
+    # The lines are the design, not decoration. STOP_RAISED needs an
+    # out-parameter (``StopRaise`` plus a ``raised`` argument threaded through
+    # two functions) because the pure build holds no alert sink and knows no
+    # tickers, so the page belongs to the caller (``_announce_stop_raises``) --
+    # the same split as the take-profit page. STOP_PLACED needs
+    # ``_page_stop_placed`` for the same reason: ``PlaceStop`` carries no
+    # ticker. Both need ``_page_best_effort``, and that is the half that earns
+    # its lines on the money path: these two pages sit BEFORE the live-exits
+    # engine and BETWEEN a confirmed place and the protection pass's remaining
+    # actions, and a sink exception is not a ``BrokerError``, so uncontained it
+    # would abort the tick mid-protection. The rest is the two throttle-key
+    # docstrings, which say what each key discriminates -- a collapsed key
+    # HIDES the second, higher raise, the page the operator most wants.
+    # Measured with ``wc -l`` after ``ruff format``, not added up from the diff.
+    # The previous entry's #1621-part-4 and #1525 history follows.
+    #
     # Raised from 7254 for #1621 part 4. Routing the orphan-sweep, orphan and
     # protection-failure alerts through the throttle turns three one-line
     # ``deps.alert`` calls into three ``if deps.alert_throttled(...)`` blocks
@@ -151,9 +168,7 @@ BASELINE: dict[str, int] = {
     # rather than either branch's own number. Counted with ``wc -l`` on the
     # merged file, not added up from the two diffs.
     #
-    # 5 more to correct the #1621 comment's cadence: it quoted the SIM
-    # daemon's tick rate for the LIVE one, and names the measured mechanism.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7559,
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7757,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3302,

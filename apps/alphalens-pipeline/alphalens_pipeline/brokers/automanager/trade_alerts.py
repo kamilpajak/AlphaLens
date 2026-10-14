@@ -11,6 +11,11 @@ reason, outcome, ``(order id)`` — and a field that is not known is left out,
 never rendered as ``None``. The order id stays because it is the only link from
 the message to the order in the broker's app.
 
+Since part 3 the same slots also carry the protective stop's own STATE: it was
+placed, or its level was raised. Those two are not fills, so they fill the
+reason slot with the move rather than with an exit reason — a raise to 62.42
+must not read like a fill at 62.42.
+
 Pure: no I/O and no import from ``control_loop``, so the formatter can be tested
 without a daemon.
 """
@@ -38,13 +43,25 @@ class EventKind(enum.Enum):
     # The SELL was sent, and no fill was read back yet (a take-profit market
     # sell: the live-exit engine does not read the fill price).
     EXIT_SUBMITTED = "exit_submitted"
+    # Neither of the two below is a fill. They are the protective stop's own
+    # state: it now rests at the venue, or its level moved UP. A long's
+    # protective stop is a resting SELL, which is why they share the side.
+    STOP_PLACED = "stop_placed"
+    STOP_RAISED = "stop_raised"
 
 
 _SIDE_BY_KIND: Mapping[EventKind, str] = {
     EventKind.ENTRY_FILLED: "BUY",
     EventKind.EXIT_FILLED: "SELL",
     EventKind.EXIT_SUBMITTED: "SELL",
+    EventKind.STOP_PLACED: "SELL",
+    EventKind.STOP_RAISED: "SELL",
 }
+
+# The kinds whose middle slot describes a stop MOVE rather than a fill reason.
+# ``ExitReason`` is shared with the fill kinds, so without this split a raise to
+# 62.42 would render the same words a FILL at 62.42 does.
+_STOP_MOVE_KINDS = frozenset({EventKind.STOP_PLACED, EventKind.STOP_RAISED})
 
 
 class ExitReason(enum.Enum):
@@ -85,11 +102,19 @@ class TradeEvent:
     kind: EventKind
     ticker: str
     label: str | None
-    qty: float
+    # ``None`` only where no quantity is a FACT at the call site. A stop RAISE
+    # is such a site: it is a level change, and the only quantity the pure
+    # managed-exit build holds is the ladder's reference qty, which is not the
+    # resting stop's size. A plausible number there would read as the size of
+    # the protected position.
+    qty: float | None = None
     price: float | None = None
     reason: ExitReason | None = None
-    # The stop or target level behind ``reason`` (for example the trailed level).
+    # The stop or target level behind ``reason`` (for example the trailed
+    # level); for the stop-move kinds, the level the stop now sits at.
     level: float | None = None
+    # Where a raised stop came FROM. Only the stop-move kinds carry it.
+    previous_level: float | None = None
     order_id: str | None = None
     position_closed: bool | None = None
 
@@ -117,7 +142,29 @@ def format_price(price: float) -> str:
     return f"{price:.2f}" if abs(price) >= _SMALL_PRICE else f"{price:.4f}"
 
 
+def _with_level(text: str, level: float | None) -> str:
+    """``text`` followed by ``level``, or ``text`` alone when it is not known."""
+    return text if level is None else f"{text} {format_price(level)}"
+
+
+def _stop_move_text(event: TradeEvent) -> str | None:
+    """The middle slot for a stop-state kind: what happened to the protective
+    stop, and at which level(s)."""
+    if event.kind is EventKind.STOP_PLACED:
+        return _with_level("stop placed", event.level)
+    # A raise names its cause when the call site knows it (which journaled floor
+    # moved the stop) and BOTH levels, because the MOVE is the fact the operator
+    # is missing: the new level alone does not say how much it locked in.
+    moved = f"{event.reason.value} raised" if event.reason is not None else "stop raised"
+    if event.previous_level is None or event.level is None:
+        # A half-known move is still worth saying; the arrow form needs both.
+        return _with_level(moved, event.level)
+    return f"{moved} {format_price(event.previous_level)} -> {format_price(event.level)}"
+
+
 def _reason_text(event: TradeEvent) -> str | None:
+    if event.kind in _STOP_MOVE_KINDS:
+        return _stop_move_text(event)
     if event.reason is None:
         return None
     text = event.reason.value
@@ -142,7 +189,8 @@ def render(event: TradeEvent) -> str:
     head = [_SIDE_BY_KIND[event.kind], event.ticker]
     if event.label:
         head.append(event.label)
-    head.append(f"{event.qty:g}")
+    if event.qty is not None:
+        head.append(f"{event.qty:g}")
     if event.price is not None:
         head.append(f"@ {format_price(event.price)}")
     parts = [" ".join(head)]
