@@ -1219,6 +1219,59 @@ class TestStopRaisePagesTheOperator(_JournalCase):
         keys = [key for msg, key in pages if "raised" in msg]
         self.assertEqual(keys, [f"stop-raised:{uic}:14.500000"])
 
+    def test_a_re_anchored_floor_pages_its_OWN_cause(self) -> None:
+        # Every other fixture in this class journals only a `trailed` level, so
+        # the cause column is uniform and the page cannot tell a real read of
+        # the winning floor from a constant: hard-coding
+        # `reason=ExitReason.TRAILED_STOP` on the `StopRaise` left all 3588
+        # broker tests green, as did having the re-anchored arm report the
+        # trailed cause, as did `raises[0]` in place of `raises[-1]`.
+        #
+        # Here the only journaled floor is a RE-ANCHORED one, so the two arms
+        # are distinguishable, and the second case drives BOTH arms in one tick
+        # with the re-anchor higher -- which is what pins `raises[-1]`, the rule
+        # that the LAST arm to fire owns the level actually placed.
+        for label, trailed, expected in (
+            (
+                "re-anchor alone",
+                None,
+                "TRAIL KO SL - re-anchored stop resting 15.00 (raised from 13.00)",
+            ),
+            (
+                "both arms, the re-anchor last",
+                14.0,
+                "TRAIL KO SL - re-anchored stop resting 15.00 (raised from 13.00)",
+            ),
+        ):
+            with self.subTest(label):
+                broker = FakeBroker()
+                uic = broker.uic_of("KO")
+                broker.set_position("KO", 100, avg_price=15.0)
+                broker.add_resting_sell("KO", 100, self._PLAN_STOP, order_type="StopIfTraded")
+                self._seed_tranche_plan(
+                    uic,
+                    tranches=(_tr(0, 99.0, 0.5),),
+                    reference_qty=100.0,
+                    stop_price=self._PLAN_STOP,
+                )
+                if trailed is not None:
+                    sj._journal_trailed(uic, trailed, peak=16.0, last_price=15.9)
+                sj._journal_reanchored(uic, avg_price=15.0, stop_price=15.0)
+                pages: list[tuple[str, str]] = []
+                deps = _deps(
+                    broker,
+                    alerts=[],
+                    live_exits_feed_factory=lambda m, *, scope, uic=uic: _FakeFeed({uic: 16.5}),
+                    alert_throttled=(
+                        lambda msg, reason, pages=pages: pages.append((msg, reason)) or True
+                    ),
+                )
+                report = cl.TickReport()
+                with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+                    cl._run_live_exits_pass(deps, report)
+                cl._drain_pages(report)
+                self.assertEqual([msg for msg, _k in pages if "resting" in msg], [expected])
+
     def test_a_level_that_does_not_raise_pages_nothing(self) -> None:
         broker = FakeBroker()
         uic = broker.uic_of("KO")
