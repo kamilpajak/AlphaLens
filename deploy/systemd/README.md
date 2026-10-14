@@ -3,6 +3,15 @@
 User-scoped service definitions for AlphaLens long-running tasks on Linux VPS
 hosts where launchd is unavailable.
 
+**Why these jobs run on the VPS and not the Mac.** A laptop timer silently skips every fire while
+the lid is closed, and a multi-day job loses its state on sleep or restart — the 15-minute EDGAR
+poller missed whole days that way. The VPS is always-on, and it sits on a residential ISP with a
+different IP from the Mac, which matters because the SEC's 10 req/s limit is per-IP. The literature
+scans auto-commit their markdown to `main` from here, so the Mac picks them up on the next
+`git pull`. Caches live under `~/.alphalens/<area>/` on the VPS and that copy is the source of
+truth for VPS-side consumers; pull a copy to the Mac with
+`rsync -av jacoren@vps:.alphalens/<area>/ ~/.alphalens/<area>/` when you need one locally.
+
 ## Active units
 
 | Unit | Cadence | Source |

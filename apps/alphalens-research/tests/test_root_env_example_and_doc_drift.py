@@ -33,6 +33,27 @@ ROOT_ENV_EXAMPLE = REPO_ROOT / ".env.example"
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 README_MD = REPO_ROOT / "README.md"
 
+# Every tracked doc that may carry a rule relocated out of the root CLAUDE.md.
+# The L4 guard below reads this tuple, so a rule moved into a nested CLAUDE.md or
+# a docs/ page cannot smuggle the stale test_lean_config_parity.py reference past
+# the gate that was written for the two root files alone.
+RELOCATION_TARGETS = (
+    CLAUDE_MD,
+    README_MD,
+    REPO_ROOT / "apps/alphalens-research/CLAUDE.md",
+    REPO_ROOT / "apps/alphalens-research/README.md",
+    REPO_ROOT / "apps/alphalens-pipeline/CLAUDE.md",
+    REPO_ROOT / "apps/alphalens-django/CLAUDE.md",
+    REPO_ROOT / "apps/alphalens-broker-contract/CLAUDE.md",
+    REPO_ROOT / "apps/intent-replay/CLAUDE.md",
+    REPO_ROOT / "apps/web/CLAUDE.md",
+    REPO_ROOT / "docs/research/methodology-gates.md",
+    REPO_ROOT / "docs/research/CLAUDE.md",
+    REPO_ROOT / "docs/workflow/issues-and-board.md",
+    REPO_ROOT / "docs/runtime-data-layout.md",
+    REPO_ROOT / "deploy/systemd/README.md",
+)
+
 # A ``KEY=value`` line in a dotenv-style file; value half optional. Anchored to
 # a line start so a commented ``# KEY=`` line is ignored.
 ENV_KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=", re.MULTILINE)
@@ -165,6 +186,31 @@ class TestLeanConfigParityReferenceRemoved(unittest.TestCase):
             "test_lean_config_parity",
             README_MD.read_text(),
             "README.md still references the deleted test_lean_config_parity.py",
+        )
+
+    def test_every_relocation_target_exists(self) -> None:
+        # Guard the tuple against rot: a renamed or deleted destination must be
+        # reported, not silently dropped from coverage.
+        missing = sorted(
+            str(p.relative_to(REPO_ROOT)) for p in RELOCATION_TARGETS if not p.is_file()
+        )
+        self.assertEqual(
+            missing,
+            [],
+            f"RELOCATION_TARGETS names doc(s) that do not exist: {missing} — "
+            "update the tuple in the commit that moved them.",
+        )
+
+    def test_no_relocation_target_references_it(self) -> None:
+        offenders = sorted(
+            str(p.relative_to(REPO_ROOT))
+            for p in RELOCATION_TARGETS
+            if p.is_file() and "test_lean_config_parity" in p.read_text()
+        )
+        self.assertEqual(
+            offenders,
+            [],
+            f"doc(s) still reference the deleted test_lean_config_parity.py: {offenders}",
         )
 
 
