@@ -13,9 +13,6 @@ on:
     branches: [main]
     paths:
       - 'apps/alphalens-django/**'
-      # A nested CLAUDE.md is a working brief for this directory, not build input.
-      # Without this exclusion every doc-only edit to one rebuilds the image.
-      - '!apps/**/CLAUDE.md'
       # uv.lock + workspace root pyproject — the Dockerfile uses
       # `uv sync --frozen` against the workspace lockfile, so any
       # lockfile bump (incl. research-side dep changes that propagate
