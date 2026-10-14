@@ -1218,7 +1218,7 @@ class TestStopRaisePagesTheOperator(_JournalCase):
         # raise — the page the operator most wants.
         pages, _report, uic = self._pages()
         keys = [key for msg, key in pages if "raised" in msg]
-        self.assertEqual(keys, [f"stop-raised:{uic}:14.500000"])
+        self.assertEqual(keys, [f"stop-raised:{uic}:13.000000:14.500000"])
 
     def test_a_re_anchored_floor_pages_its_OWN_cause(self) -> None:
         # Every other fixture in this class journals only a `trailed` level, so
@@ -1326,6 +1326,7 @@ class TestStopRaisePagesTheOperator(_JournalCase):
         for level in (14.5, 14.5, 15.5, 15.0014, 15.0024):
             raise_ = cl.StopRaise(
                 uic=40000,
+                plan_stop=13.0,
                 previous=13.0,
                 level=level,
                 reason=ta.ExitReason.TRAILED_STOP,
@@ -1337,6 +1338,51 @@ class TestStopRaisePagesTheOperator(_JournalCase):
 
         self.assertEqual(
             sent, ["stop at 14.5", "stop at 15.5", "stop at 15.0014", "stop at 15.0024"]
+        )
+
+    def test_a_NEW_position_on_the_same_uic_is_not_hidden_by_the_old_one(self) -> None:
+        # `_build_managed_exits` deliberately clears the announce entry for a
+        # uic that left `managed`, "so a later position on the uic is announced
+        # afresh" -- and the throttle key defeated that, because it carried only
+        # the uic and the level. A ticker exited and re-armed the same session
+        # whose new trail reached the same round level inside the re-alert
+        # interval sent NO page, so the operator believed the fresh position's
+        # stop was still at its disaster level. The two pages even differ in
+        # text, since the new plan carries its own stop.
+        #
+        # The plan's own disaster stop is in the key now. It changes with the
+        # plan generation, and two raises that share a uic, a plan stop AND a
+        # level are genuinely the same fact.
+        sent: list[str] = []
+        clock = {"t": 1000.0}
+        throttle = cl._AlertThrottle(sent.append, clock=lambda: clock["t"])
+        for plan_stop in (13.0, 13.5):
+            raise_ = cl.StopRaise(
+                uic=40000,
+                plan_stop=plan_stop,
+                previous=plan_stop,
+                level=14.5,
+                reason=ta.ExitReason.TRAILED_STOP,
+            )
+            event = ta.TradeEvent(
+                kind=ta.EventKind.STOP_RAISED,
+                ticker="KO",
+                label="SL",
+                reason=raise_.reason,
+                level=raise_.level,
+                previous_level=raise_.previous,
+            )
+            throttle.emit(
+                ta.render(event), uic=raise_.uic, reason=cl._stop_raised_alert_key(raise_)
+            )
+            clock["t"] += 60.0  # well inside the interval
+
+        self.assertEqual(
+            sent,
+            [
+                "TRAIL KO SL - trailed stop resting 14.50 (raised from 13.00)",
+                "TRAIL KO SL - trailed stop resting 14.50 (raised from 13.50)",
+            ],
         )
 
     def test_a_level_that_does_not_raise_pages_nothing(self) -> None:
@@ -1393,8 +1439,18 @@ class TestStopRaisePagesTheOperator(_JournalCase):
             # A NEW level is a new fact and pages again.
             sj._journal_trailed(uic, 15.5, peak=15.9, last_price=15.8)
             _tick()
-        raised = [m for m, _k in pages if "raised" in m]
+        raised = [(m, k) for m, k in pages if "raised" in m]
         self.assertEqual(len(raised), 2, f"the second level pages too; got {raised}")
+        # The key's plan-stop component is the PLAN's disaster stop, which is
+        # not `previous`: on this second raise `previous` is the 14.50 the first
+        # page announced while the plan stop is still 13.00. Keying on
+        # `previous` instead would make the key vary with every ratchet step
+        # while the position's identity has not changed.
+        self.assertEqual(
+            [k for _m, k in raised],
+            [f"stop-raised:{uic}:13.000000:14.500000", f"stop-raised:{uic}:13.000000:15.500000"],
+        )
+        raised = [m for m, _k in raised]
         # The second page reads from the level the FIRST one announced, not from
         # the plan stop: that level is the one resting at the broker, so
         # "13.00 -> 15.50" would overstate the move the operator just missed.

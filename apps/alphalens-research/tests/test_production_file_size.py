@@ -108,6 +108,12 @@ ALLOWED_EXCLUDED_FILE_PREFIXES = ("test_",)
 BASELINE: dict[str, int] = {
     "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3507,
     "apps/alphalens-pipeline/alphalens_cli/commands/thematic.py": 1708,
+    # Raised again, by 22, to put the governing plan's disaster stop in the
+    # stop-raised key. A ticker exited and re-armed the same session was hidden
+    # by the old position's page, which is the opposite of what
+    # ``_build_managed_exits`` intends when it clears the announce entry on the
+    # way out. The field's docstring says why it is not ``previous``.
+    #
     # Raised again, by 13, to evict the throttle's dead dedup keys. The
     # stop-raised key is the first keyed on a continuously varying NUMBER
     # rather than an identifier, so the map grew at the trail-amend rate for
@@ -213,7 +219,7 @@ BASELINE: dict[str, int] = {
     # rather than either branch's own number. Counted with ``wc -l`` on the
     # merged file, not added up from the two diffs.
     #
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7915,
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7937,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3302,

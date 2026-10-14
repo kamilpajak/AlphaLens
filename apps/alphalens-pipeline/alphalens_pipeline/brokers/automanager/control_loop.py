@@ -878,9 +878,15 @@ class StopRaise:
     is now; ``reason`` names the floor that won. "Before" is the level last
     announced for the uic when there is one, because that is the level resting
     at the broker — the plan's disaster stop is the fallback for the first raise
-    and for a daemon that just restarted with an empty announce map."""
+    and for a daemon that just restarted with an empty announce map.
+
+    ``plan_stop`` is the governing plan's own disaster stop, which is NOT always
+    ``previous`` (within a process ``previous`` is the last announced level). It
+    rides along because it is what makes two positions on one uic distinct in
+    the throttle key: see :func:`_stop_raised_alert_key`."""
 
     uic: int
+    plan_stop: float
     previous: float
     level: float
     reason: trade_alerts.ExitReason
@@ -995,7 +1001,13 @@ def _journaled_stop_floor(
             # The LAST arm that fired owns the level actually placed, so it is
             # the one the page names as the cause.
             raised.append(
-                StopRaise(uic=uic, previous=previous, level=stop_price, reason=raises[-1][2])
+                StopRaise(
+                    uic=uic,
+                    plan_stop=plan_stop,
+                    previous=previous,
+                    level=stop_price,
+                    reason=raises[-1][2],
+                )
             )
     if announced is not None:
         if raises:
@@ -1558,10 +1570,20 @@ def _stop_raised_alert_key(raise_: StopRaise) -> str:
     (``trade_alerts._stop_move_text``) rather than persisted: it reads true
     whether the stop just moved or moved on Monday.
 
-    Six decimals, not :func:`trade_alerts.format_price`: the rendered text
-    rounds to two, and two levels 0.004 apart are the same key under that
+    The plan stop is in it for the same reason the level is. A ticker exited
+    and re-armed the same session gets a NEW plan with its own disaster stop,
+    and ``_build_managed_exits`` clears its announce entry on the way out "so a
+    later position on the uic is announced afresh" — which a key of uic and
+    level alone defeated: the fresh position's trail reaching the same round
+    level inside the interval sent nothing, and the operator went on believing
+    its stop sat at the disaster level. The plan stop changes with the plan
+    generation, so it separates the two positions; two raises sharing a uic, a
+    plan stop AND a level are genuinely the same fact.
+
+    Six decimals on both, not :func:`trade_alerts.format_price`: the rendered
+    text rounds to two, and two levels 0.004 apart are the same key under that
     rounding while being two different stops."""
-    return f"{_STOP_RAISED_ALERT_KEY_PREFIX}:{raise_.uic}:{raise_.level:.6f}"
+    return f"{_STOP_RAISED_ALERT_KEY_PREFIX}:{raise_.uic}:{raise_.plan_stop:.6f}:{raise_.level:.6f}"
 
 
 def _announce_stop_raises(
