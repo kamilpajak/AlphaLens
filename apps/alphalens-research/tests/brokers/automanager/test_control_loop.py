@@ -4820,7 +4820,7 @@ class TestStopPlacedPagesTheOperator(IsolatedHomeTestCase):
         throttle, report = self._place(broker=_ProtBroker(by_uic={_UIC: _pos(46.0)}))
         pages = self._pages(throttle)
         self.assertEqual(len(pages), 1, f"exactly one page; got {throttle.calls}")
-        self.assertEqual(pages[0][0], "SELL KO SL 46 - stop placed 216.48 (order S-1)")
+        self.assertEqual(pages[0][0], "PROTECTED KO SL 46 - stop placed 216.48 (order S-1)")
         self.assertEqual(report.alerts, 1)
 
     def test_a_re_place_of_the_same_order_dedups_and_is_not_counted_twice(self) -> None:
@@ -4853,7 +4853,8 @@ class TestStopPlacedPagesTheOperator(IsolatedHomeTestCase):
             broker=_ProtBroker(by_uic={_UIC: _pos(46.0)}), ref="crid-0-stop-0"
         )
         self.assertEqual(
-            self._pages(throttle)[0][0], f"SELL uic {_UIC} SL 46 - stop placed 216.48 (order S-1)"
+            self._pages(throttle)[0][0],
+            f"PROTECTED uic {_UIC} SL 46 - stop placed 216.48 (order S-1)",
         )
 
     def test_the_page_carries_the_qty_ACTUALLY_placed(self) -> None:

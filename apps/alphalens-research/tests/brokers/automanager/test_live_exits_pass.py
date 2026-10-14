@@ -1127,7 +1127,7 @@ class TestStopRaisePagesTheOperator(_JournalCase):
         pages, _report, _uic = self._pages()
         raised = [msg for msg, _key in pages if "raised" in msg]
         self.assertEqual(len(raised), 1, f"exactly one raise page; got {pages}")
-        self.assertEqual(raised[0], "SELL KO SL - trailed stop raised 13.00 -> 14.50")
+        self.assertEqual(raised[0], "TRAIL KO SL - trailed stop raised 13.00 -> 14.50")
 
     def test_the_page_is_counted_in_the_report(self) -> None:
         _pages, report, _uic = self._pages()

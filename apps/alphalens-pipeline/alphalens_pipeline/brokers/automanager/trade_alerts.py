@@ -6,7 +6,7 @@ entry-fill, stop-fill and take-profit alerts were three f-strings at three call
 sites, and they drifted apart (no ticker on the entry fill, no way to tell a
 trailed stop from the plan stop, ``sold`` for a SELL that was only submitted).
 
-The text has one fixed order — side, ticker, label, quantity, ``@ price``,
+The text has one fixed order — lead word, ticker, label, quantity, ``@ price``,
 reason, outcome, ``(order id)`` — and a field that is not known is left out,
 never rendered as ``None``. The order id stays because it is the only link from
 the message to the order in the broker's app.
@@ -14,7 +14,8 @@ the message to the order in the broker's app.
 Since part 3 the same slots also carry the protective stop's own STATE: it was
 placed, or its level was raised. Those two are not fills, so they fill the
 reason slot with the move rather than with an exit reason — a raise to 62.42
-must not read like a fill at 62.42.
+must not read like a fill at 62.42 — and the LEAD slot is not a side for them:
+nothing was bought or sold.
 
 Pure: no I/O and no import from ``control_loop``, so the formatter can be tested
 without a daemon.
@@ -35,8 +36,10 @@ _SMALL_PRICE = 1.0
 
 
 class EventKind(enum.Enum):
-    """What happened to an order. The side follows from it: the executor is
-    long-only, so an entry is always a BUY and an exit always a SELL."""
+    """What happened to an order. The lead word follows from it: the executor is
+    long-only, so an entry is always a BUY and a fill or submitted exit always a
+    SELL — but the two stop-state kinds moved no shares and get a word of their
+    own."""
 
     ENTRY_FILLED = "entry_filled"
     EXIT_FILLED = "exit_filled"
@@ -44,18 +47,27 @@ class EventKind(enum.Enum):
     # sell: the live-exit engine does not read the fill price).
     EXIT_SUBMITTED = "exit_submitted"
     # Neither of the two below is a fill. They are the protective stop's own
-    # state: it now rests at the venue, or its level moved UP. A long's
-    # protective stop is a resting SELL, which is why they share the side.
+    # state: it now rests at the venue, or its level moved UP.
     STOP_PLACED = "stop_placed"
     STOP_RAISED = "stop_raised"
 
 
-_SIDE_BY_KIND: Mapping[EventKind, str] = {
+# The word each kind OPENS with. Not a side: for three kinds it is the side,
+# because shares moved or an order went to market, and for the two stop-state
+# kinds nothing moved. They used to borrow SELL — a long's protective stop IS a
+# resting sell order — and the result was `SELL SMMT SL 34`, which a scrolling
+# reader cannot tell from `SELL SMMT TP1 34`, a real sale of 34 shares. The left
+# edge is the part a thumb-scroll reads, so it must carry the distinction: the
+# page that means "you are now protected" may not open with the word for "your
+# shares left". #1621 point 7 is this defect class (`sold` on a submitted sell)
+# and the issue's own sketch for the raise page is `TRAIL ASTS SL 50.64 ->
+# 62.42`.
+_LEAD_BY_KIND: Mapping[EventKind, str] = {
     EventKind.ENTRY_FILLED: "BUY",
     EventKind.EXIT_FILLED: "SELL",
     EventKind.EXIT_SUBMITTED: "SELL",
-    EventKind.STOP_PLACED: "SELL",
-    EventKind.STOP_RAISED: "SELL",
+    EventKind.STOP_PLACED: "PROTECTED",
+    EventKind.STOP_RAISED: "TRAIL",
 }
 
 # The kinds whose middle slot describes a stop MOVE rather than a fill reason.
@@ -186,7 +198,7 @@ def _outcome_text(event: TradeEvent) -> str | None:
 
 def render(event: TradeEvent) -> str:
     """The one line the operator reads for ``event``."""
-    head = [_SIDE_BY_KIND[event.kind], event.ticker]
+    head = [_LEAD_BY_KIND[event.kind], event.ticker]
     if event.label:
         head.append(event.label)
     if event.qty is not None:
