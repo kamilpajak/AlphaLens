@@ -7122,6 +7122,19 @@ class _AlertThrottle:
         last = self._last_sent.get(key)
         if last is not None and (now - last) < self._interval:
             return False
+        # Drop the keys that can no longer suppress anything. A key older than
+        # the interval is never read again — the branch above is its only
+        # reader — so this changes no decision, and without it the map grew for
+        # the daemon's whole lifetime. That was harmless while every key was an
+        # IDENTIFIER minting a few entries a day (``stop-fill:<order id>``,
+        # ``entry-trail:fired:<crid>``). The stop-raised key is the first keyed
+        # on a continuously varying NUMBER: the trail amends on every 2-cent
+        # advance (``stop_decision.TRAIL_STEP_EPS``), so one trending afternoon
+        # mints a key per step and a month between deploys reaches tens of
+        # thousands of entries (measured: 50 000 keys hold ~10 MB). O(n) per
+        # emit, with n bounded BY this eviction to the keys of one interval.
+        cutoff = now - self._interval
+        self._last_sent = {k: t for k, t in self._last_sent.items() if t >= cutoff}
         self._last_sent[key] = now
         self._base(message)
         return True

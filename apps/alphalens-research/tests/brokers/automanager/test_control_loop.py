@@ -5317,6 +5317,44 @@ class TestAlertThrottleByUicReason(IsolatedHomeTestCase):
         self.assertTrue(throttle.emit("naked", uic=1, reason="deficit"))
         self.assertEqual(len(sent), 3)
 
+    def test_keys_older_than_the_interval_are_not_kept(self) -> None:
+        # The dedup map used to grow for the daemon's whole lifetime. That was
+        # harmless while every key was an IDENTIFIER minting a few entries a day
+        # (`stop-fill:<order id>`, `entry-trail:fired:<crid>`), and the
+        # stop-raised key is the first keyed on a continuously varying NUMBER:
+        # the trail amends on every 2-cent advance (`TRAIL_STEP_EPS`), so one
+        # trending afternoon mints a key per step, and a month between deploys
+        # reaches tens of thousands of entries (measured: 50 000 keys hold
+        # ~10 MB). Nothing read them -- a key older than the interval can no
+        # longer suppress anything -- so dropping them changes no decision.
+        sent: list[str] = []
+        clock = {"t": 0.0}
+        throttle = cl._AlertThrottle(sent.append, clock=lambda: clock["t"], interval_s=1800.0)
+        for step in range(50):
+            throttle.emit("raised", uic=1, reason=f"stop-raised:1:{14.0 + 0.02 * step:.6f}")
+            clock["t"] += 45.0  # one poll tick apart
+        self.assertEqual(len(sent), 50, "every new level still pages")
+
+        clock["t"] += 1801.0  # the whole interval elapses
+        throttle.emit("raised", uic=1, reason="stop-raised:1:99.000000")
+
+        # The one key that can still suppress a repeat is the one just sent.
+        self.assertEqual(
+            list(throttle._last_sent), [(1, "stop-raised:1:99.000000")], "the rest are dropped"
+        )
+
+    def test_a_key_inside_the_interval_survives_a_later_emit(self) -> None:
+        # The other half of the eviction: it must not drop a key that can still
+        # suppress a repeat, or the throttle stops throttling.
+        sent: list[str] = []
+        clock = {"t": 0.0}
+        throttle = cl._AlertThrottle(sent.append, clock=lambda: clock["t"], interval_s=1800.0)
+        self.assertTrue(throttle.emit("a", uic=1, reason="first"))
+        clock["t"] += 10.0
+        self.assertTrue(throttle.emit("b", uic=1, reason="second"))
+        self.assertFalse(throttle.emit("a", uic=1, reason="first"), "still suppressed")
+        self.assertEqual(len(sent), 2)
+
     def test_consecutive_failures_escalate_once_then_backoff(self) -> None:
         sent: list[str] = []
         throttle = cl._AlertThrottle(sent.append, clock=lambda: 0.0)
