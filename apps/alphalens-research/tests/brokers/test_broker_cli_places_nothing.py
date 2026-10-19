@@ -13,10 +13,17 @@ cannot be opted out of.
 ``cancel_order`` is deliberately allowed: cancelling is risk-reducing, and the
 LIVE manual-flatten runbook depends on ``broker cancel``.
 
+The corpus is ``alphalens_cli`` PLUS ``alphalens_pipeline.account_cash`` (#1689).
+The cash book is pipeline-side, holds a broker and is driven by a CLI command,
+which is exactly the shape the docstring below used to name as invisible: "a
+placement call inside a helper outside ``alphalens_cli`` that a command
+delegates to". ``alphalens_pipeline.brokers`` stays OUT -- it legitimately owns
+the place/amend surface this gate forbids everyone else.
+
 The walk matches attribute accesses AND string literals, so ``getattr`` with a
 literal name, or a name kept in a constant, is caught too. What it cannot see: a
-method name assembled at runtime, and a placement call inside a helper outside
-``alphalens_cli`` that a command delegates to. Neither shape exists today.
+method name assembled at runtime, and a placement call inside a helper in
+neither scanned root that a command delegates to.
 """
 
 from __future__ import annotations
@@ -27,6 +34,7 @@ import unittest
 from pathlib import Path
 
 import alphalens_cli
+from alphalens_pipeline import account_cash
 
 # Every write method on the broker contract that creates or changes an order.
 _FORBIDDEN_ATTRIBUTE = re.compile(r"^(place_\w+|amend_\w+)$")
@@ -43,6 +51,23 @@ def _referenced_name(node: ast.AST) -> str | None:
 def _offending_attributes(source: str) -> list[str]:
     names = (_referenced_name(node) for node in ast.walk(ast.parse(source)))
     return sorted({name for name in names if name and _FORBIDDEN_ATTRIBUTE.match(name)})
+
+
+def _scanned_roots() -> tuple[tuple[str, Path], ...]:
+    """``(package name, directory)`` for every root the gate walks.
+
+    Module-level and named, rather than a tuple built inside the scanning
+    method, so dropping a root is a change to a thing a test can assert about.
+    It had to be: a total ``scanned >= 2`` floor is satisfied by
+    ``alphalens_cli`` alone -- which contributes dozens of modules -- so
+    removing ``account_cash`` from the corpus was silent, and that root is the
+    only reason memo section 7's named shape (a pipeline-side helper that holds
+    a broker) is covered at all.
+    """
+    return (
+        (alphalens_cli.__name__, Path(alphalens_cli.__file__).parent),
+        (account_cash.__name__, Path(account_cash.__file__).parent),
+    )
 
 
 class CliModulesPlaceNothingTest(unittest.TestCase):
@@ -71,17 +96,39 @@ class CliModulesPlaceNothingTest(unittest.TestCase):
 
         self.assertEqual(_offending_attributes(source), [])
 
+    def test_the_corpus_covers_both_the_cli_and_the_cash_book(self):
+        """The vacuity control that can tell ONE root from TWO.
+
+        The scan's own total floor cannot: ``alphalens_cli`` contributes dozens
+        of modules on its own, so ``scanned >= 2`` holds with the cash-book root
+        deleted. This names the packages instead, and the per-package counts
+        below are what stop a root being listed but empty.
+        """
+        self.assertEqual(
+            [name for name, _ in _scanned_roots()],
+            ["alphalens_cli", "alphalens_pipeline.account_cash"],
+        )
+
     def test_no_cli_module_references_an_order_write_method(self):
-        package_dir = Path(alphalens_cli.__file__).parent
-        modules = sorted(package_dir.rglob("*.py"))
-        self.assertTrue(modules, "no CLI modules found; the gate would pass vacuously")
+        """Both scanned roots, each path reported relative to its OWN root."""
+        offenders: dict[str, list[str]] = {}
+        scanned: dict[str, int] = {}
+        for name, root in _scanned_roots():
+            modules = sorted(root.rglob("*.py"))
+            scanned[name] = len(modules)
+            offenders.update(
+                {
+                    str(path.relative_to(root)): found
+                    for path in modules
+                    if (found := _offending_attributes(path.read_text(encoding="utf-8")))
+                }
+            )
 
-        offenders = {
-            str(path.relative_to(package_dir)): found
-            for path in modules
-            if (found := _offending_attributes(path.read_text(encoding="utf-8")))
-        }
-
+        # Per ROOT, never a total: a total hides a root that contributed
+        # nothing behind another root's dozens of modules.
+        for name, count in scanned.items():
+            with self.subTest(root=name):
+                self.assertGreaterEqual(count, 1, f"no modules under {name}; the gate is vacuous")
         self.assertEqual(offenders, {}, "only the broker daemon may place or amend orders")
 
 

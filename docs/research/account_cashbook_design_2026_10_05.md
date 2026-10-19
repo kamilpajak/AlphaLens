@@ -387,6 +387,18 @@ A `SupportsAccountCash` Protocol with `CashEvent`, `TradeRow` and `BalanceSnapsh
 
 The store, the codec, the sweep and a `sync` command. `--dry-run` reads and reports the plan without appending. Gates: the new test package must install **its own** operator-state guard — the one in `tests/brokers/__init__.py` does not reach a new package, and 109 broker tests read the real `~/.alphalens` until #1696 fixed exactly this. New dependency rules in `test_module_dependencies.py`, one-way, in the same PR, following the `control_loop` precedent. The new paths go into the dead-code report's scope in the same PR or the context is invisible to it. And the AST gate that proves the CLI places nothing walks `alphalens_cli` only, by its own docstring: a pipeline-side helper that holds a broker is exactly the shape it cannot see, so its corpus is extended in the same PR.
 
+**Dead-code report, measured 2026-10-19 on the store-half branch** (`scripts/deadcode_broker.py`, exit 1 — it exits 1 at baseline too and runs only from the `justfile`, in no workflow, so it gates nothing). 5 scoped findings and 2 unwired modules. **No whitelist entries were added**; the only change to `scripts/` is the one `SCOPE_PREFIXES` line that puts the package in scope.
+
+Three of these are the expected cost of splitting Phase 3 in two and the CLI half is expected to close them:
+
+| Finding | Introduced | Closed by |
+|---|---|---|
+| `account_cash/sweep.py` imported by no production code | the store half, 2026-10-19 | the CLI half — `commands/cashbook.py` imports `sweep` |
+| `brokers/account_cash.py:282` unused method `list_account_cash` | the read half, 2026-10-19 | the CLI half — it calls the method through the broker |
+| `saxo/broker.py:1725` unused method `list_account_cash` | the read half, 2026-10-19 | as above |
+
+The other four predate #1689 and are nobody's part of it: `automanager/trades_schema.py` as an unwired module (last touched 2026-10-05), `capital_wait._reset_for_tests` (2026-10-06), and `trades.py:728 stop_refs` and `trades.py:904 ticks` (2026-10-12).
+
 ### Phase 4 — the answer
 
 The episode derivation and the report: the bucket identity, the coverage partition, the balance cross-check, the `history_begins` and `swept_through` watermarks. A golden test over the LIVE fixture pins the bucket sums in §1.1, with a second fixture row carrying a different value in each column the test claims to read, because a fixture uniform in the tested column cannot prove a read.

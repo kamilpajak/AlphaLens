@@ -113,9 +113,13 @@ class TheFunctionFormWorksTheSameWay(unittest.TestCase):
                 state_paths.broker_orders_root()
 
 
-_BROKER_PACKAGE_ROOTS = (
+_GUARDED_PACKAGE_ROOTS = (
     "apps/alphalens-pipeline/alphalens_pipeline/brokers",
     "apps/alphalens-broker-contract/broker_contract",
+    # The account cash book (#1689). Not a broker package, and in the guard for
+    # a stronger reason than the other two: its own tests APPEND to a money
+    # store, so an unisolated one would write into the operator's cash book.
+    "apps/alphalens-pipeline/alphalens_pipeline/account_cash",
 )
 
 
@@ -123,46 +127,84 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[5]
 
 
-def _broker_tier_home_builders() -> set[tuple[str, str]]:
-    """Every broker-tier function whose body calls ``Path.home()``.
+#: The call shapes that resolve the operator's home directory. ``expanduser``
+#: is here because the guard can only wrap a NAMED builder: a function doing
+#: its own ``Path("~/.alphalens").expanduser()`` is unguarded at runtime, and
+#: while this predicate matched ``home`` alone it was invisible here too, so
+#: adding one stayed green in both places at once (#1689).
+_HOME_RESOLVING_ATTRS = frozenset({"home", "expanduser"})
 
-    Read off the source of the broker packages, so a third path builder added
-    later shows up here whether or not anyone remembers this gate. Returned as
+
+def _home_resolving_functions(tree: ast.Module) -> list[str]:
+    """Every function in ``tree`` whose body resolves the home directory.
+
+    Takes a tree so the predicate can be exercised against a synthetic module;
+    a scan never run against the shape it is meant to catch is how
+    ``expanduser`` stayed invisible.
+    """
+    return sorted(
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and any(
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr in _HOME_RESOLVING_ATTRS
+            for call in ast.walk(node)
+        )
+    )
+
+
+def _guarded_home_builders() -> set[tuple[str, str]]:
+    """Every guarded-tier function whose body resolves the home directory.
+
+    Read off the source of the guarded packages, so a path builder added later
+    shows up here whether or not anyone remembers this gate. Returned as
     ``(module file stem, function name)`` pairs."""
     found: set[tuple[str, str]] = set()
     root = _repo_root()
-    for relroot in _BROKER_PACKAGE_ROOTS:
+    for relroot in _GUARDED_PACKAGE_ROOTS:
         for path in sorted((root / relroot).rglob("*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"))
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.FunctionDef):
-                    continue
-                calls_home = any(
-                    isinstance(call, ast.Call)
-                    and isinstance(call.func, ast.Attribute)
-                    and call.func.attr == "home"
-                    for call in ast.walk(node)
-                )
-                if calls_home:
-                    found.add((path.stem, node.name))
+            found.update((path.stem, name) for name in _home_resolving_functions(tree))
     return found
 
 
-class EveryBrokerTierHomeBuilderIsGuarded(unittest.TestCase):
+class EveryGuardedHomeBuilderIsGuarded(unittest.TestCase):
     """Anti-rot. The guard is only as complete as its list of builders, and the
-    ADR 0016 seam is NOT that list: `saxo/tokens.py` keeps its own join."""
+    ADR 0016 seam is NOT that list: `saxo/tokens.py` keeps its own join, and so
+    does the account cash book's own path module (#1689)."""
 
     def test_the_guarded_set_matches_what_the_source_says_exists(self) -> None:
         guarded = {(module.__name__.rsplit(".", 1)[-1], attr) for module, attr in _GUARDED_BUILDERS}
         self.assertEqual(
-            _broker_tier_home_builders(),
+            _guarded_home_builders(),
             guarded,
-            "a broker-tier function resolves Path.home() and is not covered by "
+            "a guarded-tier function resolves Path.home() and is not covered by "
             "_GUARDED_BUILDERS, so a test can read operator state past the guard (#1696)",
         )
 
     def test_the_source_scan_finds_something(self) -> None:
-        self.assertGreaterEqual(len(_broker_tier_home_builders()), 2)
+        self.assertGreaterEqual(len(_guarded_home_builders()), 3)
+
+    def test_the_scan_sees_an_expanduser_body_too(self) -> None:
+        """Positive control. The guard wraps a NAMED builder, so a function
+        that resolves the home itself cannot be guarded at all -- it has to
+        turn this gate red instead. While the predicate matched ``home`` only,
+        adding one was green here AND unguarded at runtime."""
+        tree = ast.parse(
+            "from pathlib import Path\n"
+            "\n"
+            "def sneaky(env: str) -> Path | None:\n"
+            '    return Path("~/.alphalens").expanduser() / env\n'
+        )
+        self.assertEqual(_home_resolving_functions(tree), ["sneaky"])
+
+    def test_the_scan_ignores_a_function_that_resolves_no_home(self) -> None:
+        """The negative control: a predicate matching every function would
+        satisfy the test above and make the set comparison fail for everyone."""
+        tree = ast.parse("def plain(env: str) -> str:\n    return env.upper()\n")
+        self.assertEqual(_home_resolving_functions(tree), [])
 
 
 class TheSeamIsActuallyUsedByTheBuilders(IsolatedHomeTestCase):
