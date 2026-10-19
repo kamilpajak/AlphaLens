@@ -26,9 +26,9 @@ from alphalens_pipeline.brokers.account_cash import (
     SupportsAccountCash,
     TradeRow,
 )
-from alphalens_pipeline.brokers.fill_history import ReadWindow
+from alphalens_pipeline.brokers.fill_history import CostBooking, Execution, ReadWindow
 from alphalens_pipeline.brokers.saxo.broker import SaxoBroker
-from alphalens_pipeline.brokers.saxo.client import SaxoRateLimitError
+from alphalens_pipeline.brokers.saxo.client import SIM_BASE_URL, SaxoRateLimitError
 from broker_contract.contract import BrokerRateLimitError
 
 _VENUE = json.loads(
@@ -388,6 +388,76 @@ class TheBalance(unittest.TestCase):
         self.assertEqual(balance.transactions_not_booked, -4319.07)
         self.assertEqual(balance.calculation_reliability, "Ok")
         self.assertIsNotNone(balance.asof.tzinfo)
+
+
+class OnSim(unittest.TestCase):
+    def test_on_sim_no_report_endpoint_is_called(self) -> None:
+        """The SIM report endpoints answer with canned rows belonging to other
+        accounts, so reading them and discarding the rows is not good enough:
+        the request still goes across the wire.
+
+        The refusal covers the balance too, although ``/port/v1/balances`` is
+        not a report endpoint and the daemon reads it every tick. A balance
+        with no rows beside it answers nothing, and memo section 3 says there
+        is no SIM half of this layer -- so the refusal stays one fact rather
+        than a partial result."""
+        client = _FakeClient(base_url=SIM_BASE_URL)
+        read = SaxoBroker(client).list_account_cash(_SINCE, _UNTIL)  # type: ignore[arg-type]
+        self.assertEqual(client.calls, [])
+        self.assertIsNone(read.events)
+        self.assertIsNone(read.trades)
+        self.assertIsNone(read.balance)
+        self.assertEqual(read.skipped_reason, "sim_reports_unusable")
+
+
+class TheTwoMappingsOfTheSameRows(unittest.TestCase):
+    """Drift containment between this capability and fill-history.
+
+    STATED LIMIT, so it is not discovered later: this is drift containment,
+    not mapping verification. It is blind to all four uniform key pairs on
+    each side -- ``CostBooking`` reads the same left-hand keys, so both
+    mappings still agree under a swap -- and ``CostBooking`` and ``Execution``
+    carry neither ``uic`` nor ``instrument_symbol`` at all, so two of the four
+    booking swaps fall outside its field set entirely. The twin-key tests are
+    the only checks with power there."""
+
+    def test_the_bookings_mappings_agree_on_every_shared_field(self) -> None:
+        shared = (
+            "bk_amount_type",
+            "amount",
+            "currency",
+            "amount_account_currency",
+            "account_currency",
+            "conversion_rate",
+            "conversion_cost_account_currency",
+            "date",
+            "related_trade_id",
+        )
+        for row in _VENUE["bookings"]:
+            event = CashEvent.from_vendor_row(row)
+            booking = CostBooking.from_vendor_row(row)
+            for field in shared:
+                with self.subTest(bk_amount_id=row["BkAmountId"], field=field):
+                    self.assertEqual(getattr(event, field), getattr(booking, field))
+
+    def test_the_trades_mappings_agree_on_every_shared_field(self) -> None:
+        shared = (
+            "trade_id",
+            "order_id",
+            "price",
+            "amount",
+            "to_open_or_close",
+            "trade_date",
+            "execution_time",
+            "booked_amount_account_currency",
+            "account_currency",
+        )
+        for row in _VENUE["trades"]:
+            mine = TradeRow.from_vendor_row(row)
+            theirs = Execution.from_vendor_row(row)
+            for field in shared:
+                with self.subTest(trade_id=row["TradeId"], field=field):
+                    self.assertEqual(getattr(mine, field), getattr(theirs, field))
 
 
 if __name__ == "__main__":
