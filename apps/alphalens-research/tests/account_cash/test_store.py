@@ -328,6 +328,27 @@ class TheCashEventFold(IsolatedHomeTestCase):
         self.assertEqual(fold.restated, 1)
         self.assertEqual(fold.lines, 2)
 
+    def test_a_restatement_that_also_corrects_the_date_is_still_one_record(self) -> None:
+        """The fold key is the ``BkAmountId`` ALONE, and nothing else.
+
+        Every other restatement case here holds ``date`` fixed, so a key that
+        silently gained a second field -- ``bk_amount_id + (date or "")`` is
+        the shape -- folds them all identically. A value-date correction is a
+        realistic vendor restatement, and under such a key the SAME booking
+        would fold as two records: the money double counted, and ``restated``
+        reporting 0 while it happened.
+        """
+        store.append_cash_events([_event("1", date="2026-08-10")], env=_LIVE)
+        store.append_cash_events(
+            [_event("1", date="2026-08-11", amount_account_currency=-61.49)], env=_LIVE
+        )
+
+        fold = store.read_cash_events(env=_LIVE)
+        self.assertEqual(len(fold.events), 1)
+        self.assertEqual(fold.events[0].date, "2026-08-11")
+        self.assertEqual(fold.events[0].amount_account_currency, -61.49)
+        self.assertEqual(fold.restated, 1)
+
     def test_an_identical_re_append_is_one_record_two_lines_and_no_restatement(self) -> None:
         """Assert on the FOLD, never on ``wc -l``: the append-only form makes a
         line count meaningless. And an identical re-append is not a correction
@@ -382,6 +403,16 @@ class TheTradeRowFold(IsolatedHomeTestCase):
         self.assertEqual(fold.restated, 1)
         self.assertEqual(fold.lines, 2)
 
+    def test_a_restatement_that_also_corrects_the_trade_date_is_still_one_record(self) -> None:
+        """The trades-side half of the same rule: the key is ``TradeId`` alone."""
+        store.append_trade_rows([_trade("1", trade_date="2026-08-10")], env=_LIVE)
+        store.append_trade_rows([_trade("1", trade_date="2026-08-11", price=13.79)], env=_LIVE)
+
+        fold = store.read_trade_rows(env=_LIVE)
+        self.assertEqual(len(fold.rows), 1)
+        self.assertEqual(fold.rows[0].trade_date, "2026-08-11")
+        self.assertEqual(fold.restated, 1)
+
     def test_the_published_order_is_by_trade_date_then_id(self) -> None:
         store.append_trade_rows(
             [
@@ -434,6 +465,30 @@ class TheBalanceAndSweepJournalsDedupeOnTheSweepId(IsolatedHomeTestCase):
         balances = store.read_balances(env=_LIVE)
         self.assertEqual(len(balances), 1)
         self.assertEqual(balances[0].cash_balance, 2.0)
+
+    def test_an_absent_balance_money_field_survives_the_journal_as_null(self) -> None:
+        """The append path's half of the balance's absent-versus-zero rule. The
+        codec half is in ``test_codec.py``; this one is what actually reaches
+        disk, and it reads the FILE because ``null`` versus ``0.0`` is a file
+        fact that Phase 4's balance cross-check will parse."""
+        empty = _balance(
+            currency=None,
+            cash_balance=None,
+            non_margin_positions_value=None,
+            total_value=None,
+            transactions_not_booked=None,
+            calculation_reliability=None,
+        )
+        store.append_balance(empty, env=_LIVE, sweep_id="s1")
+
+        line = json.loads(paths.balances_path(_LIVE).read_text(encoding="utf-8").strip())
+        for name in ("cash_balance", "non_margin_positions_value", "total_value"):
+            with self.subTest(money_field=name):
+                self.assertIsNone(line[name])
+        # The field memo section 1.7 P5 calls out: it parks a whole day's
+        # trading, so a null read as 0.0 reads as "nothing unbooked".
+        self.assertIsNone(line["transactions_not_booked"])
+        self.assertEqual(store.read_balances(env=_LIVE), [empty])
 
     def test_the_balance_line_carries_the_sweep_key_beside_the_snapshot(self) -> None:
         store.append_balance(_balance(), env=_LIVE, sweep_id="s1")

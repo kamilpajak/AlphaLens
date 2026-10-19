@@ -100,6 +100,32 @@ _BALANCE = BalanceSnapshot(
     asof=dt.datetime(2026, 10, 8, 23, 46, 52, tzinfo=dt.UTC),
 )
 
+#: The balance equivalent of :data:`_EMPTY_EVENT`: every nullable field unset.
+#: ``asof`` is the one field :class:`BalanceSnapshot` declares non-optional.
+#: Without this row EVERY money field of the balance is non-``None`` in every
+#: fixture, so a render that coerced a vendor ``None`` to ``0.0`` -- the shape
+#: Phase 4's balance cross-check reads, and on ``transactions_not_booked`` the
+#: field that parks a whole day's trading (memo section 1.7 P5) -- round-trips
+#: unobserved. The fixture-uniform-in-the-column-under-test shape, on money.
+_EMPTY_BALANCE = BalanceSnapshot(
+    currency=None,
+    cash_balance=None,
+    non_margin_positions_value=None,
+    total_value=None,
+    transactions_not_booked=None,
+    calculation_reliability=None,
+    asof=dt.datetime(2026, 10, 8, 23, 46, 52, tzinfo=dt.UTC),
+)
+
+#: Every nullable money field of :class:`BalanceSnapshot`, read off the
+#: dataclass rather than typed out, so a field added later is covered.
+_BALANCE_MONEY_FIELDS = (
+    "cash_balance",
+    "non_margin_positions_value",
+    "total_value",
+    "transactions_not_booked",
+)
+
 _SWEEP = codec.SweepRecord(
     sweep_id="2026-10-09T00:31:00+00:00",
     swept_at=dt.datetime(2026, 10, 9, 0, 31, tzinfo=dt.UTC),
@@ -173,6 +199,50 @@ class EveryRowTypeRoundTrips(unittest.TestCase):
 
     def test_a_balance_round_trips(self) -> None:
         self.assertEqual(codec.balance_from_jsonable(codec.balance_to_jsonable(_BALANCE)), _BALANCE)
+
+    def test_an_all_none_balance_round_trips(self) -> None:
+        """The balance's own absent-versus-zero case. ``CalculationReliability``
+        answers ``NotAvailable`` on the vendor side when a value could not be
+        computed, and every money field is then null."""
+        self.assertEqual(
+            codec.balance_from_jsonable(codec.balance_to_jsonable(_EMPTY_BALANCE)),
+            _EMPTY_BALANCE,
+        )
+
+    def test_an_absent_balance_money_field_never_becomes_a_number(self) -> None:
+        """Field by field, so the report names WHICH money field was coerced.
+
+        The round trip above would also catch an ``or 0.0`` on one field, but it
+        reports only "the balance did not round-trip"; Phase 4's cross-check
+        reads these four individually and a null read as ``0.0`` is a balance
+        that claims to be known.
+        """
+        for name in _BALANCE_MONEY_FIELDS:
+            with self.subTest(money_field=name):
+                rendered = codec.balance_to_jsonable(_EMPTY_BALANCE)
+                self.assertIsNone(rendered[name])
+                decoded = codec.balance_from_jsonable(rendered)
+                self.assertIsNone(getattr(decoded, name))
+
+    def test_a_balance_money_field_of_zero_stays_a_number(self) -> None:
+        """The other side of the same guard: a real ``0.0`` must not become
+        ``None``, or a ``None``-for-falsy render would pass the test above."""
+        for name in _BALANCE_MONEY_FIELDS:
+            with self.subTest(money_field=name):
+                zeroed = replace(_EMPTY_BALANCE, **{name: 0.0})
+                decoded = codec.balance_from_jsonable(codec.balance_to_jsonable(zeroed))
+                self.assertEqual(getattr(decoded, name), 0.0)
+                self.assertIsNotNone(getattr(decoded, name))
+
+    def test_the_money_field_list_covers_every_nullable_float_the_dataclass_has(self) -> None:
+        """Anti-rot for the two loops above: a fifth money field added to
+        :class:`BalanceSnapshot` must not sit outside them silently."""
+        declared = sorted(
+            field.name
+            for field in fields(BalanceSnapshot)
+            if field.type in ("float | None", float | None)
+        )
+        self.assertEqual(declared, sorted(_BALANCE_MONEY_FIELDS))
 
     def test_a_sweep_record_round_trips(self) -> None:
         self.assertEqual(codec.sweep_from_jsonable(codec.sweep_to_jsonable(_SWEEP)), _SWEEP)

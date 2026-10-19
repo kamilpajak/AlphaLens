@@ -187,6 +187,19 @@ class AChangedAmountOnAKnownIdIsARestatement(IsolatedHomeTestCase):
         self.assertEqual(fold.restated, 1)
         self.assertEqual(fold.lines, len(_EVENTS) + 1)
 
+    def test_a_restatement_that_also_moved_the_date_is_planned_as_one_key(self) -> None:
+        """The plan's own key derivation, which is a SECOND one beside the
+        fold's. Every case above corrects only an amount, so a key that gained
+        ``date`` would plan a value-date correction as a NEW row and the money
+        would be appended twice under one ``BkAmountId``."""
+        sweep.apply_sweep(_plan(), now=_NOW)
+        corrected = replace(_EVENTS[0], date="1999-01-01", amount_account_currency=-999.99)
+        plan = _plan(_read(events=(corrected, *_EVENTS[1:])))
+
+        self.assertEqual(plan.new_events, ())
+        self.assertEqual(plan.restated_events, (corrected,))
+        self.assertEqual(plan.already_present_events, len(_EVENTS) - 1)
+
     def test_a_restated_trade_row_is_planned_the_same_way(self) -> None:
         sweep.apply_sweep(_plan(), now=_NOW)
         corrected = replace(_TRADES[0], booked_amount_account_currency=-999.99)
