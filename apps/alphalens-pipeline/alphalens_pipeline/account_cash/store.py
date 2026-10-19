@@ -254,6 +254,15 @@ def append_sweep(record: codec.SweepRecord, *, env: str) -> None:
 #
 # Allowed on EITHER environment: a read of an absent journal folds empty, which
 # is the honest answer, and it creates nothing.
+#
+# None of them calls `paths.validate_environment` itself, on purpose. Each one
+# built its path one line later through a builder that validates
+# unconditionally, so an explicit call could never be the thing that refused
+# anything: deleting all four left the same ValueError with the same message,
+# one frame deeper. That is also the `state_paths` shape -- it validates inside
+# the builder and no consumer re-validates -- and `read_pick_fold`, the fold
+# these mirror, does not validate at all. Do not re-add the line: a guard no
+# test can refute reads as protection that is not there.
 
 
 def read_cash_events(*, env: str) -> CashEventFold:
@@ -263,7 +272,6 @@ def read_cash_events(*, env: str) -> CashEventFold:
     vendor row, so the sort key substitutes ``""`` rather than comparing
     ``None`` with a string, which raises.
     """
-    paths.validate_environment(env)
     latest, malformed, restated, lines = _fold_by_key(
         paths.cash_events_path(env),
         decode=codec.cash_event_from_jsonable,
@@ -277,7 +285,6 @@ def read_cash_events(*, env: str) -> CashEventFold:
 def read_trade_rows(*, env: str) -> TradeRowFold:
     """Fold ``trade_rows.jsonl`` to one row per ``TradeId``, sorted by
     ``(trade_date, trade_id)``."""
-    paths.validate_environment(env)
     latest, malformed, restated, lines = _fold_by_key(
         paths.trade_rows_path(env),
         decode=codec.trade_row_from_jsonable,
@@ -296,7 +303,6 @@ def read_balances(*, env: str) -> list[BalanceSnapshot]:
     for the balance cross-check, and it will want a count -- the shape to
     widen then is this return type, not the log.
     """
-    paths.validate_environment(env)
     latest, _, _, _ = _fold_by_key(
         paths.balances_path(env),
         decode=_balance_line_from_jsonable,
@@ -308,7 +314,6 @@ def read_balances(*, env: str) -> list[BalanceSnapshot]:
 
 def read_sweeps(*, env: str) -> list[codec.SweepRecord]:
     """Every sweep record, one per ``sweep_id``, oldest first."""
-    paths.validate_environment(env)
     latest, _, _, _ = _fold_by_key(
         paths.sweeps_path(env),
         decode=codec.sweep_from_jsonable,

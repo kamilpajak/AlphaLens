@@ -615,9 +615,22 @@ class AReadIsAllowedOnEveryEnvironment(IsolatedHomeTestCase):
         self.assertEqual(store.read_cash_events(env=_SIM).events, [])
         self.assertFalse(paths.account_cash_root(_SIM).exists())
 
-    def test_an_unknown_environment_is_refused_on_the_read_side_too(self) -> None:
-        with self.assertRaises(ValueError):
-            store.read_cash_events(env="prod")
+    def test_an_unknown_environment_is_refused_by_every_reader(self) -> None:
+        """The refusal comes from the PATH BUILDER, not from a line in the
+        reader: each reader's explicit ``validate_environment`` call was a
+        duplicate of a check the builder runs unconditionally, so it could
+        never be what refused anything and no test could tell it apart from
+        nothing. The rule itself is what matters, so all four are asserted."""
+        for reader in (
+            store.read_cash_events,
+            store.read_trade_rows,
+            store.read_balances,
+            store.read_sweeps,
+        ):
+            with self.subTest(reader=reader.__name__):
+                with self.assertRaises(ValueError) as ctx:
+                    reader(env="prod")
+                self.assertIn("prod", str(ctx.exception))
 
 
 if __name__ == "__main__":
