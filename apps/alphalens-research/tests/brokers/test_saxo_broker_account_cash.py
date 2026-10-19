@@ -2,11 +2,10 @@
 
 ``list_account_cash`` is the cash book's read: the SAME two report endpoints
 ``list_fill_history`` uses, read UNFILTERED, plus the account's own balance.
-The fill-history capability cannot serve as the cash book — it keeps only
-bookings whose ``related_trade_id`` is in the trades it kept
-(the ``kept_trades`` filter in ``SaxoBroker.list_fill_history``), which on
-the captured window drops 5 of 104 rows
-worth 24 004.05 PLN (memo section 1.4).
+The fill-history capability cannot serve as the cash book -- it keeps only
+bookings whose ``related_trade_id`` is in the trades it kept (the
+``kept_trades`` filter in ``SaxoBroker.list_fill_history``), which on the
+captured window drops 5 of 104 rows worth 24 004.05 PLN (memo section 1.4).
 
 Rows come from the LIVE account on 2026-10-03, the fixture
 ``automanager/fixtures/trades/live_2026_10_03/venue.json`` (104 bookings rows,
