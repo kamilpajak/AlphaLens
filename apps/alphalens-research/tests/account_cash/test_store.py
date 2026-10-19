@@ -576,6 +576,72 @@ class AnUnreadableLineIsCountedAndNeverRaisedOutOfTheFold(IsolatedHomeTestCase):
                 self.assertNotIn("BaseException", names)
 
 
+class AnUnusableSweepKeyIsRefusedBeforeItReachesTheJournal(IsolatedHomeTestCase):
+    """The write side is where the key is checked, because a value that cannot
+    be read back must not reach the journal at all.
+
+    ``_balance_line_from_jsonable`` refuses an empty or non-string ``sweep_id``
+    on the READ side, and nothing refused one on the write side: the line was
+    written, ``read_balances`` then answered zero rows with only a log line,
+    and no counter reported it -- a row permanently unreadable, in the store
+    whose claim is that storing a value it cannot read back is structurally
+    impossible.
+
+    The pair disagreed as well: ``append_sweep`` accepted an empty id and
+    ``read_sweeps`` read it back, so the same id survived in one journal of
+    the pair and was lost in the other, with both keyed on it.
+    """
+
+    #: Both appenders that take the key, and how to call each with one.
+    _WITH_KEY = {
+        "append_balance": lambda env, key: store.append_balance(_balance(), env=env, sweep_id=key),
+        "append_sweep": lambda env, key: store.append_sweep(_sweep(key), env=env),
+    }
+
+    def test_an_empty_key_is_refused_by_both_appenders(self) -> None:
+        for name, call in sorted(self._WITH_KEY.items()):
+            with self.subTest(appender=name):
+                with self.assertRaises(codec.CashBookDecodeError):
+                    call(_LIVE, "")
+
+    def test_a_non_string_key_is_refused_by_both_appenders(self) -> None:
+        """``sweep_id: str`` is an annotation, not a runtime check, and the
+        read side names the ``isinstance`` case explicitly -- so the write side
+        has to answer the same two shapes or the pair disagrees again."""
+        for name, call in sorted(self._WITH_KEY.items()):
+            with self.subTest(appender=name):
+                with self.assertRaises(codec.CashBookDecodeError):
+                    call(_LIVE, 7)  # type: ignore[arg-type]
+
+    def test_the_refused_key_leaves_no_line_on_disk(self) -> None:
+        """The point of refusing on the write side rather than counting on the
+        read side: the journal is append-only and never compacted, so a line
+        written under an unusable key would stay unreadable forever."""
+        with self.assertRaises(codec.CashBookDecodeError):
+            store.append_balance(_balance(), env=_LIVE, sweep_id="")
+        with self.assertRaises(codec.CashBookDecodeError):
+            store.append_sweep(_sweep(""), env=_LIVE)
+
+        self.assertFalse(paths.balances_path(_LIVE).exists())
+        self.assertFalse(paths.sweeps_path(_LIVE).exists())
+
+    def test_a_usable_key_still_writes_and_reads_back(self) -> None:
+        """The positive control: a refusal that refused everything would
+        satisfy every assertion above."""
+        store.append_balance(_balance(), env=_LIVE, sweep_id="s1")
+        store.append_sweep(_sweep("s1"), env=_LIVE)
+        self.assertEqual(len(store.read_balances(env=_LIVE)), 1)
+        self.assertEqual([record.sweep_id for record in store.read_sweeps(env=_LIVE)], ["s1"])
+
+    def test_the_sim_refusal_stays_the_outer_gate(self) -> None:
+        """A SIM write of an unusable key must answer the SIM reason: the key
+        was never going to be written anywhere, and publishing
+        ``CashBookDecodeError`` for it would name the wrong refusal."""
+        with self.assertRaises(store.SimCashBookRefusedError):
+            store.append_balance(_balance(), env=_SIM, sweep_id="")
+        self.assertFalse(paths.account_cash_root(_SIM).exists())
+
+
 class TheTradeRowFold(IsolatedHomeTestCase):
     def test_a_missing_journal_folds_empty(self) -> None:
         fold = store.read_trade_rows(env=_LIVE)

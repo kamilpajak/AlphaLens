@@ -264,9 +264,14 @@ def append_trade_rows(rows: Sequence[TradeRow], *, env: str) -> None:
 
 
 def append_balance(snapshot: BalanceSnapshot, *, env: str, sweep_id: str) -> None:
-    """Append one ``balances.jsonl`` line: the snapshot plus its sweep key."""
+    """Append one ``balances.jsonl`` line: the snapshot plus its sweep key.
+
+    The key is checked HERE and not only on the read side: see
+    :func:`_usable_sweep_id`.
+    """
     target = _writable_journal(env, paths.balances_path)
-    payload = {**codec.balance_to_jsonable(snapshot), _SWEEP_ID_KEY: sweep_id}
+    key = _usable_sweep_id(sweep_id, row="balances")
+    payload = {**codec.balance_to_jsonable(snapshot), _SWEEP_ID_KEY: key}
     append_json_line(target, payload)
 
 
@@ -275,8 +280,14 @@ def append_sweep(record: codec.SweepRecord, *, env: str) -> None:
 
     LAST of the four, deliberately (see the module docstring): a sweep record
     on disk whose rows are not is a record that claims more than happened.
+
+    The key is checked the SAME way ``balances.jsonl``'s is, by the same
+    function, because the two journals are one pair keyed on one value: an id
+    one of them took and the other refused would survive in one half of the
+    pair and be lost in the other.
     """
     target = _writable_journal(env, paths.sweeps_path)
+    _usable_sweep_id(record.sweep_id, row="sweeps")
     append_json_line(target, codec.sweep_to_jsonable(record))
 
 
@@ -363,6 +374,31 @@ def read_sweeps(*, env: str) -> list[codec.SweepRecord]:
     return sorted(latest.values(), key=lambda record: (record.swept_at, record.sweep_id))
 
 
+def _usable_sweep_id(sweep_id: Any, *, row: str) -> str:
+    """The sweep key, or a refusal. ONE definition of usable, for BOTH sides.
+
+    Called by the two appenders that carry the key and by the balance decode,
+    so a key a reader cannot fold on cannot be written in the first place. The
+    write side is the right place for it: these journals are append-only and
+    never compacted, so a line stored under an unusable key stays unreadable
+    forever. ``append_balance`` used to write an empty one happily and
+    ``read_balances`` then answered zero rows with only a log line -- no
+    counter carries a broken balance line, so nothing later reported it.
+
+    One function rather than one check per side, because the defect was the two
+    sides disagreeing: the balance decode named both the empty and the
+    non-string case while ``append_sweep`` took an empty id that
+    ``read_sweeps`` read back, leaving one id alive in one half of a pair that
+    is keyed on it and lost in the other.
+    """
+    if not isinstance(sweep_id, str) or not sweep_id:
+        raise codec.CashBookDecodeError(
+            f"a {row} line carries no usable {_SWEEP_ID_KEY} ({sweep_id!r}), and it is "
+            f"the key one record per sweep is folded on"
+        )
+    return sweep_id
+
+
 def _balance_line_from_jsonable(payload: Any) -> tuple[str, BalanceSnapshot]:
     """One ``balances.jsonl`` line: its sweep key and the snapshot.
 
@@ -372,12 +408,7 @@ def _balance_line_from_jsonable(payload: Any) -> tuple[str, BalanceSnapshot]:
     if not isinstance(payload, dict):
         raise codec.CashBookDecodeError("a balances line is not a JSON object")
     body = dict(payload)
-    sweep_id = body.pop(_SWEEP_ID_KEY, None)
-    if not isinstance(sweep_id, str) or not sweep_id:
-        raise codec.CashBookDecodeError(
-            f"a balances line carries no usable {_SWEEP_ID_KEY} ({sweep_id!r}), and it is "
-            f"the key one snapshot per sweep is folded on"
-        )
+    sweep_id = _usable_sweep_id(body.pop(_SWEEP_ID_KEY, None), row="balances")
     return sweep_id, codec.balance_from_jsonable(body)
 
 
