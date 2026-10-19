@@ -142,7 +142,9 @@ _CLI_FAILURE_CODES: Mapping[str, FailureCode] = {
                 "be in flight either way: the commands that report this either write "
                 "only to the queue or place nothing at all, and the cash book's append "
                 "order leaves a partial sweep a re-sweep closes, so the same command "
-                "may simply be re-run once the cause clears."
+                "may simply be re-run once the cause clears — a cash-book re-run "
+                "carrying `--sweep-id` when a balance line was already written under "
+                "the lost id."
             ),
         ),
         FailureCode(

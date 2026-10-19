@@ -100,6 +100,16 @@ _DRY_RUN_OPTION = typer.Option(
     help="Read, fold and echo what WOULD be appended. Writes nothing.",
 )
 
+_SWEEP_ID_OPTION = typer.Option(
+    None,
+    "--sweep-id",
+    help="Retry a half-written sweep under the id it already used, so the two journals "
+    "keyed on that id fold onto ONE record each instead of two. The value is an instant "
+    "(the id's own form, e.g. 2026-10-09T00:31:00+00:00); any offset of the same instant "
+    "is the same sweep. Absent: a fresh sweep. Take it from the last balances.jsonl line "
+    "whose sweep_id has no record in sweeps.jsonl.",
+)
+
 
 @cashbook_app.callback()
 def _cashbook_callback() -> None:
@@ -124,6 +134,39 @@ def _booking_date(value: str, *, option: str) -> dt.date:
             f"{option} must be YYYY-MM-DD, got {value!r}",
             details={"option": option, "value": value},
         ) from exc
+
+
+def _sweep_instant(value: str) -> dt.datetime:
+    """One ``--sweep-id`` as the INSTANT it is, refused as a usage error.
+
+    The id a sweep is keyed on is ``now.astimezone(UTC).isoformat()``, so the
+    value an operator pastes back is parsed as an instant and never compared as
+    a string: two offsets of one instant must be one sweep, which is the
+    ``apply_sweep`` contract and the shape of the VPS, where ``now()`` is
+    Europe/Warsaw.
+
+    Both refusals are usage errors rather than exceptions out of the sweep:
+    ``apply_sweep`` raises ``ValueError`` on a naive instant, and reaching it
+    would mean an exit-1 traceback on the money path with the window already
+    read.
+    """
+    try:
+        parsed = dt.datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise _fail_with(
+            "usage",
+            f"--sweep-id must be an ISO-8601 instant, got {value!r}; it is the id a "
+            f"previous sweep used, e.g. 2026-10-09T00:31:00+00:00",
+            details={"option": "--sweep-id", "value": value},
+        ) from exc
+    if parsed.tzinfo is None:
+        raise _fail_with(
+            "usage",
+            f"--sweep-id {value!r} carries no offset; the sweep key is an instant and a "
+            f"naive one is not comparable across sweeps",
+            details={"option": "--sweep-id", "value": value},
+        )
+    return parsed
 
 
 def _failed_file(exc: OSError) -> str | None:
@@ -228,6 +271,7 @@ def sync_command(
     since: str = _SINCE_OPTION,
     until: str = _UNTIL_OPTION,
     dry_run: bool = _DRY_RUN_OPTION,
+    sweep_id: str | None = _SWEEP_ID_OPTION,
     env: str | None = _CASHBOOK_ENV_OPTION,
     output_format: str | None = _FORMAT_OPTION,
 ) -> None:
@@ -262,6 +306,15 @@ def sync_command(
     (`sim_reports_unusable`) and the store's write guard refuses
     (`sim_store_refused`). There is no ``--offline``: a sweep's whole job is
     the vendor read, and ``--dry-run`` still performs it.
+
+    AFTER A ``queue_write_failed``: re-run the same window once the cause
+    clears. The four appends are not atomic together, and the two keyed
+    journals fold by their own keys, so they close themselves. ``balances.jsonl``
+    is keyed on the SWEEP ID instead, so if its last line carries a ``sweep_id``
+    that ``sweeps.jsonl`` has no record for, pass that id as ``--sweep-id``:
+    without it the retry mints a fresh id and ADDS a second balance snapshot,
+    leaving the first one with no sweep record for ever. A failure before the
+    balance append needs nothing — no line is keyed on the lost id.
     """
     from alphalens_pipeline.account_cash import paths, store, sweep
     from alphalens_pipeline.brokers.account_cash import SupportsAccountCash
@@ -280,6 +333,7 @@ def sync_command(
             f"--since {since} is after --until {until}; the window is inclusive on both ends",
             details={"option": "--since", "value": since},
         )
+    swept_at = dt.datetime.now(dt.UTC) if sweep_id is None else _sweep_instant(sweep_id)
 
     _apply_env_option(env)
     try:
@@ -346,7 +400,7 @@ def sync_command(
 
     if not dry_run:
         try:
-            sweep.apply_sweep(plan, now=dt.datetime.now(dt.UTC))
+            sweep.apply_sweep(plan, now=swept_at)
         # No `SimCashBookRefusedError` arm: the authorisation above has already
         # asked the same guard about the same `resolved_env`, so this call can
         # no longer raise it. A second handler for one exception is two

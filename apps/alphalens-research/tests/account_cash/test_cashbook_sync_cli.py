@@ -706,6 +706,113 @@ class ARealRunAppendsWhatItPublished(_CashbookCliCase):
                 self.assertTrue(Path(payload["journals"][name]).is_file())
 
 
+class ARetryCanCarryThePreviousSweepsId(_CashbookCliCase):
+    """``apply_sweep``'s own contract, made reachable (#1689 F2).
+
+    It takes ``now`` rather than reading the clock *because* ``now`` IS the
+    ``sweep_id``, so a retry of the same sweep can carry the same one and fold
+    onto one record instead of two. The only caller minted a fresh id on every
+    invocation, so the fold the store was designed around could not happen and
+    a half-written sweep left a balance snapshot with no sweep record.
+    """
+
+    def _fail_the_sweep_record(self):
+        """Run one sweep whose LAST append fails: the orphan-making shape.
+
+        The four appends are not atomic together, and ``sweeps.jsonl`` is
+        written last on purpose, so this is the window the design accepts and
+        the one a retry has to close.
+        """
+        from alphalens_pipeline.brokers.journal import JournalWriteError
+
+        with mock.patch.object(store, "append_sweep", side_effect=JournalWriteError("boom")):
+            return self.sync("--format", "json")
+
+    def _orphan_sweep_id(self) -> str:
+        """The id of a balance snapshot that no sweep record accounts for."""
+        swept = {record.sweep_id for record in store.read_sweeps(env="live")}
+        lines = paths.balances_path("live").read_text(encoding="utf-8").splitlines()
+        ids = [json.loads(line)["sweep_id"] for line in lines if line.strip()]
+        orphans = [value for value in ids if value not in swept]
+        self.assertEqual(len(orphans), 1, ids)
+        return orphans[0]
+
+    def test_the_failed_sweep_leaves_a_balance_with_no_sweep_record(self) -> None:
+        """The defect ``--sweep-id`` exists for, measured rather than asserted
+        from the design. Counted on the FOLDS: the journals are append-only, so
+        a line count says nothing about what the store holds."""
+        result = self._fail_the_sweep_record()
+
+        self.assertEqual(result.exit_code, _EXIT_TRANSIENT)
+        self.assertEqual(len(store.read_balances(env="live")), 1)
+        self.assertEqual(store.read_sweeps(env="live"), [])
+
+    def test_a_plain_re_run_closes_the_rows_and_doubles_the_balance(self) -> None:
+        """Why a plain retry is not enough. The two keyed journals fold by
+        their own keys, so they close themselves; ``balances.jsonl`` is keyed
+        on the sweep id, so a fresh id ADDS a snapshot rather than closing the
+        window, and one of the two then has no sweep record for ever."""
+        self._fail_the_sweep_record()
+
+        second = self.sync("--format", "json")
+
+        self.assertEqual(second.exit_code, 0, second.output)
+        self.assertEqual(len(store.read_balances(env="live")), 2)
+        self.assertEqual(len(store.read_sweeps(env="live")), 1)
+
+    def test_a_retry_under_the_same_id_folds_onto_one_balance_and_one_sweep(self) -> None:
+        self._fail_the_sweep_record()
+        orphan = self._orphan_sweep_id()
+
+        second = self.sync("--format", "json", "--sweep-id", orphan)
+
+        self.assertEqual(second.exit_code, 0, second.output)
+        self.assertEqual(len(store.read_balances(env="live")), 1)
+        records = store.read_sweeps(env="live")
+        self.assertEqual([record.sweep_id for record in records], [orphan])
+
+    def test_the_same_instant_in_another_offset_is_the_same_sweep(self) -> None:
+        """The id is read as an INSTANT, not as a rendering of one (the
+        ``apply_sweep`` contract), and the VPS runs Europe/Warsaw — so the
+        offset an operator pastes must not decide whether the retry folds."""
+        self._fail_the_sweep_record()
+        orphan = self._orphan_sweep_id()
+        warsaw = dt.timezone(dt.timedelta(hours=2))
+        shifted = dt.datetime.fromisoformat(orphan).astimezone(warsaw)
+
+        second = self.sync("--format", "json", "--sweep-id", shifted.isoformat())
+
+        self.assertEqual(second.exit_code, 0, second.output)
+        self.assertEqual(len(store.read_balances(env="live")), 1)
+        self.assertEqual([r.sweep_id for r in store.read_sweeps(env="live")], [orphan])
+
+    def test_absent_the_option_nothing_changes_for_a_first_sweep(self) -> None:
+        """A fresh sweep is still a fresh sweep: the default is no default
+        behaviour change, only a door that was not there."""
+        payload = _strict_json(self.sync("--format", "json").stdout)
+
+        self.assertEqual(payload["appended"]["sweeps"], 1)
+        self.assertEqual(len(store.read_sweeps(env="live")), 1)
+
+    def test_an_id_that_is_not_an_instant_is_a_usage_refusal(self) -> None:
+        result = self.sync("--dry-run", "--format", "json", "--sweep-id", "yesterday")
+
+        self.assertEqual(result.exit_code, _EXIT_USAGE)
+        self.assertEqual(result.stdout, "")
+        failure = _failure_from(result)
+        self.assertEqual(failure["code"], "usage")
+        self.assertEqual(failure["details"]["option"], "--sweep-id")
+
+    def test_a_naive_id_is_refused_as_usage_and_not_as_a_traceback(self) -> None:
+        """``apply_sweep`` raises ``ValueError`` on a naive instant, which would
+        reach a caller as an exit-1 traceback with the append half done."""
+        result = self.sync("--dry-run", "--format", "json", "--sweep-id", "2026-10-09T00:31:00")
+
+        self.assertEqual(result.exit_code, _EXIT_USAGE)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(_failure_from(result)["details"]["option"], "--sweep-id")
+
+
 class TheGroupHelpIsPlainWhenPiped(unittest.TestCase):
     def test_the_group_declares_no_rich_markup_mode_of_its_own(self) -> None:
         """One ``_help_markup_mode()`` assignment on the ROOT app covers every
