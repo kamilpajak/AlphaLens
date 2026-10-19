@@ -44,6 +44,18 @@ LIVE_FACTORY_SEAM = "alphalens_pipeline.brokers.saxo.broker.create_saxo_broker_l
 SHOW_SEAM = "alphalens_pipeline.brokers.automanager.unit_env._systemctl_show"
 READ_SEAM = "alphalens_pipeline.brokers.automanager.unit_env._read_text"
 
+#: The command module itself, for the gates below that read its SOURCE rather
+#: than its imported object. One definition, because two spellings of the same
+#: path is how one of them comes to point at nothing and pass.
+_CASHBOOK_SOURCE = (
+    Path(__file__).resolve().parents[2]
+    / ".."
+    / "alphalens-pipeline"
+    / "alphalens_cli"
+    / "commands"
+    / "cashbook.py"
+).resolve()
+
 #: The exit statuses this group answers, from the repo CLI doctrine. They are
 #: asserted by VALUE rather than as "non-zero": the status is the one thing a
 #: shell caller reads without parsing the JSON, and 7 vs 1 is what tells it
@@ -951,16 +963,47 @@ class TheGroupHelpIsPlainWhenPiped(unittest.TestCase):
             self.assertNotIn(char, result.stdout)
 
 
+class TheModuleBindsNothingItNeverReads(unittest.TestCase):
+    """A module-level name nothing reads, caught where vulture does not look.
+
+    ``logging`` was imported and a ``logger`` bound with no reader anywhere in
+    the module. The repo's dead-code scan does not report a module-level
+    ``logger`` binding, so nothing would have said so; ruff only sees the
+    import once the binding is gone. Written as a property over every
+    module-level name rather than as "no logging import", because a real logger
+    added later is legitimate and this way the gate still covers the next dead
+    constant.
+    """
+
+    def setUp(self) -> None:
+        self.tree = ast.parse(_CASHBOOK_SOURCE.read_text(encoding="utf-8"))
+        self.loaded = {
+            node.id
+            for node in ast.walk(self.tree)
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+        }
+        self.bound = [
+            target.id
+            for node in self.tree.body
+            if isinstance(node, ast.Assign)
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        ]
+
+    def test_the_scan_found_the_modules_own_bindings(self) -> None:
+        """Positive control: an empty scan would make the assertion below
+        vacuous, which is how every AST gate in this repo rots."""
+        self.assertIn("cashbook_app", self.bound)
+        self.assertIn("_SYNC_SCHEMA", self.bound)
+
+    def test_every_module_level_binding_is_read_somewhere_in_the_module(self) -> None:
+        unread = sorted(name for name in self.bound if name not in self.loaded)
+        self.assertEqual(unread, [])
+
+
 def _group_app_keywords() -> set[str]:
     """The keyword names ``cashbook.py`` passes to its own ``typer.Typer()``."""
-    source = (
-        Path(__file__).resolve().parents[2]
-        / ".."
-        / "alphalens-pipeline"
-        / "alphalens_cli"
-        / "commands"
-        / "cashbook.py"
-    ).resolve()
+    source = _CASHBOOK_SOURCE
     tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
     for node in ast.walk(tree):
         if (

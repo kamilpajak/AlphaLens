@@ -42,7 +42,6 @@ this binary's import cost on every fire.
 from __future__ import annotations
 
 import datetime as dt
-import logging
 from typing import Any
 
 import typer
@@ -58,8 +57,6 @@ from alphalens_cli.commands._cli_envelope import (
     _render_json,
     _resolve_format,
 )
-
-logger = logging.getLogger(__name__)
 
 _SYNC_SCHEMA = "alphalens.cashbook.sync/v1"
 
