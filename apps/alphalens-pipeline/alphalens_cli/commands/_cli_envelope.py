@@ -137,10 +137,28 @@ _CLI_FAILURE_CODES: Mapping[str, FailureCode] = {
             name="queue_write_failed",
             retryable=True,
             meaning=(
-                "Appending to a broker journal failed (disk full, permissions). "
-                "Nothing was queued and no broker order can be in flight — the "
-                "commands that report this write only to the queue — so the same "
-                "command may simply be re-run once the cause clears."
+                "Appending to an append-only journal failed (disk full, permissions) — "
+                "a broker queue journal, or the account cash book. No broker order can "
+                "be in flight either way: the commands that report this either write "
+                "only to the queue or place nothing at all, and the cash book's append "
+                "order leaves a partial sweep a re-sweep closes, so the same command "
+                "may simply be re-run once the cause clears."
+            ),
+        ),
+        FailureCode(
+            name="cashbook_sync_refused",
+            retryable=False,
+            meaning=(
+                "The sweep will not read or store this account's cash. "
+                "`details.reason` names which rule refused it."
+            ),
+        ),
+        FailureCode(
+            name="cashbook_sweep_busy",
+            retryable=True,
+            meaning=(
+                "Another sweep holds this instance's cash-book lock. Nothing was "
+                "appended, so re-running is safe. `details.lock` names the file."
             ),
         ),
         FailureCode(

@@ -1,0 +1,489 @@
+"""``alphalens cashbook sync``: the CLI half of one sweep (#1689, memo section 3).
+
+The store, the folds and the sweep are tested in this package's other modules.
+What is tested HERE is only what a command adds: the one JSON contract (#1379)
+on a second group, the failure contract (#1389) on two new CLI codes, and the
+one branch that makes ``--dry-run`` honest.
+
+**The payload is sweep facts only.** No money total, no bucket, no
+profit-and-loss number — those are memo Phase 4, and publishing one now inside
+``alphalens.cashbook.sync/v1`` would mean changing the meaning of a field
+inside a major version later.
+
+Rows are the LIVE account's own, from
+``tests/brokers/automanager/fixtures/trades/live_2026_10_03/venue.json``: 104
+bookings rows and 41 trades rows.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import fcntl
+import json
+import os
+import unittest
+from pathlib import Path
+from typing import Any
+from unittest import mock
+
+import typer
+from alphalens_pipeline.account_cash import paths, store, sweep
+from alphalens_pipeline.brokers.account_cash import (
+    AccountCashRead,
+    BalanceSnapshot,
+    CashEvent,
+    TradeRow,
+)
+from typer.testing import CliRunner
+
+from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
+
+REGISTRY_SEAM = "alphalens_pipeline.brokers.registry.get_default_broker"
+LIVE_FACTORY_SEAM = "alphalens_pipeline.brokers.saxo.broker.create_saxo_broker_live_from_env"
+SHOW_SEAM = "alphalens_pipeline.brokers.automanager.unit_env._systemctl_show"
+READ_SEAM = "alphalens_pipeline.brokers.automanager.unit_env._read_text"
+
+_SINCE = "2026-08-01"
+_UNTIL = "2026-10-03"
+_NOW = dt.datetime(2026, 10, 9, 0, 31, tzinfo=dt.UTC)
+
+_VENUE = json.loads(
+    (
+        Path(__file__).resolve().parents[1]
+        / "brokers"
+        / "automanager"
+        / "fixtures"
+        / "trades"
+        / "live_2026_10_03"
+        / "venue.json"
+    ).read_text(encoding="utf-8")
+)
+
+_EVENTS = tuple(CashEvent.from_vendor_row(row) for row in _VENUE["bookings"])
+_TRADES = tuple(TradeRow.from_vendor_row(row) for row in _VENUE["trades"])
+
+_BALANCE = BalanceSnapshot(
+    currency="PLN",
+    cash_balance=20738.68,
+    non_margin_positions_value=3422.56,
+    total_value=24161.24,
+    transactions_not_booked=0.0,
+    calculation_reliability="Ok",
+    asof=_NOW,
+)
+
+# The rails the LIVE boot-assert requires (ADR 0017), so `--env live` composes
+# and resolves a gateway the way it does on the VPS. Copied from
+# `tests/brokers/automanager/test_broker_json_contract_cli.py`; nothing is armed.
+_LIVE_RAILS = {
+    "ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC": "1.0",
+    "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R": "1.0",
+    "ALPHALENS_BROKER_MAX_PICK_NOTIONAL": "15000",
+    "ALPHALENS_BROKER_SIZING_EQUITY_MODE": "declared",
+    "ALPHALENS_BROKER_EXIT_POLICY": "breakeven_trail",
+    "ALPHALENS_BROKER_MAX_FEE_BPS": "1000",
+    "ALPHALENS_BROKER_ENTRY_TRAIL_BPS": "50",
+}
+_UNIT_PROPERTIES = {
+    "LoadState": "loaded",
+    "Environment": " ".join(f"{key}={value}" for key, value in _LIVE_RAILS.items()),
+    "EnvironmentFiles": "/etc/alphalens/env (ignore_errors=no)",
+    "DropInPaths": "",
+    "NeedDaemonReload": "no",
+}
+
+
+def _reject_json_constant(token: str) -> None:
+    """``json.loads`` accepts NaN / Infinity; a strict reader does not."""
+    raise ValueError(f"non-strict JSON constant {token!r} on stdout")
+
+
+def _strict_json(text: str) -> Any:
+    return json.loads(text, parse_constant=_reject_json_constant)
+
+
+def _json_lines(stderr: str) -> list[dict]:
+    found = []
+    for line in stderr.splitlines():
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            found.append(value)
+    return found
+
+
+def _failure_from(result) -> dict:
+    """The one failure object on a JSON-mode stderr.
+
+    stderr carries operator chrome too (the ``env=… gateway=…`` banner), so the
+    machine rule is "exactly one stderr line is a JSON object".
+    """
+    objects = _json_lines(result.stderr)
+    assert len(objects) == 1, f"expected exactly one JSON line on stderr, got {objects}"
+    return objects[0]
+
+
+class _FakeCashBroker:
+    """A broker that answers ``SupportsAccountCash`` from the fixture."""
+
+    name = "fake"
+
+    def __init__(self, read: AccountCashRead | None = None) -> None:
+        self.read = read if read is not None else _live_read()
+        self.calls: list[tuple[dt.date, dt.date]] = []
+
+    def list_account_cash(self, since: dt.date, until: dt.date) -> AccountCashRead:
+        self.calls.append((since, until))
+        return self.read
+
+
+class _FakeBrokerWithoutTheCapability:
+    """A broker that offers everything except the cash read."""
+
+    name = "fake-no-cash"
+
+
+def _live_read() -> AccountCashRead:
+    from alphalens_pipeline.brokers.fill_history import ReadWindow
+
+    return AccountCashRead(
+        events=_EVENTS,
+        trades=_TRADES,
+        balance=_BALANCE,
+        events_window=ReadWindow(_SINCE, _UNTIL, len(_EVENTS)),
+        trades_window=ReadWindow(_SINCE, _UNTIL, len(_TRADES)),
+        skipped_reason=None,
+    )
+
+
+def _sim_read() -> AccountCashRead:
+    """What the real adapter answers on SIM: nothing read, and why."""
+    return AccountCashRead(
+        events=None,
+        trades=None,
+        balance=None,
+        skipped_reason="sim_reports_unusable",
+    )
+
+
+class _CashbookCliCase(IsolatedHomeTestCase):
+    """Isolated home, a cleared environment, and a cash-capable broker."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.runner = CliRunner()
+        self.broker: Any = _FakeCashBroker()
+        env_patcher = mock.patch.dict("os.environ", {}, clear=True)
+        env_patcher.start()
+        self.addCleanup(env_patcher.stop)
+
+    def invoke(self, argv: list[str]):
+        """Run one cashbook command with the SIM and LIVE gateways both faked.
+
+        The unit-composition seams are installed on every call, not just the
+        LIVE ones: patching them is inert on a SIM read and it keeps one entry
+        point for every test below.
+        """
+        from alphalens_cli.commands.cashbook import cashbook_app
+
+        with (
+            mock.patch(SHOW_SEAM, lambda unit, prop: _UNIT_PROPERTIES[prop]),
+            mock.patch(READ_SEAM, lambda _path: ""),
+            mock.patch(LIVE_FACTORY_SEAM, return_value=(self.broker, mock.Mock())),
+            mock.patch(REGISTRY_SEAM, return_value=self.broker),
+        ):
+            return self.runner.invoke(cashbook_app, argv)
+
+    def sync(self, *extra: str, env: str = "live"):
+        return self.invoke(["sync", "--since", _SINCE, "--until", _UNTIL, "--env", env, *extra])
+
+    def journal_files(self) -> dict[str, bytes]:
+        root = paths.account_cash_root("live")
+        if not root.exists():
+            return {}
+        return {
+            str(path.relative_to(root)): path.read_bytes()
+            for path in sorted(root.rglob("*"))
+            if path.is_file()
+        }
+
+
+class ADryRunPlansAndWritesNothing(_CashbookCliCase):
+    def test_dry_run_renders_the_plan_and_appends_nothing(self) -> None:
+        result = self.sync("--dry-run", "--format", "json")
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        payload = _strict_json(result.stdout)
+        self.assertTrue(payload["dry_run"])
+        self.assertFalse(payload["synced"])
+        self.assertEqual(payload["appended"]["cash_events"], len(_EVENTS))
+        self.assertEqual(self.journal_files(), {})
+
+    def test_the_human_default_renders_prose_and_appends_nothing(self) -> None:
+        result = self.sync("--dry-run")
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("dry run", result.stdout)
+        self.assertEqual(self.journal_files(), {})
+
+
+class TheEnvelopeIsTheSameContract(_CashbookCliCase):
+    def test_the_envelope_leads_with_schema_and_env(self) -> None:
+        payload = _strict_json(self.sync("--dry-run", "--format", "json").stdout)
+
+        self.assertEqual(list(payload)[:2], ["schema", "env"])
+        self.assertEqual(payload["schema"], "alphalens.cashbook.sync/v1")
+        self.assertEqual(payload["env"], "live")
+
+    def test_stdout_is_exactly_one_strict_json_value(self) -> None:
+        result = self.sync("--dry-run", "--format", "json")
+
+        self.assertEqual(len(result.stdout.strip().splitlines()), 1)
+        self.assertIsInstance(_strict_json(result.stdout), dict)
+
+    def test_the_payload_publishes_no_money_total(self) -> None:
+        """Memo decision D3: sweep facts only, so Phase 4 can add totals with
+        their own basis instead of redefining a field already published."""
+        payload = _strict_json(self.sync("--dry-run", "--format", "json").stdout)
+
+        forbidden = ("total", "pnl", "net", "amount", "bucket")
+        for key in _every_key(payload):
+            for token in forbidden:
+                self.assertNotIn(token, key, f"{key!r} reads as a money field")
+
+    def test_the_window_published_is_the_one_the_vendor_served(self) -> None:
+        """Not the one the caller asked for: the two differ exactly when the
+        read did not answer the question."""
+        from alphalens_pipeline.brokers.fill_history import ReadWindow
+
+        self.broker = _FakeCashBroker(
+            AccountCashRead(
+                events=_EVENTS,
+                trades=_TRADES,
+                balance=_BALANCE,
+                events_window=ReadWindow("2026-09-01", "2026-09-30", 7),
+                trades_window=ReadWindow("2026-09-01", "2026-09-30", 3),
+            )
+        )
+        payload = _strict_json(self.sync("--dry-run", "--format", "json").stdout)
+
+        self.assertEqual(payload["asked"], {"since": _SINCE, "until": _UNTIL})
+        self.assertEqual(payload["read"]["events"]["start"], "2026-09-01")
+        self.assertEqual(payload["read"]["events"]["rows"], 7)
+
+
+def _every_key(value: Any, prefix: str = "") -> list[str]:
+    """Every key in a nested payload, so a money field cannot hide one level down."""
+    keys: list[str] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            keys.append(f"{prefix}{key}")
+            keys.extend(_every_key(child, f"{prefix}{key}."))
+    elif isinstance(value, list):
+        for child in value:
+            keys.extend(_every_key(child, prefix))
+    return keys
+
+
+class AUsageRefusalRendersTheWayTheCallerAsked(_CashbookCliCase):
+    def test_an_unknown_format_exits_two_with_stdout_empty(self) -> None:
+        result = self.sync("--dry-run", "--format", "xml")
+
+        self.assertEqual(result.exit_code, 2)
+        self.assertEqual(result.stdout, "")
+
+    def test_a_bad_date_exits_two_in_the_format_the_caller_asked_for(self) -> None:
+        result = self.invoke(
+            ["sync", "--since", "nope", "--until", _UNTIL, "--format", "json", "--dry-run"]
+        )
+
+        self.assertEqual(result.exit_code, 2)
+        self.assertEqual(result.stdout, "")
+        failure = _failure_from(result)
+        self.assertEqual(failure["code"], "usage")
+        self.assertEqual(failure["details"]["option"], "--since")
+
+    def test_since_after_until_is_refused(self) -> None:
+        result = self.invoke(
+            ["sync", "--since", _UNTIL, "--until", _SINCE, "--format", "json", "--dry-run"]
+        )
+
+        self.assertEqual(result.exit_code, 2)
+        self.assertEqual(result.stdout, "")
+        failure = _failure_from(result)
+        self.assertEqual(failure["code"], "usage")
+        self.assertEqual(failure["details"]["option"], "--since")
+
+
+class TheRefusalsCarryTheirOwnCode(_CashbookCliCase):
+    def test_on_sim_it_refuses_and_prints_nothing_on_stdout(self) -> None:
+        """Memo section 3: the SIM report endpoints answer with canned rows from
+        OTHER accounts, so the read answers nothing and the sweep refuses. Exit
+        0 with a zero result would publish fiction as this account's cash."""
+        self.broker = _FakeCashBroker(_sim_read())
+        result = self.sync("--format", "json", env="sim")
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertEqual(result.stdout, "")
+        failure = _failure_from(result)
+        self.assertEqual(failure["code"], "cashbook_sync_refused")
+        self.assertEqual(failure["details"]["reason"], "sim_reports_unusable")
+        self.assertFalse(failure["retryable"])
+
+    def test_a_write_aimed_at_sim_is_refused_with_the_store_reason(self) -> None:
+        """The other half of the same code: the read answered rows (a fake can),
+        and the WRITE guard refuses them. One code, two reasons."""
+        result = self.sync("--format", "json", env="sim")
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertEqual(result.stdout, "")
+        failure = _failure_from(result)
+        self.assertEqual(failure["code"], "cashbook_sync_refused")
+        self.assertEqual(failure["details"]["reason"], "sim_store_refused")
+        self.assertEqual(paths.account_cash_root("sim").exists(), False)
+
+    def test_a_broker_without_the_capability_is_refused_as_broker_unsupported(self) -> None:
+        """A contract concept keeps the contract's code (#1122)."""
+        self.broker = _FakeBrokerWithoutTheCapability()
+        result = self.sync("--format", "json")
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(_failure_from(result)["code"], "broker_unsupported")
+
+    def test_a_held_lock_refuses_as_sweep_busy_with_nothing_appended(self) -> None:
+        """Retryable, because nothing was appended: re-running is safe without
+        reconciling anything first."""
+        lock = paths.sweep_lock_path("live")
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        holder = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+        self.addCleanup(os.close, holder)
+        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        with mock.patch.object(sweep, "_LOCK_ACQUIRE_TIMEOUT_S", 0.0):
+            result = self.sync("--format", "json")
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertEqual(result.stdout, "")
+        failure = _failure_from(result)
+        self.assertEqual(failure["code"], "cashbook_sweep_busy")
+        self.assertTrue(failure["retryable"])
+        self.assertEqual(failure["details"]["lock"], str(lock))
+        self.assertEqual(sorted(self.journal_files()), [".sweep.lock"])
+
+    def test_an_unrenderable_envelope_refuses_without_appending(self) -> None:
+        """Rendering happens BEFORE the append, so an unrenderable body is a
+        refusal rather than a failure report for something that already
+        happened — the ``write_outcome_unknown`` shape."""
+        from alphalens_cli.commands import cashbook as cashbook_module
+
+        with mock.patch.object(cashbook_module, "_render_json", side_effect=_cannot_render):
+            result = self.sync("--format", "json")
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(self.journal_files(), {})
+
+    def test_a_failed_append_reports_queue_write_failed_not_a_traceback(self) -> None:
+        """The first journal of the sequence is unwritable, the lock is not: the
+        refusal must name the file it could not append to."""
+        journal = paths.cash_events_path("live")
+        journal.parent.mkdir(parents=True)
+        journal.touch()
+        journal.chmod(0o400)
+        self.addCleanup(journal.chmod, 0o600)
+
+        result = self.sync("--format", "json")
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertEqual(result.stdout, "")
+        failure = _failure_from(result)
+        self.assertEqual(failure["code"], "queue_write_failed")
+        self.assertTrue(failure["retryable"])
+        self.assertEqual(failure["details"]["journal"], str(journal))
+
+    def test_an_unwritable_store_root_refuses_at_the_lock_with_the_same_code(self) -> None:
+        """The lock is taken BEFORE the first append, so an unwritable root
+        fails there. Same failure mode, same code: no write happened, nothing is
+        in flight, and a re-run is safe once the cause clears."""
+        root = paths.account_cash_root("live")
+        root.mkdir(parents=True)
+        root.chmod(0o500)
+        self.addCleanup(root.chmod, 0o700)
+
+        result = self.sync("--format", "json")
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertEqual(result.stdout, "")
+        failure = _failure_from(result)
+        self.assertEqual(failure["code"], "queue_write_failed")
+        self.assertEqual(failure["details"]["journal"], str(paths.sweep_lock_path("live")))
+
+
+def _cannot_render(payload: Any) -> None:
+    from alphalens_cli.commands._cli_envelope import _fail_with
+
+    raise _fail_with("unclassified", "cannot render this result as JSON: boom")
+
+
+class ARealRunAppendsWhatItPublished(_CashbookCliCase):
+    def test_the_published_counts_are_the_record_the_sweep_wrote(self) -> None:
+        """The body is rendered from the PLAN and the record is written by the
+        sweep, so the two arithmetics must agree. Without this the CLI could
+        publish a count the journal does not hold."""
+        payload = _strict_json(self.sync("--format", "json").stdout)
+
+        records = store.read_sweeps(env="live")
+        self.assertEqual(len(records), 1)
+        self.assertEqual(payload["appended"], dict(records[0].appended))
+        self.assertEqual(payload["already_present"], dict(records[0].already_present))
+        self.assertEqual(payload["restated"], dict(records[0].restated))
+        self.assertTrue(payload["synced"])
+        self.assertFalse(payload["dry_run"])
+
+    def test_a_second_sweep_of_the_same_window_appends_nothing_new(self) -> None:
+        self.sync("--format", "json")
+        payload = _strict_json(self.sync("--format", "json").stdout)
+
+        self.assertEqual(payload["appended"]["cash_events"], 0)
+        self.assertEqual(payload["already_present"]["cash_events"], len(_EVENTS))
+
+    def test_the_journal_paths_it_names_are_the_ones_it_wrote(self) -> None:
+        payload = _strict_json(self.sync("--format", "json").stdout)
+
+        for name in ("cash_events", "trade_rows", "balances", "sweeps"):
+            with self.subTest(journal=name):
+                self.assertTrue(Path(payload["journals"][name]).is_file())
+
+
+class TheGroupHelpIsPlainWhenPiped(unittest.TestCase):
+    def test_the_group_declares_no_rich_markup_mode_of_its_own(self) -> None:
+        """One ``_help_markup_mode()`` assignment on the ROOT app covers every
+        group; a per-group setting would be a second source of truth."""
+        from alphalens_cli.commands.cashbook import cashbook_app
+
+        self.assertEqual(cashbook_app.rich_markup_mode, typer.Typer().rich_markup_mode)
+
+    def test_the_root_app_registers_the_group(self) -> None:
+        import typer.main
+        from alphalens_cli.main import app
+
+        group = typer.main.get_command(app)
+
+        self.assertIn("cashbook", group.commands)  # type: ignore[attr-defined]
+
+    def test_the_piped_help_carries_no_box_drawing_characters(self) -> None:
+        from alphalens_cli.main import app
+
+        with mock.patch("sys.stdout.isatty", return_value=False):
+            result = CliRunner().invoke(app, ["cashbook", "sync", "--help"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        for char in "─│┌┐└┘╭╮╰╯":
+            self.assertNotIn(char, result.stdout)
+
+
+if __name__ == "__main__":
+    unittest.main()

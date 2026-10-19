@@ -71,6 +71,13 @@ SCOPE_PREFIXES: tuple[str, ...] = (
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/",
     "apps/alphalens-pipeline/alphalens_pipeline/paper/",
     "apps/alphalens-pipeline/alphalens_cli/commands/broker.py",
+    # The envelope and failure contract moved out of ``broker.py`` (#1689) and
+    # the second group built on them. Both are listed as exact FILE paths, the
+    # way ``broker.py`` is: ``PRODUCTION_ROOTS`` already covers all of
+    # ``alphalens_cli``, so without these lines vulture scans 400 lines of the
+    # failure registry and ``_in_scope`` filters every finding back out.
+    "apps/alphalens-pipeline/alphalens_cli/commands/_cli_envelope.py",
+    "apps/alphalens-pipeline/alphalens_cli/commands/cashbook.py",
     # The account cash book (#1689). In scope from the commit that creates it:
     # the package is already covered by ``PRODUCTION_ROOTS``, so without this
     # line vulture scans it and ``_in_scope`` then filters every finding out --

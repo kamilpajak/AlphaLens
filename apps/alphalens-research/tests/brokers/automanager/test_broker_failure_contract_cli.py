@@ -54,9 +54,13 @@ BROKER_CLI = _COMMANDS_DIR / "broker.py"
 #: is logged and where a second code-resolving helper would hide.
 ENVELOPE_CLI = _COMMANDS_DIR / "_cli_envelope.py"
 
+#: The second group built on the same envelope (#1689). It emits codes of its
+#: own, so the registry walk must read it too.
+CASHBOOK_CLI = _COMMANDS_DIR / "cashbook.py"
+
 #: Every module that reaches the emitters. One entry per module, so a new group
 #: built on this envelope is added here rather than silently uncovered.
-EMITTING_CLI_MODULES = (BROKER_CLI, ENVELOPE_CLI)
+EMITTING_CLI_MODULES = (BROKER_CLI, ENVELOPE_CLI, CASHBOOK_CLI)
 
 
 def _json_lines(stderr: str) -> list[dict]:
