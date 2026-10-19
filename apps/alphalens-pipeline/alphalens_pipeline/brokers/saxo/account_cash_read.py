@@ -64,6 +64,37 @@ def _map_every_row[Row](
     return tuple(mapped)
 
 
+def _require_plain_date(name: str, value: dt.date) -> dt.date:
+    """One window edge, refused unless it is a plain ``date``.
+
+    ``datetime`` SUBCLASSES ``date``, so the annotation on the read cannot
+    stop one arriving and a static checker cannot flag the call. Passed
+    through, its ``isoformat()`` carries a time of day into the vendor's
+    ``FromDate`` / ``ToDate`` AND into the published ``ReadWindow``, so the
+    window read would differ from the window asked for while reporting itself
+    as the window asked for. The likely caller is a sweep that also holds
+    ``list_fill_history``, which takes DATETIMES over these same two
+    endpoints.
+
+    A refusal rather than a normalisation to the date inside, which is this
+    repo's habit on a window edge: a clamp publishes a number that reads as
+    the thing asked for. A plain ``ValueError``, which is what every other
+    argument refusal under ``brokers/`` raises (``execution.py``'s
+    ``entry_ttl_days``, ``reconcile.py``'s audit budget): the mistake is the
+    CALLER's, and a ``BrokerError`` would classify it at the CLI as
+    ``broker_failed`` -- blaming the vendor for a bad call.
+    """
+    if isinstance(value, dt.datetime):
+        raise ValueError(
+            f"{name} must be a date, not a datetime ({value!r}): its time of day would "
+            f"travel to the report endpoints as the window edge and be published as the "
+            f"window's own edge, so the window read would not be the window asked for"
+        )
+    if not isinstance(value, dt.date):
+        raise ValueError(f"{name} must be a datetime.date, got {type(value).__name__}")
+    return value
+
+
 def read_account_cash(
     client: Any,
     *,
@@ -76,7 +107,11 @@ def read_account_cash(
 
     ``since`` and ``until`` are DATES and are passed through unpadded: both
     report endpoints filter on a venue-stamped date (memo section 1.7 P9), so
-    the window asked for is the window published."""
+    the window asked for is the window published. Both edges are checked
+    before the first read: a ``datetime`` is refused rather than normalised
+    (see :func:`_require_plain_date`)."""
+    _require_plain_date("since", since)
+    _require_plain_date("until", until)
     from_date = since.isoformat()
     to_date = until.isoformat()
     booking_rows = client.get_bookings_report(

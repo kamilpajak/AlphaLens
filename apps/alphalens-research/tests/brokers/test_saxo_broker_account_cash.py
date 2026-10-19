@@ -183,6 +183,42 @@ class TheRead(unittest.TestCase):
                 self.assertEqual(calls[endpoint]["client_key"], "CK-1")
                 self.assertEqual(calls[endpoint]["account_key"], "AK-1")
 
+    def test_a_datetime_is_refused_rather_than_read_as_the_date_it_is_inside(self) -> None:
+        """``datetime`` subclasses ``date``, so the annotation cannot stop this.
+
+        Measured before the refusal: ``dt.datetime(2026, 8, 1, 12, 0,
+        tzinfo=dt.UTC)`` sent ``from_date='2026-08-01T12:00:00+00:00'`` to the
+        vendor AND published that same string as ``events_window.start``. The
+        likely caller mistake is the sibling capability: ``list_fill_history``
+        takes DATETIMES over the same two endpoints, so a sweep holding both
+        has two argument kinds for one pair of reports.
+
+        A refusal and not a normalisation to the date inside: the window
+        published would read as the window asked for, and this repo's habit on
+        a window edge is to refuse rather than clamp, because a clamp publishes
+        a number that reads as the thing asked for."""
+        noon = dt.datetime(2026, 8, 1, 12, 0, tzinfo=dt.UTC)
+        for since, until in ((noon, _UNTIL), (_SINCE, noon)):
+            with self.subTest(since=since, until=until):
+                with self.assertRaises(ValueError) as caught:
+                    self.broker.list_account_cash(since, until)
+                self.assertIn("datetime", str(caught.exception))
+                self.assertEqual(self.client.calls, [])
+
+    def test_a_window_edge_that_is_not_a_date_at_all_is_refused_too(self) -> None:
+        """The other arm of the same guard, measured on its own.
+
+        A caller holding ISO strings (the shape the two report endpoints
+        actually take) reaches ``since.isoformat()`` and raises
+        ``AttributeError`` from inside the read instead of being told which
+        argument was wrong."""
+        for since, until in (("2026-08-01", _UNTIL), (_SINCE, "2026-10-03")):
+            with self.subTest(since=since, until=until):
+                with self.assertRaises(ValueError) as caught:
+                    self.broker.list_account_cash(since, until)  # type: ignore[arg-type]
+                self.assertIn("date", str(caught.exception))
+                self.assertEqual(self.client.calls, [])
+
     def test_a_vendor_error_leaves_as_a_contract_error(self) -> None:
         """The network calls sit INSIDE ``_translate_saxo_errors()``.
 
