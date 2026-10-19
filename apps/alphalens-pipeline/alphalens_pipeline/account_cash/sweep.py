@@ -116,18 +116,22 @@ class SweepPlan:
     refused_reason: str | None
 
 
-def _split_against_known(
-    incoming: Sequence[object], known: Mapping[str, object], key_of: Callable[[object], str]
-) -> tuple[tuple[object, ...], tuple[object, ...], int]:
+def _split_against_known[Row](
+    incoming: Sequence[Row], known: Mapping[str, Row], key_of: Callable[[Row], str]
+) -> tuple[tuple[Row, ...], tuple[Row, ...], int]:
     """``(new, restated, already_present)`` for one journal's rows.
 
     ``restated`` is a row whose key is known and whose VALUE differs -- the
     signal the journal exists for. An identical row is ``already_present`` and
     is not re-appended: it would leave a second line that folds onto the same
     record and says nothing.
+
+    Generic over the row type so the two journals share ONE definition of the
+    three-way split: computing it twice is how the same quantity comes to be
+    counted two different ways on two sides of one module.
     """
-    new: list[object] = []
-    restated: list[object] = []
+    new: list[Row] = []
+    restated: list[Row] = []
     already_present = 0
     for row in incoming:
         key = key_of(row)
@@ -180,11 +184,11 @@ def plan_sweep(read: AccountCashRead, *, env: str, since: dt.date, until: dt.dat
         since=since,
         until=until,
         read=read,
-        new_events=new_events,  # type: ignore[arg-type]
-        restated_events=restated_events,  # type: ignore[arg-type]
+        new_events=new_events,
+        restated_events=restated_events,
         already_present_events=present_events,
-        new_trade_rows=new_rows,  # type: ignore[arg-type]
-        restated_trade_rows=restated_rows,  # type: ignore[arg-type]
+        new_trade_rows=new_rows,
+        restated_trade_rows=restated_rows,
         already_present_trade_rows=present_rows,
         malformed={
             _CASH_EVENTS: events_fold.malformed,

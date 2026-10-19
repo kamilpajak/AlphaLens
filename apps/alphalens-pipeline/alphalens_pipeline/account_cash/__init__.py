@@ -23,8 +23,10 @@ field a caller passes in.
 that could ever detect a corrected row, and a restatement history that gets
 compacted is not one. ``tests/account_cash/test_no_compactor_reaches_the_cash_book.py``
 holds that structurally rather than as a sentence.
+
+The four modules are ``paths`` (where the journals are), ``codec`` (the wire
+form), ``store`` (the appends and the folds) and ``sweep`` (plan then apply).
+They are deliberately NOT re-exported here: nothing imports the package for
+its own sake, and a re-export would make every reader of one module pay for
+all four.
 """
-
-from __future__ import annotations
-
-__all__ = ["codec", "paths", "store", "sweep"]
