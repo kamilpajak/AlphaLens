@@ -53,6 +53,10 @@ from broker_contract.quantity import InstrumentQuantityRules, quantity_refusal
 from broker_contract.sizing import TradeSetupNotPlannableError
 
 from alphalens_pipeline.brokers import execution as execution_policy
+from alphalens_pipeline.brokers.account_cash import (
+    SIM_REPORTS_UNUSABLE,
+    AccountCashRead,
+)
 from alphalens_pipeline.brokers.automanager import live_rails
 from alphalens_pipeline.brokers.fill_history import (
     CostBooking,
@@ -1714,6 +1718,19 @@ class SaxoBroker:
             trades_window=ReadWindow(from_date, to_date, len(trade_rows)),
             bookings_window=ReadWindow(from_date, to_date, len(booking_rows)),
         )
+
+    # ----- account cash (#1689, the cash book's read) -----
+
+    def list_account_cash(self, since: dt.date, until: dt.date) -> AccountCashRead:
+        """Every cash movement the account booked between two dates, UNFILTERED."""
+        if self._client.base_url == SIM_BASE_URL:
+            return AccountCashRead(
+                events=None,
+                trades=None,
+                balance=None,
+                skipped_reason=SIM_REPORTS_UNUSABLE,
+            )
+        return AccountCashRead(events=None, trades=None, balance=None)
 
     def tick_size(self, uic: int, price: float) -> float | None:
         """The instrument tick at ``price``, from one details GET per uic."""
