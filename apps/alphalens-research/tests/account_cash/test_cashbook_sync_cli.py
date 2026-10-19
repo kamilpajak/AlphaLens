@@ -308,7 +308,7 @@ class ADryRunPlansAndWritesNothing(_CashbookCliCase):
         prose dropped ``journals`` and ``synced`` outright, while this PR's test
         plan claimed the prose carried every fact the JSON body does.
 
-        A leaf's token must appear as a whitespace-delimited FIELD, not as a
+        A leaf's token must appear WHOLE and space-bounded, not as a plain
         substring: ``synced: false`` renders ``no``, and ``no`` is inside
         "nothing written" in the header, so a substring check for it passes
         whatever the renderer drops.
@@ -317,12 +317,35 @@ class ADryRunPlansAndWritesNothing(_CashbookCliCase):
 
         human = self.sync("--dry-run").stdout
 
-        fields = set(human.split())
+        self._assert_prose_carries_every_leaf(payload, human)
+
+    def test_the_prose_carries_the_facts_of_a_read_that_answered_nothing(self) -> None:
+        """The same parity, over the body shape where leaves are null.
+
+        A null leaf renders as "not read", which is two words — so this is also
+        what forces the token check to be space-bounded rather than a lookup in
+        the set of whitespace-separated fields: that set can never hold a token
+        with a space in it, and the whole null half of the body would have gone
+        unchecked while reading as covered.
+        """
+        self.broker = _FakeCashBroker(
+            AccountCashRead(events=None, trades=None, balance=None, skipped_reason=None)
+        )
+        payload = _strict_json(self.sync("--dry-run", "--format", "json").stdout)
+
+        human = self.sync("--dry-run").stdout
+
+        self.assertIsNone(payload["read"]["balance_asof"])
+        self.assertIsNone(payload["read"]["events"])
+        self._assert_prose_carries_every_leaf(payload, human)
+
+    def _assert_prose_carries_every_leaf(self, payload: dict, human: str) -> None:
+        bounded = f" {' '.join(human.split())} "
         for path, value in _leaves(payload):
             if path in _HUMAN_EXEMPT_KEYS:
                 continue
             with self.subTest(field=path):
-                self.assertIn(_human_token(value), fields)
+                self.assertIn(f" {_human_token(value)} ", bounded)
 
     def test_every_published_count_appears_under_its_own_label(self) -> None:
         """The other half, which full coverage alone does not give: the counts
