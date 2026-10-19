@@ -222,6 +222,29 @@ class TheSweepRecordPublishesWhatTheVendorServed(IsolatedHomeTestCase):
         self.assertEqual(record.since, _SINCE.isoformat())
         self.assertEqual(record.until, _UNTIL.isoformat())
 
+    def test_the_trades_window_is_passed_through_as_well_and_not_swapped(self) -> None:
+        """The trades window comes from a SEPARATE vendor call with its own row
+        count, and only ``events_window`` was pinned -- so dropping this one to
+        ``None`` was silent. The two served values differ here, so swapping
+        them fails too, which equal placeholders could not detect."""
+        events_served = ReadWindow("2026-08-02", "2026-10-02", 7)
+        trades_served = ReadWindow("2026-08-03", "2026-10-01", 5)
+        record = sweep.apply_sweep(
+            _plan(_read(events_window=events_served, trades_window=trades_served)), now=_NOW
+        )
+
+        self.assertEqual(record.trades_window, trades_served)
+        self.assertEqual(record.events_window, events_served)
+        self.assertNotEqual(record.trades_window, record.events_window)
+
+    def test_a_read_that_served_no_trades_window_records_none(self) -> None:
+        """The other direction: ``None`` must stay ``None`` rather than be
+        back-filled from the asked-for window, or the record would claim a
+        window the vendor never served."""
+        record = sweep.apply_sweep(_plan(_read(trades_window=None)), now=_NOW)
+        self.assertIsNone(record.trades_window)
+        self.assertIsNotNone(record.events_window)
+
     def test_the_record_carries_the_counts_and_the_environment(self) -> None:
         record = sweep.apply_sweep(_plan(), now=_NOW)
         self.assertEqual(record.env, _LIVE)
@@ -246,6 +269,54 @@ class TheSweepRecordPublishesWhatTheVendorServed(IsolatedHomeTestCase):
         record = sweep.apply_sweep(_plan(_read(balance=None)), now=_NOW)
         self.assertEqual(record.appended["balances"], 0)
         self.assertEqual(store.read_balances(env=_LIVE), [])
+
+
+class TheMalformedCountReachesTheSweepRecord(IsolatedHomeTestCase):
+    """``record.malformed`` is the only thing that tells a later reader how much
+    of the journal the sweep could not account for.
+
+    Every other sweep fixture seeds a clean store, so both counters are 0 in
+    all of them -- a column uniform in the value under test. The store's own
+    malformed counting is pinned in ``test_store.py``; nothing carried it
+    through the plan into the record, so a hardcoded
+    ``{cash_events: 0, trade_rows: 0}`` was green everywhere.
+    """
+
+    def _corrupt_one_line_of_each_keyed_journal(self) -> None:
+        store.append_cash_events(_EVENTS[:2], env=_LIVE)
+        store.append_trade_rows(_TRADES[:2], env=_LIVE)
+        for journal in (paths.cash_events_path(_LIVE), paths.trade_rows_path(_LIVE)):
+            with journal.open("a", encoding="utf-8") as fh:
+                fh.write("not json at all\n")
+
+    def test_the_plan_reports_what_the_folds_could_not_read(self) -> None:
+        self._corrupt_one_line_of_each_keyed_journal()
+        self.assertEqual(_plan().malformed, {"cash_events": 1, "trade_rows": 1})
+
+    def test_the_record_carries_the_plans_counts_and_not_a_zero(self) -> None:
+        self._corrupt_one_line_of_each_keyed_journal()
+        record = sweep.apply_sweep(_plan(), now=_NOW)
+        self.assertEqual(record.malformed, {"cash_events": 1, "trade_rows": 1})
+
+    def test_the_two_journals_are_counted_apart(self) -> None:
+        """One count standing in for both would satisfy the tests above, so
+        exactly one journal is corrupted here."""
+        store.append_cash_events(_EVENTS[:2], env=_LIVE)
+        store.append_trade_rows(_TRADES[:2], env=_LIVE)
+        with paths.cash_events_path(_LIVE).open("a", encoding="utf-8") as fh:
+            fh.write("not json at all\n")
+
+        record = sweep.apply_sweep(_plan(), now=_NOW)
+        self.assertEqual(record.malformed, {"cash_events": 1, "trade_rows": 0})
+
+    def test_the_count_survives_onto_the_sweeps_journal(self) -> None:
+        """Through the codec and back: the number a later reader actually gets
+        is the one on disk, not the one the call returned."""
+        self._corrupt_one_line_of_each_keyed_journal()
+        sweep.apply_sweep(_plan(), now=_NOW)
+
+        (stored,) = store.read_sweeps(env=_LIVE)
+        self.assertEqual(stored.malformed, {"cash_events": 1, "trade_rows": 1})
 
 
 class TheAppendOrderIsLoadBearing(IsolatedHomeTestCase):
@@ -278,6 +349,76 @@ class TheAppendOrderIsLoadBearing(IsolatedHomeTestCase):
             sweep.apply_sweep(_plan(), now=_NOW)
 
         self.assertEqual(order, ["cash_events", "trade_rows", "balances", "sweeps"])
+
+
+class TheFourAppendsHappenWhileTheLockIsHeld(IsolatedHomeTestCase):
+    """``sweep.py`` states the lock is "held across all four appends", and that
+    -- not merely taking it -- is what stops two sweeps interleaving.
+
+    :class:`TheLockKeepsTwoSweepsApart` asserts that a sweep REFUSES while
+    someone else holds the lock and that the lock is released afterwards. Both
+    stay green when the ``with`` block is emptied to ``pass`` and the four
+    appends moved below it, because nothing in them observes WHEN the appends
+    happen. So this one asks the question from inside each appender.
+    """
+
+    def _lock_is_held_by_someone(self) -> bool:
+        """Whether a SECOND descriptor on the lock file is refused right now.
+
+        Same-process contention is observable on this platform: a second
+        descriptor on the same path with ``LOCK_EX | LOCK_NB`` raises
+        ``BlockingIOError`` (errno 35), so no second process is needed.
+        """
+        lock_path = paths.sweep_lock_path(_LIVE)
+        if not lock_path.exists():
+            return False
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return True
+        else:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            return False
+        finally:
+            os.close(fd)
+
+    def _probe_each_appender(self) -> dict[str, bool]:
+        held: dict[str, bool] = {}
+
+        def probing(name: str, real):
+            def wrapper(*args: Any, **kwargs: Any):
+                held[name] = self._lock_is_held_by_someone()
+                return real(*args, **kwargs)
+
+            return wrapper
+
+        with (
+            mock.patch.object(
+                store, "append_cash_events", probing("cash_events", store.append_cash_events)
+            ),
+            mock.patch.object(
+                store, "append_trade_rows", probing("trade_rows", store.append_trade_rows)
+            ),
+            mock.patch.object(store, "append_balance", probing("balances", store.append_balance)),
+            mock.patch.object(store, "append_sweep", probing("sweeps", store.append_sweep)),
+        ):
+            sweep.apply_sweep(_plan(), now=_NOW)
+        return held
+
+    def test_every_one_of_the_four_appends_runs_under_the_lock(self) -> None:
+        self.assertEqual(
+            self._probe_each_appender(),
+            {"cash_events": True, "trade_rows": True, "balances": True, "sweeps": True},
+        )
+
+    def test_the_probe_answers_false_once_the_sweep_has_finished(self) -> None:
+        """The negative control. Without it the test above passes for a probe
+        that can only ever answer ``True`` -- and it is the same observation
+        that says the lock was released, from the outside this time."""
+        sweep.apply_sweep(_plan(), now=_NOW)
+        self.assertTrue(paths.sweep_lock_path(_LIVE).exists())
+        self.assertFalse(self._lock_is_held_by_someone())
 
 
 class ARetryAfterAPartialSweepLeavesOneRecordPerSweep(IsolatedHomeTestCase):
