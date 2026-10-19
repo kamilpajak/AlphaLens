@@ -153,48 +153,67 @@ class ConcurrentAppendersDoNotLoseEachOther(_JournalCase):
 
 
 class NoJournalWriterBypassesTheHelper(unittest.TestCase):
-    """Every append to a broker journal goes through `append_json_line`.
+    """Every append to a journal goes through `append_json_line`.
 
     The concurrency property above is only as good as this. A new `open("a")`
-    added anywhere under `brokers/` reintroduces the record-swallowing shape,
+    added anywhere in a scanned root reintroduces the record-swallowing shape,
     and it would look perfectly ordinary in review.
+
+    TWO roots since #1689: `brokers/` and `account_cash/`. The account cash
+    book is a separate package, so it is NOT under `brokers/` --
+    `Path(".../account_cash").is_relative_to(Path(".../brokers"))` is False --
+    and it appends four money journals of its own. `journal.py` stays the one
+    excluded file, by identity rather than one exclusion per root: the helper
+    exists once and only the root that holds it has one.
     """
+
+    def _scanned_roots(self) -> tuple[Path, ...]:
+        pipeline = Path(__file__).resolve().parents[3] / "alphalens-pipeline" / "alphalens_pipeline"
+        return (pipeline / "brokers", pipeline / "account_cash")
 
     def test_no_append_mode_open_outside_the_helper(self) -> None:
         import ast
 
-        root = (
-            Path(__file__).resolve().parents[3]
-            / "alphalens-pipeline"
-            / "alphalens_pipeline"
-            / "brokers"
-        )
-        helper = root / "journal.py"
+        roots = self._scanned_roots()
+        helper = roots[0] / "journal.py"
+        self.assertTrue(helper.is_file(), f"the one excluded helper is not at {helper}")
         offenders: list[str] = []
-        for source in sorted(root.rglob("*.py")):
-            if source == helper:
-                continue
-            tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
-            for node in ast.walk(tree):
-                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+        scanned = 0
+        for root in roots:
+            sources = sorted(root.rglob("*.py"))
+            self.assertTrue(sources, f"no modules under {root}; the gate would pass vacuously")
+            scanned += len(sources)
+            for source in sources:
+                if source == helper:
                     continue
-                if node.func.attr != "open":
-                    continue
-                modes = [a.value for a in node.args if isinstance(a, ast.Constant)]
-                modes += [
-                    k.value.value
-                    for k in node.keywords
-                    if k.arg == "mode" and isinstance(k.value, ast.Constant)
-                ]
-                if any(isinstance(m, str) and "a" in m for m in modes):
-                    offenders.append(f"{source.name}:{node.lineno}")
+                tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+                for node in ast.walk(tree):
+                    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                        continue
+                    if node.func.attr != "open":
+                        continue
+                    modes = [a.value for a in node.args if isinstance(a, ast.Constant)]
+                    modes += [
+                        k.value.value
+                        for k in node.keywords
+                        if k.arg == "mode" and isinstance(k.value, ast.Constant)
+                    ]
+                    if any(isinstance(m, str) and "a" in m for m in modes):
+                        offenders.append(f"{source.name}:{node.lineno}")
 
+        self.assertGreaterEqual(scanned, 2, "the corpus must cover both roots")
         self.assertEqual(
             offenders,
             [],
             "append-mode open outside journal.py — route it through append_json_line, "
             "or a torn predecessor will swallow the record: " + ", ".join(offenders),
         )
+
+    def test_the_cash_book_root_is_really_outside_the_brokers_root(self) -> None:
+        """The hole this widening closed, asserted rather than remembered."""
+        brokers, account_cash = self._scanned_roots()
+        self.assertFalse(account_cash.is_relative_to(brokers))
+        self.assertTrue(account_cash.is_dir())
 
     def test_the_scan_can_actually_fail(self) -> None:
         """Positive control: a gate that matches nothing has tested nothing."""
