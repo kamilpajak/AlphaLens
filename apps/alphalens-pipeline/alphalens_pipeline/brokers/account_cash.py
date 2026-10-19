@@ -41,6 +41,7 @@ from alphalens_pipeline.brokers.fill_history import (
     _opt_float,
     _opt_int,
     _opt_str,
+    parse_utc,
 )
 
 # ``AccountCashRead.skipped_reason`` on SIM: the SIM report endpoints answer
@@ -117,19 +118,19 @@ class TradeRow:
         """Map one ``/cs/v1/reports/trades`` row, field by field."""
         return cls(
             trade_id=str(row.get("TradeId", "")),
-            order_id="",
-            uic=None,
-            instrument_symbol=None,
-            amount=None,
-            price=None,
-            trade_event_type=None,
-            to_open_or_close=None,
-            trade_date=None,
-            value_date=None,
-            execution_time=None,
-            booked_amount_account_currency=None,
-            account_currency=None,
-            venue=None,
+            order_id=str(row.get("OrderId", "")),
+            uic=_opt_int(row.get("Uic")),
+            instrument_symbol=_opt_str(row.get("InstrumentSymbol")),
+            amount=_opt_float(row.get("Amount")),
+            price=_opt_float(row.get("Price")),
+            trade_event_type=_opt_str(row.get("TradeEventType")),
+            to_open_or_close=_opt_str(row.get("ToOpenOrClose")),
+            trade_date=_opt_str(row.get("TradeDate")),
+            value_date=_opt_str(row.get("ValueDate")),
+            execution_time=parse_utc(row.get("TradeExecutionTime")),
+            booked_amount_account_currency=_opt_float(row.get("BookedAmountAccountCurrency")),
+            account_currency=_opt_str(row.get("AccountCurrency")),
+            venue=_opt_str(row.get("Venue")),
         )
 
 

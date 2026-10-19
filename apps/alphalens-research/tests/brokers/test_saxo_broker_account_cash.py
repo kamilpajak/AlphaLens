@@ -21,7 +21,11 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from alphalens_pipeline.brokers.account_cash import CashEvent, SupportsAccountCash
+from alphalens_pipeline.brokers.account_cash import (
+    CashEvent,
+    SupportsAccountCash,
+    TradeRow,
+)
 from alphalens_pipeline.brokers.fill_history import ReadWindow
 from alphalens_pipeline.brokers.saxo.broker import SaxoBroker
 from alphalens_pipeline.brokers.saxo.client import SaxoRateLimitError
@@ -243,6 +247,110 @@ class TheCashEventMapping(unittest.TestCase):
         self.assertEqual(event.uic, 486)
         self.assertEqual(event.instrument_symbol, "F:xnys")
         self.assertEqual(event.account_currency, "PLN")
+
+
+class TheTradeRowMapping(unittest.TestCase):
+    """The trades-row mapping, field by field, on real LIVE rows."""
+
+    def setUp(self) -> None:
+        self.client = _FakeClient()
+        self.broker = SaxoBroker(self.client)  # type: ignore[arg-type]
+
+    def _row(self, trade_id: str) -> TradeRow:
+        read = self.broker.list_account_cash(_SINCE, _UNTIL)
+        assert read.trades is not None
+        return next(r for r in read.trades if r.trade_id == trade_id)
+
+    def test_a_trade_row_is_mapped_as_sent(self) -> None:
+        """Without this and the three tests beside it, an implementation that
+        returns ``trades=None`` always, or drops ``TradeRow.from_vendor_row``
+        entirely, passes every other test in this file."""
+        self.assertEqual(
+            self._row("6824247527"),
+            TradeRow(
+                trade_id="6824247527",
+                order_id="5432611806",
+                uic=486,
+                instrument_symbol="F:xnys",
+                amount=1.0,
+                price=13.78,
+                trade_event_type="Bought",
+                to_open_or_close="ToOpen",
+                trade_date="2026-08-10",
+                value_date="2026-08-11",
+                execution_time=dt.datetime(2026, 8, 10, 13, 58, 40, 720000, tzinfo=dt.UTC),
+                booked_amount_account_currency=-55.23,
+                account_currency="PLN",
+                venue="Exchange",
+            ),
+        )
+
+    def test_the_trade_rows_left_hand_keys_are_the_ones_read(self) -> None:
+        """The trades side carries four uniform pairs of its own, and one of
+        them is the money field.
+
+        Measured on the fixture, each 41 of 41:
+        ``BookedAmountAccountCurrency == BookedAmountClientCurrency``,
+        ``TradeDate == AdjustedTradeDate``,
+        ``InstrumentSymbol == UnderlyingInstrumentSymbol`` and
+        ``AccountCurrency == ClientCurrency``."""
+        self.client.trades = [
+            {
+                **next(r for r in _VENUE["trades"] if r["TradeId"] == "6824247527"),
+                "UnderlyingInstrumentSymbol": "WRONG:xnas",
+                "AdjustedTradeDate": "1999-01-01",
+                "BookedAmountClientCurrency": 999.99,
+                "ClientCurrency": "EUR",
+            }
+        ]
+        row = self._row("6824247527")
+        self.assertEqual(row.instrument_symbol, "F:xnys")
+        self.assertEqual(row.trade_date, "2026-08-10")
+        self.assertEqual(row.booked_amount_account_currency, -55.23)
+        self.assertEqual(row.account_currency, "PLN")
+
+
+class MoneyThatIsAbsentStaysDistinctFromZero(unittest.TestCase):
+    """Both money fields, on both row types.
+
+    This is what discriminates ``fill_history``'s coercers from the ones
+    ``saxo/broker.py`` defines under the same names. That module's
+    ``_opt_float`` is ``None if value is None else float(value)``: it RAISES
+    on a non-numeric string, so binding it puts a traceback on the money path.
+    It also catches an ``or 0.0`` in either mapping, which would turn a vendor
+    null into a real ``0.0`` on the field Phase 4 will sum."""
+
+    def setUp(self) -> None:
+        self.client = _FakeClient()
+        self.broker = SaxoBroker(self.client)  # type: ignore[arg-type]
+
+    def _booking_with(self, value: Any) -> CashEvent:
+        base = next(r for r in _VENUE["bookings"] if r["BkAmountId"] == "58330463544")
+        self.client.bookings = [{**base, "AmountAccountCurrency": value}]
+        read = self.broker.list_account_cash(_SINCE, _UNTIL)
+        assert read.events is not None
+        return read.events[0]
+
+    def _trade_with(self, value: Any) -> TradeRow:
+        base = next(r for r in _VENUE["trades"] if r["TradeId"] == "6824247527")
+        self.client.trades = [{**base, "BookedAmountAccountCurrency": value}]
+        read = self.broker.list_account_cash(_SINCE, _UNTIL)
+        assert read.trades is not None
+        return read.trades[0]
+
+    def test_an_unparseable_booking_amount_maps_to_none_and_does_not_raise(self) -> None:
+        self.assertIsNone(self._booking_with("oops").amount_account_currency)
+
+    def test_a_zero_booking_amount_stays_zero(self) -> None:
+        self.assertEqual(self._booking_with(0.0).amount_account_currency, 0.0)
+
+    def test_a_null_trade_amount_maps_to_none(self) -> None:
+        """``BookedAmountAccountCurrency`` is non-null on all 41 fixture rows,
+        so only a constructed null can tell ``None`` from ``0.0`` here."""
+        self.assertIsNone(self._trade_with(None).booked_amount_account_currency)
+
+    def test_a_zero_trade_amount_stays_zero(self) -> None:
+        self.assertEqual(self._trade_with(0.0).booked_amount_account_currency, 0.0)
 
 
 if __name__ == "__main__":
