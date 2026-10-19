@@ -101,6 +101,49 @@ _UNIT_PROPERTIES = {
 }
 
 
+#: Every key ``alphalens.cashbook.sync/v1`` publishes, flattened. Stated here
+#: rather than derived, so a new field is a line somebody writes in a test.
+_PUBLISHED_KEYS = (
+    "schema",
+    "env",
+    "dry_run",
+    "synced",
+    "asked",
+    "asked.since",
+    "asked.until",
+    "read",
+    "read.events",
+    "read.events.start",
+    "read.events.end",
+    "read.events.rows",
+    "read.trades",
+    "read.trades.start",
+    "read.trades.end",
+    "read.trades.rows",
+    "read.balance_asof",
+    "appended",
+    "appended.cash_events",
+    "appended.trade_rows",
+    "appended.balances",
+    "appended.sweeps",
+    "already_present",
+    "already_present.cash_events",
+    "already_present.trade_rows",
+    "restated",
+    "restated.cash_events",
+    "restated.trade_rows",
+    "malformed",
+    "malformed.cash_events",
+    "malformed.trade_rows",
+    "journals",
+    "journals.cash_events",
+    "journals.trade_rows",
+    "journals.balances",
+    "journals.sweeps",
+    "refused",
+)
+
+
 def _reject_json_constant(token: str) -> None:
     """``json.loads`` accepts NaN / Infinity; a strict reader does not."""
     raise ValueError(f"non-strict JSON constant {token!r} on stdout")
@@ -258,12 +301,31 @@ class TheEnvelopeIsTheSameContract(_CashbookCliCase):
         self.assertEqual(len(result.stdout.strip().splitlines()), 1)
         self.assertIsInstance(_strict_json(result.stdout), dict)
 
-    def test_the_payload_publishes_no_money_total(self) -> None:
-        """Memo decision D3: sweep facts only, so Phase 4 can add totals with
-        their own basis instead of redefining a field already published."""
+    def test_the_published_body_keys_are_exactly_this_set(self) -> None:
+        """An ALLOWLIST, because a blocklist cannot see the next field's name.
+
+        ``test_the_payload_publishes_no_money_total`` below refuses five
+        substrings; it let ``realized_cash_acct`` through, which is the memo's
+        own word for the number Phase 4 owns. The required-keys table in
+        ``test_broker_json_contract_cli.py`` is a subset check, so it allows
+        extra keys too. This states the whole published body instead, so adding
+        a field or dropping one is a decision somebody has to write down here.
+        """
         payload = _strict_json(self.sync("--dry-run", "--format", "json").stdout)
 
-        forbidden = ("total", "pnl", "net", "amount", "bucket")
+        self.assertEqual(sorted(_every_key(payload)), sorted(_PUBLISHED_KEYS))
+
+    def test_the_payload_publishes_no_money_total(self) -> None:
+        """Memo decision D3: sweep facts only, so Phase 4 can add totals with
+        their own basis instead of redefining a field already published.
+
+        Kept beside the allowlist above and not replaced by it: this one says
+        WHY the set is closed, and it reads the payload a real invocation
+        printed rather than the set a test states.
+        """
+        payload = _strict_json(self.sync("--dry-run", "--format", "json").stdout)
+
+        forbidden = ("total", "pnl", "net", "amount", "bucket", "realized")
         for key in _every_key(payload):
             for token in forbidden:
                 self.assertNotIn(token, key, f"{key!r} reads as a money field")
@@ -286,7 +348,35 @@ class TheEnvelopeIsTheSameContract(_CashbookCliCase):
 
         self.assertEqual(payload["asked"], {"since": _SINCE, "until": _UNTIL})
         self.assertEqual(payload["read"]["events"]["start"], "2026-09-01")
+        self.assertEqual(payload["read"]["events"]["end"], "2026-09-30")
         self.assertEqual(payload["read"]["events"]["rows"], 7)
+        # Both windows, not just the first: they carry different row counts
+        # here, so publishing the events window under `read.trades` would be
+        # invisible to an assertion on one of them.
+        self.assertEqual(payload["read"]["trades"]["start"], "2026-09-01")
+        self.assertEqual(payload["read"]["trades"]["end"], "2026-09-30")
+        self.assertEqual(payload["read"]["trades"]["rows"], 3)
+
+    def test_the_balance_stamp_published_is_the_one_the_read_carried(self) -> None:
+        """``read.balance_asof`` is the only published fact about the balance in
+        this schema, and the cross-check that will use it is Phase 4's. A
+        hard-coded ``None`` here would read as "the account has no balance
+        snapshot", which is a different sweep."""
+        payload = _strict_json(self.sync("--dry-run", "--format", "json").stdout)
+
+        self.assertEqual(payload["read"]["balance_asof"], _NOW.isoformat())
+
+    def test_a_line_the_fold_cannot_read_is_published_as_malformed(self) -> None:
+        """Counted, never dropped: a corrupt line in a money journal is the one
+        thing a sweep must not pass over quietly. Asserted on a VALUE, because
+        the key alone survives a hard-coded empty mapping."""
+        journal = paths.cash_events_path("live")
+        journal.parent.mkdir(parents=True)
+        journal.write_text("not json at all\n", encoding="utf-8")
+
+        payload = _strict_json(self.sync("--dry-run", "--format", "json").stdout)
+
+        self.assertEqual(payload["malformed"], {"cash_events": 1, "trade_rows": 0})
 
 
 def _every_key(value: Any, prefix: str = "") -> list[str]:
