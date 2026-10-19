@@ -9,7 +9,8 @@ row count saying so.
 This is a SECOND capability over the same endpoints as
 :mod:`alphalens_pipeline.brokers.fill_history`, not a widening of it. That one
 keeps only bookings whose ``related_trade_id`` is in the trades it kept
-(``saxo/broker.py:1707``); on the 2026-10-03 LIVE capture that drops 5 of 104
+(the ``kept_trades`` filter in ``SaxoBroker.list_fill_history``); on the
+2026-10-03 LIVE capture that drops 5 of 104
 rows worth 24 004.05 PLN -- the three deposits and the two corporate-action
 rows (memo section 1.4). It is fill-shaped by construction and correctly so;
 the cash book needs the rows it drops.

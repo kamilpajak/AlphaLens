@@ -4,7 +4,8 @@
 ``list_fill_history`` uses, read UNFILTERED, plus the account's own balance.
 The fill-history capability cannot serve as the cash book — it keeps only
 bookings whose ``related_trade_id`` is in the trades it kept
-(``saxo/broker.py:1707``), which on the captured window drops 5 of 104 rows
+(the ``kept_trades`` filter in ``SaxoBroker.list_fill_history``), which on
+the captured window drops 5 of 104 rows
 worth 24 004.05 PLN (memo section 1.4).
 
 Rows come from the LIVE account on 2026-10-03, the fixture
@@ -107,7 +108,7 @@ class TheRead(unittest.TestCase):
         """All 104 rows, including the 5 the fill-history filter drops.
 
         ``list_fill_history`` keeps only bookings whose ``related_trade_id`` is
-        in the trades it kept (``saxo/broker.py:1707``). The five ids below are
+        in the trades it kept -- the ``kept_trades`` filter. The five ids below are
         exactly the rows that filter removes: three deposits, whose
         ``RelatedTradeId`` is a non-trade value, and the two corporate-action
         rows, whose ``RelatedTradeId`` is ``"0"``."""
