@@ -53,6 +53,23 @@ def _offending_attributes(source: str) -> list[str]:
     return sorted({name for name in names if name and _FORBIDDEN_ATTRIBUTE.match(name)})
 
 
+def _scanned_roots() -> tuple[tuple[str, Path], ...]:
+    """``(package name, directory)`` for every root the gate walks.
+
+    Module-level and named, rather than a tuple built inside the scanning
+    method, so dropping a root is a change to a thing a test can assert about.
+    It had to be: a total ``scanned >= 2`` floor is satisfied by
+    ``alphalens_cli`` alone -- which contributes dozens of modules -- so
+    removing ``account_cash`` from the corpus was silent, and that root is the
+    only reason memo section 7's named shape (a pipeline-side helper that holds
+    a broker) is covered at all.
+    """
+    return (
+        (alphalens_cli.__name__, Path(alphalens_cli.__file__).parent),
+        (account_cash.__name__, Path(account_cash.__file__).parent),
+    )
+
+
 class CliModulesPlaceNothingTest(unittest.TestCase):
     def test_the_gate_flags_a_placement_call(self):
         # Positive control: without it a broken pattern would pass every module.
@@ -79,17 +96,26 @@ class CliModulesPlaceNothingTest(unittest.TestCase):
 
         self.assertEqual(_offending_attributes(source), [])
 
+    def test_the_corpus_covers_both_the_cli_and_the_cash_book(self):
+        """The vacuity control that can tell ONE root from TWO.
+
+        The scan's own total floor cannot: ``alphalens_cli`` contributes dozens
+        of modules on its own, so ``scanned >= 2`` holds with the cash-book root
+        deleted. This names the packages instead, and the per-package counts
+        below are what stop a root being listed but empty.
+        """
+        self.assertEqual(
+            [name for name, _ in _scanned_roots()],
+            ["alphalens_cli", "alphalens_pipeline.account_cash"],
+        )
+
     def test_no_cli_module_references_an_order_write_method(self):
         """Both scanned roots, each path reported relative to its OWN root."""
-        roots = (Path(alphalens_cli.__file__).parent, Path(account_cash.__file__).parent)
         offenders: dict[str, list[str]] = {}
-        scanned = 0
-        for root in roots:
+        scanned: dict[str, int] = {}
+        for name, root in _scanned_roots():
             modules = sorted(root.rglob("*.py"))
-            self.assertTrue(
-                modules, f"no modules found under {root}; the gate would pass vacuously"
-            )
-            scanned += len(modules)
+            scanned[name] = len(modules)
             offenders.update(
                 {
                     str(path.relative_to(root)): found
@@ -98,7 +124,11 @@ class CliModulesPlaceNothingTest(unittest.TestCase):
                 }
             )
 
-        self.assertGreaterEqual(scanned, 2, "the corpus must cover both roots")
+        # Per ROOT, never a total: a total hides a root that contributed
+        # nothing behind another root's dozens of modules.
+        for name, count in scanned.items():
+            with self.subTest(root=name):
+                self.assertGreaterEqual(count, 1, f"no modules under {name}; the gate is vacuous")
         self.assertEqual(offenders, {}, "only the broker daemon may place or amend orders")
 
 
