@@ -791,6 +791,42 @@ class TheBalanceAndSweepJournalsDedupeOnTheSweepId(IsolatedHomeTestCase):
         with self.assertLogs("alphalens_pipeline.account_cash.store", level="WARNING"):
             self.assertEqual(len(store.read_balances(env=_LIVE)), 1)
 
+    def test_a_balance_line_whose_sweep_key_is_unusable_is_refused_on_read(self) -> None:
+        """The READ side of the key rule, which the write-side guard hides.
+
+        No appender can write such a line any more, so this is the only thing
+        that can refuse one that is already on disk -- a hand edit, or a line
+        written before the write-side guard landed. Without this test, deleting
+        the read-side check leaves the whole package green: the key would then
+        fold under ``None`` or ``''``, so two snapshots from two different
+        sweeps would collapse onto one record, and ``read_balances`` would
+        answer a balance that belongs to neither.
+
+        The malformed line is valid JSON carrying a complete snapshot body, so
+        only the key rule can reject it; the ``{not json`` case beside this one
+        never reaches the key at all. The doctored line differs from the good
+        one in the key ALONE, so the row count is the discriminator: refused it
+        is one snapshot, folded under an unusable key it is two.
+
+        Whitespace is deliberately absent from the cases. The rule is a
+        non-empty string, and a key of spaces folds the same way on both sides,
+        so asserting a refusal here would assert a rule the store does not
+        have."""
+        store.append_balance(_balance(), env=_LIVE, sweep_id="s1")
+        good = json.loads(paths.balances_path(_LIVE).read_text(encoding="utf-8").strip())
+        for unusable in ("", None, 7):
+            with self.subTest(sweep_id=unusable):
+                doctored = dict(good, sweep_id=unusable)
+                paths.balances_path(_LIVE).write_text(
+                    json.dumps(good) + "\n" + json.dumps(doctored) + "\n", encoding="utf-8"
+                )
+                with self.assertLogs(
+                    "alphalens_pipeline.account_cash.store", level="WARNING"
+                ) as caught:
+                    rows = store.read_balances(env=_LIVE)
+                self.assertEqual(len(rows), 1)
+                self.assertIn("sweep_id", "\n".join(caught.output))
+
 
 class ARestatementSurvivesEveryLaterRead(IsolatedHomeTestCase):
     def test_both_lines_stay_on_disk_and_the_fold_reports_the_correction(self) -> None:
