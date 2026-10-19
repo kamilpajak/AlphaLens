@@ -266,7 +266,8 @@ def apply_sweep(
 
     ``now`` is supplied rather than read: it is the ``sweep_id``, so a retry of
     the same sweep must be able to carry the same one and fold onto one record
-    instead of two.
+    instead of two. It is read as an INSTANT, not as a rendering of one -- the
+    id is its UTC form, so two offsets of one instant are one sweep.
     """
     if plan.refused_reason is not None:
         raise SweepRefusedError(plan.refused_reason)
@@ -279,7 +280,15 @@ def apply_sweep(
     events = (*plan.new_events, *plan.restated_events)
     rows = (*plan.new_trade_rows, *plan.restated_trade_rows)
     balance = plan.read.balance
-    sweep_id = now.isoformat()
+    # Normalised to UTC, which is what the codec does to `swept_at`, so the id
+    # and the stamp agree BY CONSTRUCTION. The id kept the caller's offset
+    # before, and `2026-10-09T00:31+00:00` and `2026-10-09T02:31+02:00` are one
+    # instant that compares equal and rendered two different ids -- two sweep
+    # records and two balance records under one identical `swept_at`, which
+    # defeats the dedupe both journals are keyed on. A local offset is the
+    # ordinary case, not an exotic one: the VPS runs Europe/Warsaw and
+    # `datetime.now().astimezone()` is the shortest aware `now` there is.
+    sweep_id = now.astimezone(dt.UTC).isoformat()
     record = SweepRecord(
         sweep_id=sweep_id,
         swept_at=now,

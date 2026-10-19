@@ -271,6 +271,61 @@ class TheSweepRecordPublishesWhatTheVendorServed(IsolatedHomeTestCase):
         self.assertEqual(store.read_balances(env=_LIVE), [])
 
 
+class OneInstantIsOneSweepWhateverOffsetItArrivesWith(IsolatedHomeTestCase):
+    """``sweep_id`` is the dedupe key of BOTH ``sweeps.jsonl`` and
+    ``balances.jsonl``, so a retry of the same sweep must fold onto one record
+    of each instead of two.
+
+    ``apply_sweep`` checks only that ``now`` is AWARE, and every fixture in
+    this module hands it UTC -- a column uniform in the value under test. The
+    codec normalises ``swept_at`` to UTC, the id kept the caller's offset, and
+    the two then disagree for the same instant: ``00:31+00:00`` and
+    ``02:31+02:00`` compare equal and produced two records carrying one
+    identical ``swept_at``.
+
+    A caller that reaches this with a local offset is ordinary: the VPS runs
+    Europe/Warsaw, and ``dt.datetime.now().astimezone()`` is the shortest aware
+    ``now`` there is.
+    """
+
+    _WARSAW = _NOW.astimezone(dt.timezone(dt.timedelta(hours=2)))
+
+    def test_the_two_offsets_really_are_one_instant(self) -> None:
+        """The premise, stated rather than assumed: if these were two instants
+        the test below would be asserting that a sweep loses a record."""
+        self.assertEqual(self._WARSAW, _NOW)
+        self.assertNotEqual(self._WARSAW.isoformat(), _NOW.isoformat())
+
+    def test_a_retry_under_a_different_offset_folds_onto_one_sweep_record(self) -> None:
+        sweep.apply_sweep(_plan(), now=_NOW)
+        sweep.apply_sweep(_plan(), now=self._WARSAW)
+
+        records = store.read_sweeps(env=_LIVE)
+        self.assertEqual([record.sweep_id for record in records], [_NOW.isoformat()])
+        self.assertEqual(len(store.read_balances(env=_LIVE)), 1)
+
+    def test_the_id_is_the_utc_rendering_of_the_instant(self) -> None:
+        """Asserted against a literal rather than against ``now.isoformat()``,
+        which is the expression under test."""
+        record = sweep.apply_sweep(_plan(), now=self._WARSAW)
+        self.assertEqual(record.sweep_id, "2026-10-09T00:31:00+00:00")
+
+    def test_the_id_agrees_with_the_stamp_the_codec_stored(self) -> None:
+        """The invariant the two halves have to meet in: the stamp is
+        normalised by the codec, so deriving the id any other way lets a
+        journal hold two keys for one ``swept_at``."""
+        sweep.apply_sweep(_plan(), now=self._WARSAW)
+        (stored,) = store.read_sweeps(env=_LIVE)
+        self.assertEqual(stored.sweep_id, stored.swept_at.isoformat())
+
+    def test_the_balance_line_carries_that_same_key(self) -> None:
+        """The balance journal is keyed on the id the sweep passes it, so a
+        fix applied to the record alone would leave the pair disagreeing."""
+        sweep.apply_sweep(_plan(), now=self._WARSAW)
+        line = json.loads(paths.balances_path(_LIVE).read_text(encoding="utf-8").strip())
+        self.assertEqual(line["sweep_id"], "2026-10-09T00:31:00+00:00")
+
+
 class TheMalformedCountReachesTheSweepRecord(IsolatedHomeTestCase):
     """``record.malformed`` is the only thing that tells a later reader how much
     of the journal the sweep could not account for.
