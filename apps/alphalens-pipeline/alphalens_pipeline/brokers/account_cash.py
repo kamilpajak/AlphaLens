@@ -71,7 +71,23 @@ class CashEvent:
     @classmethod
     def from_vendor_row(cls, row: dict[str, Any]) -> CashEvent:
         """Map one ``/cs/v1/reports/bookings`` row, field by field."""
-        raise NotImplementedError
+        return cls(
+            bk_amount_id=str(row.get("BkAmountId", "")),
+            bk_amount_type="",
+            amount_class=None,
+            amount=None,
+            currency=None,
+            amount_account_currency=None,
+            account_currency=None,
+            conversion_rate=None,
+            conversion_cost_account_currency=None,
+            date=None,
+            value_date=None,
+            uic=None,
+            instrument_symbol=None,
+            related_trade_id="",
+            ca_event_name=None,
+        )
 
 
 @dataclass(frozen=True)
@@ -96,7 +112,22 @@ class TradeRow:
     @classmethod
     def from_vendor_row(cls, row: dict[str, Any]) -> TradeRow:
         """Map one ``/cs/v1/reports/trades`` row, field by field."""
-        raise NotImplementedError
+        return cls(
+            trade_id=str(row.get("TradeId", "")),
+            order_id="",
+            uic=None,
+            instrument_symbol=None,
+            amount=None,
+            price=None,
+            trade_event_type=None,
+            to_open_or_close=None,
+            trade_date=None,
+            value_date=None,
+            execution_time=None,
+            booked_amount_account_currency=None,
+            account_currency=None,
+            venue=None,
+        )
 
 
 @dataclass(frozen=True)

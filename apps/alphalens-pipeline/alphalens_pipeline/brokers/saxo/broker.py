@@ -66,6 +66,7 @@ from alphalens_pipeline.brokers.fill_history import (
     ReadWindow,
 )
 from alphalens_pipeline.brokers.notifications import NotificationPort
+from alphalens_pipeline.brokers.saxo.account_cash_read import read_account_cash
 from alphalens_pipeline.brokers.saxo.client import (
     LIVE_ACCOUNT_KEY_ENV,
     LIVE_STANDING_ENV,
@@ -1730,7 +1731,16 @@ class SaxoBroker:
                 balance=None,
                 skipped_reason=SIM_REPORTS_UNUSABLE,
             )
-        return AccountCashRead(events=None, trades=None, balance=None)
+        with _translate_saxo_errors():
+            client_key = str(self._client.get_client_info()["ClientKey"])
+            account_key = self._account_key or self._resolve_account_key()
+            return read_account_cash(
+                self._client,
+                client_key=client_key,
+                account_key=account_key,
+                since=since,
+                until=until,
+            )
 
     def tick_size(self, uic: int, price: float) -> float | None:
         """The instrument tick at ``price``, from one details GET per uic."""
