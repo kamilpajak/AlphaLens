@@ -219,6 +219,31 @@ class TheRead(unittest.TestCase):
                 self.assertIn("date", str(caught.exception))
                 self.assertEqual(self.client.calls, [])
 
+    def test_a_window_that_ends_before_it_starts_is_refused(self) -> None:
+        """Swapped arguments, which read as a period that moved no money.
+
+        Measured before the refusal: ``since=2026-10-03, until=2026-08-01``
+        returned ``ReadWindow(start='2026-10-03', end='2026-08-01', rows=0)``
+        with ``events=()``. Stored, that is a two-month period the account
+        booked nothing in -- and the row-count claim this capability rests on
+        says nothing is missing, because nothing was dropped. The only thing
+        that could ever tell is the pair of dates, which is why the refusal is
+        here and not in a later reader."""
+        with self.assertRaises(ValueError) as caught:
+            self.broker.list_account_cash(_UNTIL, _SINCE)
+        self.assertIn("2026-08-01", str(caught.exception))
+        self.assertIn("2026-10-03", str(caught.exception))
+        self.assertEqual(self.client.calls, [])
+
+    def test_a_single_day_window_is_read_and_not_refused(self) -> None:
+        """``since == until`` is the shape a daily sweep asks for.
+
+        The endpoints take an INCLUSIVE ``ToDate``, so one date on both edges
+        is one day, not an empty window. Without this the ordering check could
+        be ``<=`` and every daily sweep would refuse."""
+        read = self.broker.list_account_cash(_UNTIL, _UNTIL)
+        self.assertEqual(read.events_window, ReadWindow("2026-10-03", "2026-10-03", 104))
+
     def test_a_vendor_error_leaves_as_a_contract_error(self) -> None:
         """The network calls sit INSIDE ``_translate_saxo_errors()``.
 

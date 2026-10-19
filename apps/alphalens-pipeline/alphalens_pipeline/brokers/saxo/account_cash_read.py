@@ -109,9 +109,24 @@ def read_account_cash(
     report endpoints filter on a venue-stamped date (memo section 1.7 P9), so
     the window asked for is the window published. Both edges are checked
     before the first read: a ``datetime`` is refused rather than normalised
-    (see :func:`_require_plain_date`)."""
+    (see :func:`_require_plain_date`), and so is a window that ends before it
+    starts. An inverted window read instead returns ``rows=0`` with
+    ``events=()`` -- a period that moved no money, under the row count that is
+    this capability's only completeness claim, and the pair of dates is the
+    only thing that could ever tell. ``since == until`` is a one-day window,
+    because ``ToDate`` is inclusive, and is read.
+
+    The ordering check runs AFTER both type checks, not with them: comparing a
+    ``date`` with a ``datetime`` raises ``TypeError``, so on a mixed pair the
+    comparison would fail before the refusal that names the real mistake."""
     _require_plain_date("since", since)
     _require_plain_date("until", until)
+    if until < since:
+        raise ValueError(
+            f"until ({until.isoformat()}) is before since ({since.isoformat()}): the "
+            f"endpoints answer an inverted window with no rows, and a sweep called with "
+            f"its arguments swapped would store that as a period that moved no money"
+        )
     from_date = since.isoformat()
     to_date = until.isoformat()
     booking_rows = client.get_bookings_report(
