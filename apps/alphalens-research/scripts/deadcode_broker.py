@@ -71,6 +71,11 @@ SCOPE_PREFIXES: tuple[str, ...] = (
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/",
     "apps/alphalens-pipeline/alphalens_pipeline/paper/",
     "apps/alphalens-pipeline/alphalens_cli/commands/broker.py",
+    # The account cash book (#1689). In scope from the commit that creates it:
+    # the package is already covered by ``PRODUCTION_ROOTS``, so without this
+    # line vulture scans it and ``_in_scope`` then filters every finding out --
+    # the context would be invisible to the report rather than clean in it.
+    "apps/alphalens-pipeline/alphalens_pipeline/account_cash/",
 )
 
 _EXCLUDE = "*/tests/*,*/migrations/*,*/test_*.py"
