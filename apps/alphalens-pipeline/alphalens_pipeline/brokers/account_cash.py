@@ -38,6 +38,9 @@ from typing import Any, Protocol, runtime_checkable
 
 from alphalens_pipeline.brokers.fill_history import (
     ReadWindow,
+    _opt_float,
+    _opt_int,
+    _opt_str,
 )
 
 # ``AccountCashRead.skipped_reason`` on SIM: the SIM report endpoints answer
@@ -73,20 +76,20 @@ class CashEvent:
         """Map one ``/cs/v1/reports/bookings`` row, field by field."""
         return cls(
             bk_amount_id=str(row.get("BkAmountId", "")),
-            bk_amount_type="",
-            amount_class=None,
-            amount=None,
-            currency=None,
-            amount_account_currency=None,
-            account_currency=None,
-            conversion_rate=None,
-            conversion_cost_account_currency=None,
-            date=None,
-            value_date=None,
-            uic=None,
-            instrument_symbol=None,
-            related_trade_id="",
-            ca_event_name=None,
+            bk_amount_type=str(row.get("BkAmountType", "")),
+            amount_class=_opt_str(row.get("AmountClass")),
+            amount=_opt_float(row.get("Amount")),
+            currency=_opt_str(row.get("Currency")),
+            amount_account_currency=_opt_float(row.get("AmountAccountCurrency")),
+            account_currency=_opt_str(row.get("AccountCurrency")),
+            conversion_rate=_opt_float(row.get("ConversionRate")),
+            conversion_cost_account_currency=_opt_float(row.get("ConversionRateAccountCurrency")),
+            date=_opt_str(row.get("Date")),
+            value_date=_opt_str(row.get("ValueDate")),
+            uic=_opt_int(row.get("Uic")),
+            instrument_symbol=_opt_str(row.get("InstrumentSymbol")),
+            related_trade_id=str(row.get("RelatedTradeId", "")),
+            ca_event_name=_opt_str(row.get("CaEventName")),
         )
 
 

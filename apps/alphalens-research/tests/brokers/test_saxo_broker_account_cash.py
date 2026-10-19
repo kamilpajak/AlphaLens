@@ -21,7 +21,7 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from alphalens_pipeline.brokers.account_cash import SupportsAccountCash
+from alphalens_pipeline.brokers.account_cash import CashEvent, SupportsAccountCash
 from alphalens_pipeline.brokers.fill_history import ReadWindow
 from alphalens_pipeline.brokers.saxo.broker import SaxoBroker
 from alphalens_pipeline.brokers.saxo.client import SaxoRateLimitError
@@ -153,6 +153,96 @@ class TheRead(unittest.TestCase):
         self.client.rate_limited = True
         with self.assertRaises(BrokerRateLimitError):
             self.broker.list_account_cash(_SINCE, _UNTIL)
+
+
+class TheCashEventMapping(unittest.TestCase):
+    """The bookings-row mapping, field by field, on real LIVE rows."""
+
+    def setUp(self) -> None:
+        self.client = _FakeClient()
+        self.broker = SaxoBroker(self.client)  # type: ignore[arg-type]
+
+    def _event(self, bk_amount_id: str) -> CashEvent:
+        read = self.broker.list_account_cash(_SINCE, _UNTIL)
+        assert read.events is not None
+        return next(e for e in read.events if e.bk_amount_id == bk_amount_id)
+
+    def test_a_share_amount_row_is_mapped_as_sent(self) -> None:
+        self.assertEqual(
+            self._event("58330463544"),
+            CashEvent(
+                bk_amount_id="58330463544",
+                bk_amount_type="Share Amount",
+                amount_class="NotAssigned",
+                amount=-13.78,
+                currency="USD",
+                amount_account_currency=-51.49,
+                account_currency="PLN",
+                conversion_rate=3.73625234,
+                conversion_cost_account_currency=-0.130000000000003,
+                date="2026-08-10",
+                value_date="2026-08-11",
+                uic=486,
+                instrument_symbol="F:xnys",
+                related_trade_id="6824247527",
+                ca_event_name=None,
+            ),
+        )
+
+    def test_a_corporate_action_row_carries_its_event_name(self) -> None:
+        """``CaEventName`` is present on exactly 2 of the 104 rows.
+
+        102 rows carry 36 keys and these two carry 37, so a mapping written
+        against the common shape alone never reads the field."""
+        event = self._event("60187389516")
+        self.assertEqual(event.bk_amount_type, "Corporate Actions - Cash Dividends")
+        self.assertEqual(event.ca_event_name, "Cash Dividend")
+        self.assertEqual(event.related_trade_id, "0")
+
+    def test_a_deposit_keeps_its_non_trade_related_trade_id_as_sent(self) -> None:
+        """Memo section 1.1's trap, carried rather than hidden.
+
+        The three deposits carry NON-ZERO ``RelatedTradeId`` values that are
+        not trade ids. A classifier keying on "non-zero means a trade" folds
+        24 000 PLN of funding into trading P&L. This layer reports the value as
+        sent and classifies nothing.
+
+        Selected by ``BkAmountId``, never by ``InstrumentSymbol``: all three
+        deposits carry the symbol ``CASHDEPWI``, so a symbol selector is
+        under-determined, and the symbol is itself one half of a uniform
+        key pair (see the twin-key test)."""
+        event = self._event("58226097441")
+        self.assertEqual(event.bk_amount_type, "Cash Amount")
+        self.assertEqual(event.related_trade_id, "6820472599")
+        self.assertEqual(event.amount_account_currency, 2000.0)
+
+    def test_the_left_hand_key_of_each_uniform_pair_is_the_one_read(self) -> None:
+        """Four vendor key pairs are byte-identical on all 104 real rows.
+
+        Measured on the fixture: ``RelatedTradeId == RelatedPositionId``,
+        ``Uic == UnderlyingInstrumentUic``,
+        ``InstrumentSymbol == UnderlyingInstrumentSymbol`` and
+        ``AccountCurrency == ClientCurrency``, each 104 of 104 with both keys
+        present on every row. So reading the right-hand key instead is
+        invisible on the whole real capture, and only a row whose twins
+        DISAGREE can tell the two apart. The parity test against
+        ``CostBooking`` cannot see this either: that mapping reads the same
+        left-hand keys, so both agree under the swap, and it carries neither
+        ``uic`` nor ``instrument_symbol`` at all."""
+        self.client.bookings = [
+            {
+                **next(r for r in _VENUE["bookings"] if r["BkAmountId"] == "58330463544"),
+                "RelatedPositionId": "999",
+                "UnderlyingInstrumentUic": 999,
+                "UnderlyingInstrumentSymbol": "WRONG:xnas",
+                "ClientCurrency": "EUR",
+            }
+        ]
+        event = self._event("58330463544")
+        self.assertEqual(event.related_trade_id, "6824247527")
+        self.assertEqual(event.uic, 486)
+        self.assertEqual(event.instrument_symbol, "F:xnys")
+        self.assertEqual(event.account_currency, "PLN")
 
 
 if __name__ == "__main__":
