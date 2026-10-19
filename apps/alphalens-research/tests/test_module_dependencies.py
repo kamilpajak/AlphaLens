@@ -146,6 +146,19 @@ RULES = (
         "exemptions": set(),
     },
     {
+        # #1689: the account cash book reads the broker through the
+        # SupportsAccountCash capability, and the read flows ONE way. Nothing
+        # under brokers/ may reach back into the cash book's store, codec or
+        # sweep — that would make the execution layer depend on a derived
+        # money record it is itself the source for, and it is the import edge
+        # the memo's own store section forbids. No top_level_only: every cycle
+        # this repo's audits have had to cut lived in a function-body import.
+        "name": "brokers must not import the account cash book (the read flows one way)",
+        "from_pkg": "alphalens_pipeline.brokers",
+        "forbidden_prefix": "alphalens_pipeline.account_cash",
+        "exemptions": set(),
+    },
+    {
         # ADR 0014: the automanager reaches concrete saxo ONLY via the broker
         # registry or a lazy import inside a composition-root wiring function
         # (build_default_deps / _default_oauth_provider /
@@ -1227,6 +1240,53 @@ class TestModuleDependencies(unittest.TestCase):
         )
         self.assertTrue(
             any(m.startswith(data_rules[0]["forbidden_prefix"]) for m in modules),
+            "rule would not catch the synthetic violation",
+        )
+
+    def test_brokers_must_not_import_the_account_cash_book_positive_control(self):
+        """The brokers -> account-cash-book rule (#1689) cannot rot silently.
+
+        The read flows ONE way: the cash book reads the broker through the
+        ``SupportsAccountCash`` capability, and nothing under ``brokers/`` may
+        reach back into the store, the codec or the sweep. Declaring the rule
+        in the SAME PR as the capability is deliberate -- the memo asks for the
+        boundary before the thing it bounds exists -- but that leaves a rule no
+        real module can violate yet, which is a rule with no demonstrated
+        power. So this feeds the walker a synthetic violation instead, in a
+        function body, the sneakiest allowed-elsewhere shape and the one a
+        ``top_level_only`` rule would miss.
+        """
+        import tempfile
+
+        synthetic = (
+            "def sneaky():\n"
+            "    from alphalens_pipeline.account_cash.store import append_cash_events\n"
+            "    return append_cash_events\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "synthetic_account_cash_violation.py"
+            path.write_text(synthetic)
+            modules = list(_iter_imports(path, include_function_scope=True))
+
+        self.assertIn("alphalens_pipeline.account_cash.store", modules)
+
+        cash_rules = [
+            rule
+            for rule in RULES
+            if rule["from_pkg"] == "alphalens_pipeline.brokers"
+            and rule["forbidden_prefix"] == "alphalens_pipeline.account_cash"
+        ]
+        self.assertEqual(
+            len(cash_rules), 1, "the brokers -> account_cash rule must exist exactly once"
+        )
+        self.assertNotIn(
+            "top_level_only",
+            cash_rules[0],
+            "the rule must catch function-scope (lazy) imports too — every cycle "
+            "this repo's audits cut lived in a function-body import",
+        )
+        self.assertTrue(
+            any(_violates(cash_rules[0], m) for m in modules),
             "rule would not catch the synthetic violation",
         )
 
