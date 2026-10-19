@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from alphalens_pipeline.brokers.account_cash import (
+    BalanceSnapshot,
     CashEvent,
     SupportsAccountCash,
     TradeRow,
@@ -310,15 +311,33 @@ class TheTradeRowMapping(unittest.TestCase):
         self.assertEqual(row.account_currency, "PLN")
 
 
+#: The balance's four money fields, vendor key to mapped attribute. Every one
+#: is non-zero in ``_BALANCE_BODY``, so a truthiness fallback (``or 0.0``) in
+#: the mapping is invisible on that body: only a constructed null can tell
+#: "the vendor did not say" from a real zero.
+_BALANCE_MONEY_FIELDS: tuple[tuple[str, str], ...] = (
+    ("CashBalance", "cash_balance"),
+    ("NonMarginPositionsValue", "non_margin_positions_value"),
+    ("TotalValue", "total_value"),
+    ("TransactionsNotBooked", "transactions_not_booked"),
+)
+
+
 class MoneyThatIsAbsentStaysDistinctFromZero(unittest.TestCase):
-    """Both money fields, on both row types.
+    """Every money field, on all three payload shapes.
 
     This is what discriminates ``fill_history``'s coercers from the ones
     ``saxo/broker.py`` defines under the same names. That module's
     ``_opt_float`` is ``None if value is None else float(value)``: it RAISES
     on a non-numeric string, so binding it puts a traceback on the money path.
-    It also catches an ``or 0.0`` in either mapping, which would turn a vendor
-    null into a real ``0.0`` on the field Phase 4 will sum."""
+    It also catches an ``or 0.0`` in any of the three mappings, which would
+    turn a vendor null into a real ``0.0`` on a field Phase 4 will sum.
+
+    The balance half matters for a reason the row halves do not share:
+    ``TransactionsNotBooked`` is the field memo section 1.7 P5 singles out. A
+    real ``0.0`` there means "nothing is in flight" and an absent value means
+    "the vendor did not say", and Phase 4's balance cross-check is the single
+    independent check on the money."""
 
     def setUp(self) -> None:
         self.client = _FakeClient()
@@ -337,6 +356,22 @@ class MoneyThatIsAbsentStaysDistinctFromZero(unittest.TestCase):
         read = self.broker.list_account_cash(_SINCE, _UNTIL)
         assert read.trades is not None
         return read.trades[0]
+
+    def _balance_with(self, key: str, value: Any) -> BalanceSnapshot:
+        self.client.balance = {**_BALANCE_BODY, key: value}
+        read = self.broker.list_account_cash(_SINCE, _UNTIL)
+        assert read.balance is not None
+        return read.balance
+
+    def test_a_null_balance_money_field_maps_to_none(self) -> None:
+        for key, attribute in _BALANCE_MONEY_FIELDS:
+            with self.subTest(field=key):
+                self.assertIsNone(getattr(self._balance_with(key, None), attribute))
+
+    def test_a_zero_balance_money_field_stays_zero(self) -> None:
+        for key, attribute in _BALANCE_MONEY_FIELDS:
+            with self.subTest(field=key):
+                self.assertEqual(getattr(self._balance_with(key, 0.0), attribute), 0.0)
 
     def test_an_unparseable_booking_amount_maps_to_none_and_does_not_raise(self) -> None:
         self.assertIsNone(self._booking_with("oops").amount_account_currency)
