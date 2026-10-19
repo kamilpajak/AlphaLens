@@ -19,13 +19,17 @@ split, while this layer's semantics stay in AlphaLens. Declaring the path there
 would invert the split argument and create exactly the import edge this layer's
 own dependency rule forbids (``tests/test_module_dependencies.py``, rule 2).
 
-:func:`_alphalens_home` is the ONE ``Path.home()`` caller in the whole package,
-and every public builder goes through it. That is ADR 0016's call-time rule and
-the only seam the test suite's operator-state guard can wrap: its predicate
-matches ``call.func.attr == "home"``, so a ``Path("~/.alphalens").expanduser()``
-form would be both unguarded and invisible to the gate that reads the guarded
-set off this source. A test redirects the whole store by patching
-``pathlib.Path.home``.
+:func:`_alphalens_home` is the ONE home resolver in the whole package, and
+every public builder goes through it. That is ADR 0016's call-time rule and the
+only seam the test suite's operator-state guard can wrap: the guard replaces a
+NAMED builder, so a function doing its own ``Path("~/.alphalens").expanduser()``
+could not be guarded at all. Both the package's own scan
+(``tests/account_cash/test_paths.py``) and the guard's anti-rot gate
+(``tests/brokers/automanager/test_home_isolation_gate.py``) therefore match
+``expanduser`` as well as ``home``, and each carries a positive control on a
+synthetic module: while they matched ``home`` alone, adding such a builder was
+green in both places AND unguarded at runtime. A test redirects the whole store
+by patching ``pathlib.Path.home``.
 
 ``env`` is a REQUIRED positional on every builder, validated, and this module
 reads no environment variable. Two reasons: a write must never be steered by an

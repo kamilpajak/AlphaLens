@@ -26,11 +26,44 @@ def _package_sources() -> list[Path]:
     return sorted(package_dir.rglob("*.py"))
 
 
-def _public_path_builders() -> list[str]:
-    """Every public function in the package that is annotated to return a ``Path``.
+def _returns_a_path(node: ast.FunctionDef) -> bool:
+    """Whether ``node``'s RETURN ANNOTATION mentions ``Path`` anywhere.
 
-    Derived from the package's own source rather than typed out here, so a
-    builder added later is covered without anyone remembering. Mirrors
+    Not ``node.returns.id == "Path"``. That form is an ``ast.Name`` and only
+    matches a bare ``-> Path``: a builder annotated ``-> Path | None`` is an
+    ``ast.BinOp`` and ``getattr(node.returns, "id", "")`` answers ``""``, so it
+    was invisible to this scan and to every subTest loop fed by it. Walking the
+    annotation covers ``Path | None``, ``Optional[Path]`` and
+    ``dict[str, Path]`` alike.
+    """
+    if node.returns is None:
+        return False
+    return any(
+        isinstance(inner, ast.Name) and inner.id == "Path" for inner in ast.walk(node.returns)
+    )
+
+
+def _public_path_builder_names(tree: ast.Module) -> list[str]:
+    """Every public module-level function of ``tree`` annotated to return a ``Path``.
+
+    Takes a tree rather than reading a file, so the predicate itself can be run
+    against a synthetic module -- a scan whose predicate is never exercised on
+    the shape it is meant to catch is how both blind spots above survived.
+    """
+    return sorted(
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and not node.name.startswith("_")
+        and _returns_a_path(node)
+    )
+
+
+def _public_path_builders() -> list[str]:
+    """Every public path builder in the package, from the package's own source.
+
+    Derived rather than typed out here, so a builder added later is covered
+    without anyone remembering. Mirrors
     ``test_home_isolation_gate._public_state_path_builders`` with ONE change:
     that predicate skips any node where ``len(args) != len(defaults)``, i.e.
     anything not callable with no arguments, and every builder here takes a
@@ -41,31 +74,41 @@ def _public_path_builders() -> list[str]:
     found: list[str] = []
     for source in _package_sources():
         tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
-        for node in tree.body:
-            if not isinstance(node, ast.FunctionDef) or node.name.startswith("_"):
-                continue
-            if getattr(node.returns, "id", "") != "Path":
-                continue
+        found.extend(_public_path_builder_names(tree))
+    return sorted(found)
+
+
+#: The two call shapes that resolve the operator's home directory.
+#: ``expanduser`` is here because the guard's predicate matches ``home`` only,
+#: so ``Path("~/.alphalens").expanduser()`` is BOTH unguarded at runtime and
+#: invisible to the anti-rot gate -- the exact hazard this module's docstring
+#: states in prose and this scan exists to hold.
+_HOME_RESOLVING_ATTRS = frozenset({"home", "expanduser"})
+
+
+def _home_resolving_function_names(tree: ast.Module) -> list[str]:
+    """Every function in ``tree`` whose body calls ``.home()`` or ``.expanduser()``."""
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        resolves_home = any(
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr in _HOME_RESOLVING_ATTRS
+            for call in ast.walk(node)
+        )
+        if resolves_home:
             found.append(node.name)
     return sorted(found)
 
 
 def _functions_resolving_the_home_directory() -> list[tuple[str, str]]:
-    """``(module stem, function name)`` for every function calling ``.home()``."""
+    """``(module stem, function name)`` for every home resolver in the package."""
     found: list[tuple[str, str]] = []
     for source in _package_sources():
         tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.FunctionDef):
-                continue
-            calls_home = any(
-                isinstance(call, ast.Call)
-                and isinstance(call.func, ast.Attribute)
-                and call.func.attr == "home"
-                for call in ast.walk(node)
-            )
-            if calls_home:
-                found.append((source.stem, node.name))
+        found.extend((source.stem, name) for name in _home_resolving_function_names(tree))
     return sorted(found)
 
 
@@ -81,11 +124,65 @@ class EveryPathBuilderGoesThroughTheOneSeam(unittest.TestCase):
                     getattr(paths, name)("live")
 
     def test_only_one_function_in_the_package_resolves_the_home_directory(self) -> None:
-        """``Path.home()`` is the ONE form the guard's predicate can see: it
-        matches ``call.func.attr == "home"``, so a ``Path("~/.alphalens")
-        .expanduser()`` anywhere in this package would be both unguarded and
-        invisible to the anti-rot gate that reads the guarded set off source."""
+        """``Path.home()`` through :func:`_alphalens_home` is the one form the
+        guard can wrap -- it replaces a NAMED builder. A function resolving
+        ``Path("~/.alphalens").expanduser()`` itself could not be guarded at
+        all, so the scan counts it here and this assertion is what refuses it.
+        The scan's own control is in
+        :class:`BothScansSeeTheShapeTheyExistToCatch`."""
         self.assertEqual(_functions_resolving_the_home_directory(), [("paths", "_alphalens_home")])
+
+
+class BothScansSeeTheShapeTheyExistToCatch(unittest.TestCase):
+    """Positive controls on the two predicates above, run against a synthetic
+    module rather than the real one.
+
+    Both scans used to be blind to the same single escape: a public builder
+    annotated ``-> Path | None`` whose body resolved
+    ``Path("~/.alphalens").expanduser()``. ``_public_path_builders`` missed it
+    because the annotation is an ``ast.BinOp`` and the predicate read
+    ``node.returns.id``; ``_functions_resolving_the_home_directory`` missed it
+    because the predicate matched ``home`` only. Neither scan can report that
+    it is blind, so the shape is fed to each one directly.
+    """
+
+    _MUTANT = (
+        "from pathlib import Path\n"
+        "\n"
+        "def legacy_cash_events_path(env: str) -> Path | None:\n"
+        '    return Path("~/.alphalens").expanduser() / env\n'
+    )
+
+    def test_a_path_or_none_builder_is_found_by_the_builder_scan(self) -> None:
+        tree = ast.parse(self._MUTANT)
+        self.assertEqual(_public_path_builder_names(tree), ["legacy_cash_events_path"])
+
+    def test_an_expanduser_body_is_found_by_the_home_resolver_scan(self) -> None:
+        tree = ast.parse(self._MUTANT)
+        self.assertEqual(_home_resolving_function_names(tree), ["legacy_cash_events_path"])
+
+    def test_a_bare_path_annotation_is_still_found(self) -> None:
+        """The widening must not have replaced the original shape."""
+        tree = ast.parse(
+            "from pathlib import Path\n\ndef p(env: str) -> Path:\n    return Path(env)\n"
+        )
+        self.assertEqual(_public_path_builder_names(tree), ["p"])
+
+    def test_a_non_path_return_and_a_private_name_are_both_skipped(self) -> None:
+        """The negative control: a predicate that matched everything would
+        satisfy the three tests above and report every function in the
+        package as a path builder."""
+        tree = ast.parse(
+            "from pathlib import Path\n"
+            "\n"
+            "def text(env: str) -> str:\n"
+            "    return env\n"
+            "\n"
+            "def _private(env: str) -> Path:\n"
+            "    return Path(env)\n"
+        )
+        self.assertEqual(_public_path_builder_names(tree), [])
+        self.assertEqual(_home_resolving_function_names(tree), [])
 
 
 class TheEnvironmentIsPartOfThePath(unittest.TestCase):
