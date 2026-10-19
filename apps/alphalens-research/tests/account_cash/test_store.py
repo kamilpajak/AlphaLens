@@ -445,6 +445,137 @@ class TheCashEventFold(IsolatedHomeTestCase):
         )
 
 
+class AnUnreadableLineIsCountedAndNeverRaisedOutOfTheFold(IsolatedHomeTestCase):
+    """The fold's stated rule is that it REPORTS a line it cannot read.
+
+    ``TheCashEventFold`` covers the two shapes the fold already knew about: a
+    line that is not JSON, and a line the codec refuses. Both arrive as a
+    ``ValueError``, so the whole module read as if every unreadable line did --
+    and a line that fails in some OTHER way escaped the fold instead of being
+    counted. One such line anywhere in the journal then makes the WHOLE cash
+    book unreadable, which is the opposite of the rule.
+
+    One test per member of the named exception set, so the set cannot quietly
+    shrink back to the narrower one it was.
+    """
+
+    def _seed_and_append_bytes(self, tail: bytes) -> None:
+        store.append_cash_events([_event("1")], env=_LIVE)
+        path = paths.cash_events_path(_LIVE)
+        with path.open("ab") as fh:
+            fh.write(tail)
+
+    def test_an_unbounded_json_integer_amount_is_counted_not_raised(self) -> None:
+        """``10**400`` is valid JSON and a valid Python ``int``, so it survives
+        ``json.loads`` and every type check in the codec, then raises
+        ``OverflowError`` at ``float(value)``. The same shape this repo has
+        already paid for once, on ``validate_intent``.
+        """
+        rendered = codec.cash_event_to_jsonable(_event("2"))
+        self._seed_and_append_bytes(
+            (json.dumps({**rendered, "amount": 10**400}) + "\n").encode("utf-8")
+        )
+
+        fold = store.read_cash_events(env=_LIVE)
+        self.assertEqual(fold.malformed, 1)
+        self.assertEqual([event.bk_amount_id for event in fold.events], ["1"])
+        self.assertEqual(fold.lines, 2)
+
+    def test_the_account_currency_amount_overflows_the_same_way(self) -> None:
+        """The field memo Phase 4 sums. Every money field runs through the same
+        ``_finite``, so one case cannot tell whether the guard sits on the
+        decode or on one key of it."""
+        rendered = codec.cash_event_to_jsonable(_event("2"))
+        self._seed_and_append_bytes(
+            (json.dumps({**rendered, "amount_account_currency": 10**400}) + "\n").encode("utf-8")
+        )
+        self.assertEqual(store.read_cash_events(env=_LIVE).malformed, 1)
+
+    def test_a_line_whose_bytes_are_not_utf8_is_counted_not_raised(self) -> None:
+        """A line that ends mid-way through a multibyte sequence.
+
+        This appender cannot write one itself -- ``json.dumps`` escapes every
+        non-ASCII character by default, and a tear of ASCII bytes yields
+        invalid JSON rather than invalid UTF-8. The reachable route is the one
+        the hand-edited ``NaN`` case above already covers: an edit, or a restore
+        from a copy whose bytes were mangled. The cost of not counting it is
+        the same either way -- ONE undecodable byte makes every row of the cash
+        book unreadable, because the decode happens while the reader iterates
+        the file and not inside any guard.
+        """
+        rendered = codec.cash_event_to_jsonable(_event("2"))
+        whole = json.dumps({**rendered, "ca_event_name": "zażółć"}, ensure_ascii=False).encode(
+            "utf-8"
+        )
+        # Cut on the LEAD byte of the final two-byte sequence, so the file ends
+        # with a sequence that has no continuation byte.
+        torn = whole[: whole.rindex(b"\xc4") + 1]
+        self.assertNotEqual(torn, whole)
+        self._seed_and_append_bytes(torn)
+
+        fold = store.read_cash_events(env=_LIVE)
+        self.assertEqual(fold.malformed, 1)
+        self.assertEqual([event.bk_amount_id for event in fold.events], ["1"])
+
+    def test_an_unreadable_line_hides_none_of_the_readable_ones_after_it(self) -> None:
+        """The cost the finding is about: not the counter, but the rows BELOW
+        the bad line. A fold that raises reports nothing at all, so a reader
+        of a money store loses every booking over one corrupt byte."""
+        rendered = codec.cash_event_to_jsonable(_event("2"))
+        self._seed_and_append_bytes(
+            (json.dumps({**rendered, "amount": 10**400}) + "\n").encode("utf-8")
+        )
+        store.append_cash_events([_event("3")], env=_LIVE)
+
+        fold = store.read_cash_events(env=_LIVE)
+        self.assertEqual([event.bk_amount_id for event in fold.events], ["1", "3"])
+        self.assertEqual((fold.malformed, fold.lines), (1, 3))
+
+    def test_a_stamp_that_overflows_its_utc_conversion_is_counted_too(self) -> None:
+        """A SECOND route to the same exception, in a different codec helper.
+
+        ``0001-01-01T00:00:00+14:00`` parses, so ``fromisoformat``'s own
+        ``ValueError`` guard never fires; the ``astimezone(UTC)`` on the next
+        line raises ``OverflowError`` because the instant falls before
+        ``datetime.min``. A guard put on ``_finite`` instead of on the fold
+        would stop the money cases above and leave this one raising.
+
+        Asserted on ``sweeps.jsonl`` as well, because ``_fold_by_key`` serves
+        all four journals while only the two keyed ones publish a counter --
+        so a guard at one reader's call site would leave the other two raising.
+        """
+        store.append_sweep(_sweep("s1"), env=_LIVE)
+        rendered = codec.sweep_to_jsonable(_sweep("s2"))
+        with paths.sweeps_path(_LIVE).open("ab") as fh:
+            fh.write(
+                (json.dumps({**rendered, "swept_at": "0001-01-01T00:00:00+14:00"}) + "\n").encode(
+                    "utf-8"
+                )
+            )
+
+        with self.assertLogs("alphalens_pipeline.account_cash.store", level="WARNING"):
+            self.assertEqual([record.sweep_id for record in store.read_sweeps(env=_LIVE)], ["s1"])
+
+    def test_the_fold_catches_named_exceptions_and_never_a_bare_exception(self) -> None:
+        """The remedy must not become ``except Exception``.
+
+        This store's whole value is that a problem announces itself, and a
+        blanket handler would count a real defect in the codec as corruption on
+        disk. A structural check because the behavioural ones above cannot see
+        the difference: a blanket handler passes every one of them.
+        """
+        handlers = [node for node in ast.walk(_store_ast()) if isinstance(node, ast.ExceptHandler)]
+        self.assertGreaterEqual(len(handlers), 2, "the except-handler scan found too little")
+        for handler in handlers:
+            with self.subTest(line=handler.lineno):
+                self.assertIsNotNone(
+                    handler.type, "a bare `except:` catches even a KeyboardInterrupt"
+                )
+                names = [node.id for node in ast.walk(handler.type) if isinstance(node, ast.Name)]
+                self.assertNotIn("Exception", names)
+                self.assertNotIn("BaseException", names)
+
+
 class TheTradeRowFold(IsolatedHomeTestCase):
     def test_a_missing_journal_folds_empty(self) -> None:
         fold = store.read_trade_rows(env=_LIVE)

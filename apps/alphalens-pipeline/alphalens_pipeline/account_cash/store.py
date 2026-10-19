@@ -70,6 +70,23 @@ SIM_STORE_REFUSED = "sim_store_refused"
 #: because the STORE owns the key while the codec owns the payload.
 _SWEEP_ID_KEY = "sweep_id"
 
+#: What DECODING one journal line can raise, beside the codec's own refusal.
+#: Each member is NAMED rather than covered by ``except Exception``: the whole
+#: value of this store is that a problem announces itself, and a blanket
+#: handler would count a defect in the codec as corruption on disk. Two
+#: reachable routes to ``OverflowError``, both measured on a complete rendered
+#: row with one field doctored:
+#:
+#: * ``"amount": 10**400`` -- valid JSON, a valid Python ``int``, so it passes
+#:   every type check in ``_finite`` and raises at ``float(value)``.
+#: * ``"swept_at": "0001-01-01T00:00:00+14:00"`` -- parses, so
+#:   ``fromisoformat``'s own ``ValueError`` guard never fires, and the
+#:   ``astimezone(UTC)`` that follows falls before ``datetime.min``.
+#:
+#: The same shape ``validate_intent`` has already paid for once: a number the
+#: schema admits and the arithmetic cannot hold.
+_UNREADABLE_ROW: tuple[type[BaseException], ...] = (codec.CashBookDecodeError, OverflowError)
+
 __all__ = [
     "SIM_STORE_REFUSED",
     "CashEventFold",
@@ -159,10 +176,20 @@ def _iter_payloads(path: Path) -> Iterator[tuple[int, Any]]:
     A blank line is skipped WITHOUT being counted: a trailing newline is
     ordinary in an append-only file, and counting it as corruption would make
     every torn-line repair read as damage.
+
+    Opened in BINARY mode and decoded by ``json.loads`` itself, so BOTH ways a
+    line can fail to parse are raised inside the guard. In text mode the UTF-8
+    decode happens while the ``for`` statement advances the file, which is
+    outside any ``try`` that a caller could write: one line ending mid-way
+    through a multibyte sequence then raised ``UnicodeDecodeError`` out of the
+    whole fold, and ONE such line made the entire cash book unreadable.
+    ``UnicodeDecodeError`` is a ``ValueError``, like ``json.JSONDecodeError``,
+    so moving the decode inside is the whole fix -- the handler below covers
+    both, and each has a test of its own.
     """
     if not path.exists():
         return
-    with path.open("r", encoding="utf-8") as fh:
+    with path.open("rb") as fh:
         for index, raw_line in enumerate(fh):
             if not raw_line.strip():
                 continue
@@ -184,7 +211,10 @@ def _fold_by_key(
     A malformed line is COUNTED, never dropped silently: a reader of a money
     store must be able to say how much of the journal it could not account for.
     A line the codec refuses counts as malformed too -- a hand-edited ``NaN``
-    is the reachable case, and a fold must report it rather than raise.
+    is the reachable case, and a fold must report it rather than raise. So does
+    a line the decode cannot read for a reason the codec never names: see
+    :data:`_UNREADABLE_ROW` for each member and why the set is named rather
+    than blanket.
     """
     latest: dict[str, Any] = {}
     rendered: dict[str, Any] = {}
@@ -199,7 +229,7 @@ def _fold_by_key(
             continue
         try:
             record = decode(payload)
-        except codec.CashBookDecodeError as exc:
+        except _UNREADABLE_ROW as exc:
             malformed += 1
             logger.warning("%s line %d is not a readable %s row: %s", path, index + 1, row, exc)
             continue
