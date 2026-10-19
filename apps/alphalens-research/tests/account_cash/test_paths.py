@@ -100,11 +100,38 @@ class TheEnvironmentIsPartOfThePath(unittest.TestCase):
 
     def test_the_module_reads_no_environment_variable(self) -> None:
         """A write must never be steered by an ambient variable (#1377): the
-        CLI resolves ``--env`` and passes it in. ``os`` is not imported here,
-        so there is no second spelling of ``ALPHALENS_BROKER_ENVIRONMENT``."""
-        source = inspect.getsource(paths)
-        self.assertNotIn("os.environ", source)
-        self.assertNotIn("getenv", source)
+        CLI resolves ``--env`` and passes it in, so there is no second spelling
+        of ``ALPHALENS_BROKER_ENVIRONMENT`` to disagree with the keeper's.
+
+        An AST walk over the IMPORTS, not a substring search for
+        ``os.environ``: the module docstring names that env var on purpose, to
+        say why it does not read one, and a text match cannot tell a stated
+        reason from a call.
+        """
+        tree = ast.parse(inspect.getsource(paths))
+        imported: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported.append(node.module)
+        self.assertEqual(imported, ["__future__", "pathlib"], imported)
+
+    def test_no_builder_takes_a_default_environment(self) -> None:
+        """``env`` is REQUIRED on every builder. A default would reintroduce
+        the ambient-value shape by another route: a caller that forgot the
+        argument would write to whichever environment the default names."""
+        for name in _public_path_builders():
+            with self.subTest(builder=name):
+                signature = inspect.signature(getattr(paths, name))
+                self.assertEqual(
+                    [
+                        parameter.name
+                        for parameter in signature.parameters.values()
+                        if parameter.default is not inspect.Parameter.empty
+                    ],
+                    [],
+                )
 
 
 class TheLayoutUnderAnIsolatedHome(IsolatedHomeTestCase):
