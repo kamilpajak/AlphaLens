@@ -22,6 +22,7 @@ import fcntl
 import json
 import os
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -593,6 +594,39 @@ class ARealRunAppendsWhatItPublished(_CashbookCliCase):
         self.assertEqual(payload["restated"], dict(records[0].restated))
         self.assertTrue(payload["synced"])
         self.assertFalse(payload["dry_run"])
+
+    def test_a_sweep_that_restates_a_row_publishes_the_restatement_it_appended(self) -> None:
+        """The shape the journal exists for, and the one every other test here
+        misses: each of them runs a FIRST sweep over an empty store, where
+        ``restated`` is zero, so the restatement term of this command's own
+        ``appended`` arithmetic was never exercised. The vendor correcting one
+        booking it already served is the memo's own reason the store is
+        append-only rather than a parquet rewrite.
+        """
+        self.sync("--format", "json")
+        corrected = replace(_EVENTS[0], amount_account_currency=-123.45)
+        corrected_trade = replace(_TRADES[0], booked_amount_account_currency=-99.5)
+        self.broker = _FakeCashBroker(
+            replace(
+                _live_read(),
+                events=(corrected, *_EVENTS[1:]),
+                trades=(corrected_trade, *_TRADES[1:]),
+            )
+        )
+
+        payload = _strict_json(self.sync("--format", "json").stdout)
+
+        self.assertEqual(payload["restated"], {"cash_events": 1, "trade_rows": 1})
+        self.assertEqual(payload["appended"]["cash_events"], 1)
+        self.assertEqual(payload["appended"]["trade_rows"], 1)
+        self.assertEqual(payload["already_present"]["cash_events"], len(_EVENTS) - 1)
+        self.assertEqual(payload["already_present"]["trade_rows"], len(_TRADES) - 1)
+        records = store.read_sweeps(env="live")
+        self.assertEqual(len(records), 2)
+        self.assertEqual(payload["appended"], dict(records[-1].appended))
+        self.assertEqual(payload["restated"], dict(records[-1].restated))
+        folded = {event.bk_amount_id: event for event in store.read_cash_events(env="live").events}
+        self.assertEqual(folded[corrected.bk_amount_id].amount_account_currency, -123.45)
 
     def test_a_second_sweep_of_the_same_window_appends_nothing_new(self) -> None:
         self.sync("--format", "json")
