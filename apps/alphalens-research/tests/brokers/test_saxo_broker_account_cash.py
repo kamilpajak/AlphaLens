@@ -353,5 +353,42 @@ class MoneyThatIsAbsentStaysDistinctFromZero(unittest.TestCase):
         self.assertEqual(self._trade_with(0.0).booked_amount_account_currency, 0.0)
 
 
+class TheBalance(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = _FakeClient()
+        self.broker = SaxoBroker(self.client)  # type: ignore[arg-type]
+
+    def test_a_balance_body_is_mapped_including_the_field_account_snapshot_drops(self) -> None:
+        """Driven through the READ, not through the classmethod.
+
+        A read that never calls ``get_balances`` and returns ``balance=None``
+        satisfies every other test in this file, and nothing downstream would
+        notice until Phase 4, where the balance cross-check is the single
+        independent check on the money. So the subject here is
+        ``list_account_cash``.
+
+        ``contract.AccountSnapshot`` cannot be reused: it has no
+        ``TransactionsNotBooked`` field at all, so it would not construct.
+        That field is what probe 3 showed matters -- it parks a whole day's
+        trading before the nightly batch (memo section 1.7 P5) -- and it is
+        also the field the memo warns is NOT a completeness signal (P7).
+
+        The arithmetic identity ``cash_balance + non_margin_positions_value ==
+        total_value`` is deliberately NOT asserted: there is no balances
+        fixture in the repo, so the implementer would be authoring the numbers
+        that make it true, and it is a float equality on money. The mapping is
+        the half with power."""
+        read = self.broker.list_account_cash(_SINCE, _UNTIL)
+        balance = read.balance
+        assert balance is not None
+        self.assertEqual(balance.currency, "PLN")
+        self.assertEqual(balance.cash_balance, 20738.68)
+        self.assertEqual(balance.non_margin_positions_value, 3422.56)
+        self.assertEqual(balance.total_value, 24161.24)
+        self.assertEqual(balance.transactions_not_booked, -4319.07)
+        self.assertEqual(balance.calculation_reliability, "Ok")
+        self.assertIsNotNone(balance.asof.tzinfo)
+
+
 if __name__ == "__main__":
     unittest.main()

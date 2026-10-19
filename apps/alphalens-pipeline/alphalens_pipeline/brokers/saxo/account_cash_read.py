@@ -23,6 +23,7 @@ from typing import Any
 
 from alphalens_pipeline.brokers.account_cash import (
     AccountCashRead,
+    BalanceSnapshot,
     CashEvent,
     TradeRow,
 )
@@ -52,10 +53,15 @@ def read_account_cash(
     )
     events = tuple(CashEvent.from_vendor_row(row) for row in booking_rows if isinstance(row, dict))
     trades = tuple(TradeRow.from_vendor_row(row) for row in trade_rows if isinstance(row, dict))
+    balance_body = client.get_balances(client_key, account_key=account_key)
+    balance = BalanceSnapshot.from_vendor_body(
+        balance_body if isinstance(balance_body, dict) else {},
+        asof=dt.datetime.now(dt.UTC),
+    )
     return AccountCashRead(
         events=events,
         trades=trades,
-        balance=None,
+        balance=balance,
         events_window=ReadWindow(from_date, to_date, len(events)),
         trades_window=ReadWindow(from_date, to_date, len(trades)),
     )

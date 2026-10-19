@@ -148,8 +148,23 @@ class BalanceSnapshot:
 
     @classmethod
     def from_vendor_body(cls, body: dict[str, Any], *, asof: dt.datetime) -> BalanceSnapshot:
-        """Map one ``/port/v1/balances`` body, field by field."""
-        raise NotImplementedError
+        """Map one ``/port/v1/balances`` body, field by field.
+
+        Named apart from ``contract.AccountSnapshot``, which maps the same
+        endpoint for the daemon and has no ``TransactionsNotBooked`` field at
+        all. That field is the one that parks a whole day's trading between
+        the fills and the nightly settlement batch (memo section 1.7 P5), and
+        it is also NOT a completeness signal: it returns to zero about
+        nineteen minutes before any report row exists (P7)."""
+        return cls(
+            currency=_opt_str(body.get("Currency")),
+            cash_balance=_opt_float(body.get("CashBalance")),
+            non_margin_positions_value=_opt_float(body.get("NonMarginPositionsValue")),
+            total_value=_opt_float(body.get("TotalValue")),
+            transactions_not_booked=_opt_float(body.get("TransactionsNotBooked")),
+            calculation_reliability=_opt_str(body.get("CalculationReliability")),
+            asof=asof,
+        )
 
 
 @dataclass(frozen=True)
