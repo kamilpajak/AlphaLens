@@ -17,6 +17,7 @@ bookings rows and 41 trades rows.
 
 from __future__ import annotations
 
+import ast
 import datetime as dt
 import fcntl
 import json
@@ -27,7 +28,6 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-import typer
 from alphalens_pipeline.account_cash import paths, store, sweep
 from alphalens_pipeline.brokers.account_cash import (
     AccountCashRead,
@@ -672,10 +672,22 @@ class ARealRunAppendsWhatItPublished(_CashbookCliCase):
 class TheGroupHelpIsPlainWhenPiped(unittest.TestCase):
     def test_the_group_declares_no_rich_markup_mode_of_its_own(self) -> None:
         """One ``_help_markup_mode()`` assignment on the ROOT app covers every
-        group; a per-group setting would be a second source of truth."""
-        from alphalens_cli.commands.cashbook import cashbook_app
+        group; a per-group setting would be a second source of truth.
 
-        self.assertEqual(cashbook_app.rich_markup_mode, typer.Typer().rich_markup_mode)
+        Read off the SOURCE, not off the object. ``typer.Typer()`` already
+        carries ``rich_markup_mode='rich'`` on typer 0.26.8 (measured), so
+        comparing this app's attribute against a fresh app's compares 'rich'
+        with 'rich' and a hard-coded ``rich_markup_mode="rich"`` here would
+        pass. The keyword's absence in the call is the claim.
+        """
+        keywords = _group_app_keywords()
+
+        self.assertNotIn("rich_markup_mode", keywords)
+
+    def test_the_group_app_call_was_actually_found(self) -> None:
+        """Positive control: an empty scan would make the assertion above
+        vacuous, which is the failure mode of every AST gate in this repo."""
+        self.assertIn("no_args_is_help", _group_app_keywords())
 
     def test_the_root_app_registers_the_group(self) -> None:
         import typer.main
@@ -686,14 +698,41 @@ class TheGroupHelpIsPlainWhenPiped(unittest.TestCase):
         self.assertIn("cashbook", group.commands)  # type: ignore[attr-defined]
 
     def test_the_piped_help_carries_no_box_drawing_characters(self) -> None:
+        """No ``isatty`` patch: ``_help_markup_mode()`` is evaluated once, when
+        ``main.py`` is imported, so patching the stream here changes nothing —
+        measured by removing it. What gives this test its power is the root
+        app's own mode, which hard-coding 'rich' there turns red."""
         from alphalens_cli.main import app
 
-        with mock.patch("sys.stdout.isatty", return_value=False):
-            result = CliRunner().invoke(app, ["cashbook", "sync", "--help"])
+        result = CliRunner().invoke(app, ["cashbook", "sync", "--help"])
 
         self.assertEqual(result.exit_code, 0, result.output)
         for char in "─│┌┐└┘╭╮╰╯":
             self.assertNotIn(char, result.stdout)
+
+
+def _group_app_keywords() -> set[str]:
+    """The keyword names ``cashbook.py`` passes to its own ``typer.Typer()``."""
+    source = (
+        Path(__file__).resolve().parents[2]
+        / ".."
+        / "alphalens-pipeline"
+        / "alphalens_cli"
+        / "commands"
+        / "cashbook.py"
+    ).resolve()
+    tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "cashbook_app"
+                for target in node.targets
+            )
+            and isinstance(node.value, ast.Call)
+        ):
+            return {keyword.arg for keyword in node.value.keywords if keyword.arg is not None}
+    return set()
 
 
 if __name__ == "__main__":
