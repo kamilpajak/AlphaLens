@@ -14,6 +14,7 @@ bookings rows and 41 trades rows.
 from __future__ import annotations
 
 import datetime as dt
+import errno
 import fcntl
 import json
 import os
@@ -591,6 +592,84 @@ class TheLockKeepsTwoSweepsApart(IsolatedHomeTestCase):
         sweep.apply_sweep(_plan(), now=_NOW)
         self.assertTrue(paths.sweep_lock_path(_LIVE).exists())
         self.assertEqual(paths.sweep_lock_path(_LIVE).suffix, ".lock")
+
+
+class OnlyContentionIsReportedAsContention(IsolatedHomeTestCase):
+    """``_acquire`` caught a bare ``OSError``, so EVERY failure to take the
+    lock read as "another sweep holds it".
+
+    On a filesystem where ``flock`` is unsupported -- an NFS mount with no
+    lockd, some container volume layouts -- ``ENOTSUP`` / ``ENOLCK`` comes back
+    on the first call and on every retry. The sweep then spun for the whole
+    timeout and refused with :class:`SweepBusyError`, naming a holder process
+    that does not exist, and no sweep could ever run. The cause is in the
+    errno and nothing published it.
+
+    :class:`TheLockKeepsTwoSweepsApart` cannot see this: it produces REAL
+    contention, so both readings of the handler agree there.
+    """
+
+    def _flock_raising(self, number: int):
+        return mock.patch.object(fcntl, "flock", side_effect=OSError(number, os.strerror(number)))
+
+    def test_the_errno_real_contention_raises_is_one_the_module_treats_as_such(self) -> None:
+        """MEASURED rather than assumed. ``EAGAIN`` and ``EWOULDBLOCK`` are one
+        value on this platform and a flock refusal could carry either name, so
+        the set is checked against what the kernel actually answers."""
+        lock_path = paths.sweep_lock_path(_LIVE)
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        first = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        self.addCleanup(os.close, first)
+        fcntl.flock(first, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        second = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        self.addCleanup(os.close, second)
+
+        with self.assertRaises(OSError) as ctx:
+            fcntl.flock(second, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        self.assertIn(ctx.exception.errno, sweep._LOCK_CONTENTION_ERRNOS)
+
+    def test_a_contention_errno_still_refuses_as_a_busy_sweep(self) -> None:
+        for name in ("EAGAIN", "EACCES"):
+            with self.subTest(errno=name):
+                with self._flock_raising(getattr(errno, name)):
+                    with self.assertRaises(sweep.SweepBusyError):
+                        sweep.apply_sweep(
+                            _plan(), now=_NOW, clock=_FakeClock(), sleep=lambda _s: None
+                        )
+
+    def test_an_unsupported_filesystem_errno_surfaces_as_itself(self) -> None:
+        """Both of the errnos an unsupported ``flock`` answers. Reported as the
+        OSError it is, so the operator reads the real cause instead of a
+        refusal that names a holder that does not exist."""
+        for name in ("ENOTSUP", "ENOLCK"):
+            with self.subTest(errno=name):
+                number = getattr(errno, name)
+                with self._flock_raising(number):
+                    with self.assertRaises(OSError) as ctx:
+                        sweep.apply_sweep(
+                            _plan(), now=_NOW, clock=_FakeClock(), sleep=lambda _s: None
+                        )
+                self.assertNotIsInstance(ctx.exception, sweep.SweepBusyError)
+                self.assertEqual(ctx.exception.errno, number)
+
+    def test_an_unsupported_lock_appends_nothing(self) -> None:
+        """A sweep that could not take the lock must not have written: the
+        propagating error is only an improvement if it still refuses."""
+        with self._flock_raising(errno.ENOTSUP):
+            with self.assertRaises(OSError):
+                sweep.apply_sweep(_plan(), now=_NOW, clock=_FakeClock(), sleep=lambda _s: None)
+
+        self.assertEqual(store.read_cash_events(env=_LIVE).events, [])
+        self.assertEqual(store.read_sweeps(env=_LIVE), [])
+
+    def test_an_unsupported_lock_does_not_wait_out_the_timeout(self) -> None:
+        """The other half of the cost: the old handler retried an errno no
+        retry can clear, so every sweep paid the full spin before failing."""
+        slept: list[float] = []
+        with self._flock_raising(errno.ENOTSUP):
+            with self.assertRaises(OSError):
+                sweep.apply_sweep(_plan(), now=_NOW, clock=_FakeClock(), sleep=slept.append)
+        self.assertEqual(slept, [])
 
 
 class TheSweepModuleIsPureOfTheCli(unittest.TestCase):

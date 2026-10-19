@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import errno
 import fcntl
 import logging
 import os
@@ -70,6 +71,16 @@ logger = logging.getLogger(__name__)
 
 _LOCK_ACQUIRE_TIMEOUT_S = 1.0
 _LOCK_RETRY_SLEEP_S = 0.005
+
+#: The only two errnos that mean "someone else holds this lock". ``EAGAIN`` is
+#: what a refused ``LOCK_NB`` answers (``EWOULDBLOCK`` is the same value), and
+#: ``EACCES`` is the alternative POSIX allows for it. Everything else is a
+#: different fact and must not be dressed as contention: on a filesystem whose
+#: ``flock`` is unsupported -- an NFS mount with no lockd, some container
+#: volume layouts -- ``ENOTSUP`` / ``ENOLCK`` comes back on the first call and
+#: on every retry, so a blanket handler spun out the whole timeout and then
+#: named a holder process that does not exist, with no sweep able to run.
+_LOCK_CONTENTION_ERRNOS = frozenset({errno.EACCES, errno.EAGAIN})
 
 _CASH_EVENTS = "cash_events"
 _TRADE_ROWS = "trade_rows"
@@ -220,13 +231,20 @@ def _acquire(
 
     Bounded rather than blocking: a stuck holder must refuse a second sweep
     quickly and say so, not stall it for however long the first one runs.
+
+    Only a CONTENTION errno is retried and reported as busy; see
+    :data:`_LOCK_CONTENTION_ERRNOS`. Any other ``OSError`` propagates, because
+    a lock that cannot be taken at all is a different fact from a lock someone
+    else holds, and only the real cause tells an operator what to fix.
     """
     deadline = clock() + _LOCK_ACQUIRE_TIMEOUT_S
     while True:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             return
-        except OSError:
+        except OSError as exc:
+            if exc.errno not in _LOCK_CONTENTION_ERRNOS:
+                raise
             if clock() >= deadline:
                 raise SweepBusyError(lock) from None
             sleep(_LOCK_RETRY_SLEEP_S)
