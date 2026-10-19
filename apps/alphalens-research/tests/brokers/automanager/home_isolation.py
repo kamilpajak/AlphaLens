@@ -31,6 +31,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
+from alphalens_pipeline.account_cash import paths as account_cash_paths
 from alphalens_pipeline.brokers.automanager import state_paths
 from alphalens_pipeline.brokers.saxo import tokens as saxo_tokens
 
@@ -101,17 +102,21 @@ def seed_legacy_flat_state(home: Path) -> Path:
 # moment this module is imported, which holds for every runner the repo uses.
 _OPERATOR_STATE_ROOT = Path.home() / state_paths._ALPHALENS_HOME_DIRNAME
 
-# Every broker-tier function that resolves a path under that root.
+# Every guarded-tier function that resolves a path under that root.
 # ``state_paths._alphalens_home`` is the ADR 0016 seam and covers the journals,
 # the pick inbox, the KILL gate and the execution-quality telemetry. It is NOT
 # the whole story: ``saxo/tokens.py`` keeps its own ``Path.home()`` join for the
 # OAuth token store, which `saxo/client.py` probes with ``.is_file()``. A guard
 # on the seam alone would let a test ask whether the operator is logged in.
-# ``test_home_isolation_gate.py`` reads this set off the source of the broker
-# packages, so a third builder added later cannot stay unguarded quietly.
+# ``account_cash/paths.py`` is the third (#1689): the cash book is a MONEY
+# store whose own tests APPEND, so an unisolated one would write into the
+# operator's book, not merely read it.
+# ``test_home_isolation_gate.py`` reads this set off the source of the guarded
+# packages, so a fourth builder added later cannot stay unguarded quietly.
 _GUARDED_BUILDERS: tuple[tuple[object, str], ...] = (
     (state_paths, "_alphalens_home"),
     (saxo_tokens, "default_token_store_path"),
+    (account_cash_paths, "_alphalens_home"),
 )
 
 _GUARD_MARKER = "_operator_state_guard"

@@ -113,9 +113,13 @@ class TheFunctionFormWorksTheSameWay(unittest.TestCase):
                 state_paths.broker_orders_root()
 
 
-_BROKER_PACKAGE_ROOTS = (
+_GUARDED_PACKAGE_ROOTS = (
     "apps/alphalens-pipeline/alphalens_pipeline/brokers",
     "apps/alphalens-broker-contract/broker_contract",
+    # The account cash book (#1689). Not a broker package, and in the guard for
+    # a stronger reason than the other two: its own tests APPEND to a money
+    # store, so an unisolated one would write into the operator's cash book.
+    "apps/alphalens-pipeline/alphalens_pipeline/account_cash",
 )
 
 
@@ -123,15 +127,15 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[5]
 
 
-def _broker_tier_home_builders() -> set[tuple[str, str]]:
-    """Every broker-tier function whose body calls ``Path.home()``.
+def _guarded_home_builders() -> set[tuple[str, str]]:
+    """Every guarded-tier function whose body calls ``Path.home()``.
 
-    Read off the source of the broker packages, so a third path builder added
-    later shows up here whether or not anyone remembers this gate. Returned as
+    Read off the source of the guarded packages, so a path builder added later
+    shows up here whether or not anyone remembers this gate. Returned as
     ``(module file stem, function name)`` pairs."""
     found: set[tuple[str, str]] = set()
     root = _repo_root()
-    for relroot in _BROKER_PACKAGE_ROOTS:
+    for relroot in _GUARDED_PACKAGE_ROOTS:
         for path in sorted((root / relroot).rglob("*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
@@ -148,21 +152,22 @@ def _broker_tier_home_builders() -> set[tuple[str, str]]:
     return found
 
 
-class EveryBrokerTierHomeBuilderIsGuarded(unittest.TestCase):
+class EveryGuardedHomeBuilderIsGuarded(unittest.TestCase):
     """Anti-rot. The guard is only as complete as its list of builders, and the
-    ADR 0016 seam is NOT that list: `saxo/tokens.py` keeps its own join."""
+    ADR 0016 seam is NOT that list: `saxo/tokens.py` keeps its own join, and so
+    does the account cash book's own path module (#1689)."""
 
     def test_the_guarded_set_matches_what_the_source_says_exists(self) -> None:
         guarded = {(module.__name__.rsplit(".", 1)[-1], attr) for module, attr in _GUARDED_BUILDERS}
         self.assertEqual(
-            _broker_tier_home_builders(),
+            _guarded_home_builders(),
             guarded,
-            "a broker-tier function resolves Path.home() and is not covered by "
+            "a guarded-tier function resolves Path.home() and is not covered by "
             "_GUARDED_BUILDERS, so a test can read operator state past the guard (#1696)",
         )
 
     def test_the_source_scan_finds_something(self) -> None:
-        self.assertGreaterEqual(len(_broker_tier_home_builders()), 2)
+        self.assertGreaterEqual(len(_guarded_home_builders()), 3)
 
 
 class TheSeamIsActuallyUsedByTheBuilders(IsolatedHomeTestCase):

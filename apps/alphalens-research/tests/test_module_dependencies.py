@@ -48,6 +48,14 @@ PACKAGE_DIRS: dict[str, Path] = {
 #: guess repeated in two places is a pair that can disagree.
 _CASH_BOOK_RULE_NAME = "brokers must not import the account cash book (the read flows one way)"
 
+#: The other half of the #1689 boundary, found the same way and for the same
+#: reason: the cash book must not reach the keeper's state seam, which travels
+#: with the Stage-1 split while this layer's semantics stay in AlphaLens.
+_CASH_BOOK_KEEPER_RULE_NAME = (
+    "the account cash book must not import the keeper's state seam "
+    "(it travels with the Stage-1 split)"
+)
+
 RULES = (
     {
         "name": "backtest must stay screener-agnostic",
@@ -166,6 +174,21 @@ RULES = (
         # from this string rather than repeating it, so moving the package is
         # one edit here and not a silently diverging pair.
         "forbidden_prefix": "alphalens_pipeline.account_cash",
+        "exemptions": set(),
+    },
+    {
+        # #1689, the other half of the same boundary. `state_paths` is the ONE
+        # broker-state seam (ADR 0016) and it travels with the Stage-1 keeper
+        # split, while the cash book's semantics stay in AlphaLens -- so the
+        # cash book declares its own two environment strings and a test pins
+        # them against the keeper's rather than sharing them. `read_pick_fold`
+        # is the same: its SHAPE is mirrored, its code is not imported.
+        # Deliberately narrower than `alphalens_pipeline.brokers`: the store
+        # appends through `brokers.journal` and reads its row types from
+        # `brokers.account_cash`, both outside `automanager`.
+        "name": _CASH_BOOK_KEEPER_RULE_NAME,
+        "from_pkg": "alphalens_pipeline.account_cash",
+        "forbidden_prefix": "alphalens_pipeline.brokers.automanager",
         "exemptions": set(),
     },
     {
@@ -1309,6 +1332,73 @@ class TestModuleDependencies(unittest.TestCase):
             any(_violates(cash_rules[0], m) for m in modules),
             "rule would not catch the synthetic violation",
         )
+
+    def test_the_account_cash_book_must_not_import_the_keeper_positive_control(self):
+        """The account-cash-book -> keeper-state-seam rule (#1689) cannot rot.
+
+        The forbidden edge is ``alphalens_pipeline.brokers.automanager``: the
+        cash book may read ``brokers.journal`` and ``brokers.account_cash``,
+        which sit OUTSIDE ``automanager``, and nothing else under there. So the
+        synthetic violation imports ``state_paths``, the one module the cash
+        book is genuinely tempted to reuse -- it declares the same two
+        environment strings -- and hides it in a function body, the shape a
+        ``top_level_only`` rule would miss.
+
+        The import is BUILT from the rule's own ``forbidden_prefix`` and the
+        rule is found by its declared ``name``, so the prefix exists once.
+
+        Paired with ``test_the_cash_book_may_still_read_the_journal_writer``
+        below: a prefix widened to ``alphalens_pipeline.brokers`` would satisfy
+        this control and forbid the appender the store is built on.
+        """
+        import tempfile
+
+        rules = [rule for rule in RULES if rule["name"] == _CASH_BOOK_KEEPER_RULE_NAME]
+        self.assertEqual(
+            len(rules), 1, "the account_cash -> automanager rule must exist exactly once"
+        )
+        self.assertEqual(rules[0]["from_pkg"], "alphalens_pipeline.account_cash")
+        forbidden = rules[0]["forbidden_prefix"]
+
+        synthetic = (
+            "def sneaky():\n"
+            f"    from {forbidden}.state_paths import ENV_LIVE\n"
+            "    return ENV_LIVE\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "synthetic_cash_book_keeper_violation.py"
+            path.write_text(synthetic)
+            modules = list(_iter_imports(path, include_function_scope=True))
+
+        self.assertIn(f"{forbidden}.state_paths", modules)
+        self.assertNotIn(
+            "top_level_only",
+            rules[0],
+            "the rule must catch function-scope (lazy) imports too",
+        )
+        self.assertTrue(
+            any(_violates(rules[0], m) for m in modules),
+            "rule would not catch the synthetic violation",
+        )
+
+    def test_the_cash_book_may_still_read_the_journal_writer(self):
+        """The negative half, and the one that bounds the rule's width.
+
+        The store appends through ``brokers.journal.append_json_line`` -- one
+        write, flush, fsync, torn-predecessor repair -- and reads the row types
+        from ``brokers.account_cash``. Both are outside ``automanager``, and a
+        rule whose prefix slipped to ``alphalens_pipeline.brokers`` would
+        forbid exactly the two imports the store is built on while still
+        passing the control above.
+        """
+        rules = [rule for rule in RULES if rule["name"] == _CASH_BOOK_KEEPER_RULE_NAME]
+        self.assertEqual(len(rules), 1)
+        for allowed in (
+            "alphalens_pipeline.brokers.journal",
+            "alphalens_pipeline.brokers.account_cash",
+        ):
+            with self.subTest(module=allowed):
+                self.assertFalse(_violates(rules[0], allowed))
 
     def test_research_must_not_import_the_cli_positive_control(self):
         """The lab -> CLI rule (#1675, the Research-lab/composition-root context
