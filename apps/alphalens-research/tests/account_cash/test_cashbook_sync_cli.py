@@ -512,6 +512,43 @@ class TheRefusalsCarryTheirOwnCode(_CashbookCliCase):
         self.assertEqual(failure["details"]["reason"], "sim_store_refused")
         self.assertEqual(paths.account_cash_root("sim").exists(), False)
 
+    def test_a_dry_run_on_sim_refuses_exactly_as_the_real_run_does(self) -> None:
+        """A dry run AUTHORISES. The repo CLI doctrine spells the step out —
+        ``--dry-run`` does everything except mutate: parse, validate,
+        authorise, resolve targets, plan — and the docstring promises nothing
+        is stored on SIM "in both directions".
+
+        Measured before the fix: this invocation exited 0 and published
+        ``appended: {cash_events: 104, …}`` plus four
+        ``account_cash/sim/*.jsonl`` paths the store guarantees never exist,
+        while the same invocation without ``--dry-run`` exited 1 with
+        ``sim_store_refused``. The two renderings of one sweep disagreeing
+        about whether it can happen is the whole defect, so the assertion is
+        that the two answers are the SAME object rather than two literals.
+        """
+        dry = self.sync("--dry-run", "--format", "json", env="sim")
+        wet = self.sync("--format", "json", env="sim")
+
+        self.assertEqual(dry.exit_code, wet.exit_code)
+        self.assertEqual(dry.exit_code, _EXIT_FAILED)
+        self.assertEqual(dry.stdout, "")
+        self.assertEqual(_failure_from(dry), _failure_from(wet))
+        self.assertEqual(_failure_from(dry)["details"]["reason"], "sim_store_refused")
+        self.assertFalse(paths.account_cash_root("sim").exists())
+
+    def test_the_authorisation_runs_after_the_read_so_sim_still_names_the_read(self) -> None:
+        """Order, not just presence. The real SIM adapter answers nothing and
+        says why (``sim_reports_unusable``), which is the more specific fact
+        about that invocation; authorising before the read would replace it
+        with ``sim_store_refused`` and tell an operator the store refused a
+        read that never happened."""
+        self.broker = _FakeCashBroker(_sim_read())
+
+        result = self.sync("--dry-run", "--format", "json", env="sim")
+
+        self.assertEqual(result.exit_code, _EXIT_FAILED)
+        self.assertEqual(_failure_from(result)["details"]["reason"], "sim_reports_unusable")
+
     def test_a_broker_without_the_capability_is_refused_as_broker_unsupported(self) -> None:
         """A contract concept keeps the contract's code (#1122)."""
         self.broker = _FakeBrokerWithoutTheCapability()

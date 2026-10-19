@@ -252,6 +252,9 @@ def sync_command(
       read        a read that answered nothing (SIM) refuses here; exit 0 with
                   a zero result would publish other accounts' canned rows as
                   this account's cash
+      authorise   the store's own write guard, asked WHETHER OR NOT this is a
+                  --dry-run: a dry run that plans a sweep the real run refuses
+                  is a plan for something that cannot happen
       body        RENDERED before anything is written
       append      under the sweep's own lock, and only if not --dry-run
 
@@ -305,6 +308,29 @@ def sync_command(
             details={"reason": plan.refused_reason, "env": resolved_env},
         )
 
+    # AUTHORISE, in both directions. The CLI doctrine's own words for
+    # `--dry-run`: everything except mutate — parse, validate, authorise,
+    # resolve targets, plan. The appenders reach the store's write guard on
+    # their way to a path, and they run only under `if not dry_run:`, so a dry
+    # run used to publish a plan for a sweep the real run refuses. Asked
+    # through the store's own guard rather than re-deciding live-only here: one
+    # money-path rule, one function.
+    #
+    # AFTER the read, deliberately. The SIM adapter that ships today answers
+    # nothing and says why, and `sim_reports_unusable` is the more specific
+    # fact about that invocation — authorising first would tell an operator the
+    # store refused a read that never happened. So in production this refuses
+    # nothing the read has not already refused; what it fixes is the dry-run
+    # branch under any broker that does answer rows on a non-live instance.
+    try:
+        store.assert_writable(resolved_env)
+    except store.SimCashBookRefusedError as exc:
+        raise _fail_with(
+            "cashbook_sync_refused",
+            str(exc),
+            details={"reason": exc.reason, "env": resolved_env},
+        ) from exc
+
     journals = {
         "cash_events": str(paths.cash_events_path(resolved_env)),
         "trade_rows": str(paths.trade_rows_path(resolved_env)),
@@ -321,12 +347,11 @@ def sync_command(
     if not dry_run:
         try:
             sweep.apply_sweep(plan, now=dt.datetime.now(dt.UTC))
-        except store.SimCashBookRefusedError as exc:
-            raise _fail_with(
-                "cashbook_sync_refused",
-                str(exc),
-                details={"reason": exc.reason, "env": resolved_env},
-            ) from exc
+        # No `SimCashBookRefusedError` arm: the authorisation above has already
+        # asked the same guard about the same `resolved_env`, so this call can
+        # no longer raise it. A second handler for one exception is two
+        # messages for one event, and a gate beside a delegate silently killing
+        # that delegate's own arm is a defect this repo has a note on.
         except sweep.SweepBusyError as exc:
             raise _fail_with("cashbook_sweep_busy", str(exc), details={"lock": exc.lock}) from exc
         except JournalWriteError as exc:

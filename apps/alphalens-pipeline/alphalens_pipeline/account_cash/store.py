@@ -30,7 +30,9 @@ this module owns the four appends it is made of.
 
 **On SIM every appender refuses and nothing is created.** :func:`_writable_root`
 is the one place that decides it, and no appender takes a path, so there is no
-argument a caller can pass that routes around it. The SIM report endpoints
+argument a caller can pass that routes around it. :func:`assert_writable` is
+the public way to ask that same question without writing, for a caller that
+must authorise before it plans. The SIM report endpoints
 answer with canned rows belonging to OTHER accounts, and memo section 3 calls
 storing that fiction worse than storing nothing. A READ is allowed on either
 environment: an absent journal folds empty, which is the honest answer.
@@ -96,6 +98,7 @@ __all__ = [
     "append_cash_events",
     "append_sweep",
     "append_trade_rows",
+    "assert_writable",
     "read_balances",
     "read_cash_events",
     "read_sweeps",
@@ -128,6 +131,25 @@ def _writable_root(env: str) -> Path:
     if paths.validate_environment(env) != paths.ENV_LIVE:
         raise SimCashBookRefusedError(env)
     return paths.account_cash_root(env)
+
+
+def assert_writable(env: str) -> None:
+    """Raise if this environment may not be written to. Creates nothing.
+
+    The one public way to ASK the write guard a question, for a caller that
+    must authorise before it writes rather than on its way to a path. The
+    appenders reach the guard through :func:`_writable_journal`, which is the
+    right shape for a write and reaches nobody who is not about to perform
+    one: ``alphalens cashbook sync --dry-run`` writes by construction nothing,
+    so it never touched an appender and so never authorised, and it reported a
+    success for a sweep the same invocation without ``--dry-run`` refuses
+    (#1689).
+
+    It delegates rather than restating ``!= ENV_LIVE``: a second copy of a
+    money-path rule behaves identically on the day it is written and drifts on
+    the day the rule changes.
+    """
+    _writable_root(env)
 
 
 def _writable_journal(env: str, builder: Callable[[str], Path]) -> Path:

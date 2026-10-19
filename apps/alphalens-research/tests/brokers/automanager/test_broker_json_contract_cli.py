@@ -191,10 +191,26 @@ _JSON_COMMANDS: tuple[tuple[str, list[str], bool, tuple[str, ...]], ...] = (
 # `--dry-run` is in the argv deliberately: the table runs every row several
 # times, and a sweep without it would APPEND to the cash book under the
 # isolated home.
+#
+# `--env live` is in it for a different reason: since #1689 F1 a sweep
+# authorises in BOTH directions, so the store's live-only write guard refuses a
+# SIM sweep whether or not it is a dry run. LIVE is therefore the only instance
+# on which a success-shaped row can run at all, which is why the refusal is
+# what `test_the_env_option_reaches_the_command` asserts below.
+_CASHBOOK_TABLE_ENV = "live"
 _CASHBOOK_JSON_COMMANDS: tuple[tuple[str, list[str], bool, tuple[str, ...]], ...] = (
     (
         "sync",
-        ["sync", "--since", "2026-08-01", "--until", "2026-10-03", "--dry-run"],
+        [
+            "sync",
+            "--since",
+            "2026-08-01",
+            "--until",
+            "2026-10-03",
+            "--dry-run",
+            "--env",
+            _CASHBOOK_TABLE_ENV,
+        ],
         True,
         (
             "dry_run",
@@ -592,7 +608,7 @@ class CashbookJsonEnvelopeContractTest(_BrokerCliCase):
                 payload = _strict_json(result.stdout)
                 self.assertEqual(list(payload)[:2], ["schema", "env"])
                 self.assertEqual(payload["schema"], f"alphalens.cashbook.{name}/v1")
-                self.assertEqual(payload["env"], "sim")
+                self.assertEqual(payload["env"], _CASHBOOK_TABLE_ENV)
                 self.assertEqual(
                     len(result.stdout.strip().splitlines()),
                     1,
@@ -601,14 +617,24 @@ class CashbookJsonEnvelopeContractTest(_BrokerCliCase):
                 for key in keys:
                     self.assertIn(key, payload, f"{name} must carry {key}")
 
-    def test_the_env_option_reaches_the_envelope(self) -> None:
+    def test_the_env_option_reaches_the_command(self) -> None:
+        """The other instance, which cannot answer an envelope at all.
+
+        A sweep authorises in both directions (#1689 F1), so SIM is refused by
+        the store's live-only write guard whether or not it is a dry run. What
+        "the option reached the command" looks like here is therefore the
+        refusal and an empty stdout, not a second envelope — click keeps the
+        LAST value of a repeated option, so the `--env sim` below is what the
+        command resolves.
+        """
         for name, argv, has_env_option, _keys in _CASHBOOK_JSON_COMMANDS:
             if not has_env_option:
                 continue
             with self.subTest(command=name):
-                result = self.invoke_cashbook([*argv, "--env", "live", "--format", "json"])
-                self.assertEqual(result.exit_code, 0, result.output)
-                self.assertEqual(_strict_json(result.stdout)["env"], "live")
+                result = self.invoke_cashbook([*argv, "--env", "sim", "--format", "json"])
+                self.assertEqual(result.exit_code, 1, result.output)
+                self.assertEqual(result.stdout, "")
+                self.assertIn("sim_store_refused", result.stderr)
 
     def test_a_refusal_leaves_stdout_empty(self) -> None:
         for name, argv, _env, _keys in _CASHBOOK_JSON_COMMANDS:
