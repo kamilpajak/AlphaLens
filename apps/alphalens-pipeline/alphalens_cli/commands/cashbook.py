@@ -245,25 +245,53 @@ def _sync_body(plan: Any, *, dry_run: bool, journals: dict[str, str]) -> dict[st
     }
 
 
+#: Width of the prose's label column: the widest label this body publishes,
+#: which is ``already_present``. It was 10, so that one row started its value
+#: five characters late while every other row lined up.
+_LABEL_WIDTH = len("already_present")
+
+#: The word for a published boolean. ``true`` / ``false`` are what the JSON body
+#: says, and a human renderer printing JSON literals is a serialiser wearing a
+#: renderer's name.
+_YES_NO = {True: "yes", False: "no"}
+
+
+def _row(label: str, rest: str) -> None:
+    typer.echo(f"{label:<{_LABEL_WIDTH}} {rest}")
+
+
 def _render_sync_human(body: dict[str, Any]) -> None:
-    """The operator's version of the same facts, in the same order."""
+    """The operator's version of the same facts, in the same order.
+
+    EVERY published fact, which is the CLI doctrine's own rule — one internal
+    result rendered two ways, both carrying the same facts. ``journals`` and
+    ``synced`` were missing: a sweep's prose named no file it wrote and did not
+    say whether it wrote at all, and the subset the parity test listed could
+    not see either gap. ``schema`` is the one key with no prose form: it is the
+    machine contract's identity rather than a fact about this sweep.
+    """
     asked = body["asked"]
     mode = " (dry run — nothing written)" if body["dry_run"] else ""
     typer.echo(f"cashbook sync {body['env']} {asked['since']} .. {asked['until']}{mode}")
+    for flag in ("dry_run", "synced"):
+        _row(flag, _YES_NO[body[flag]])
     read = body["read"]
     for name in ("events", "trades"):
         window = read[name]
         if window is None:
-            typer.echo(f"read       {name:<12} not read")
+            _row("read", f"{name:<12} not read")
         else:
-            typer.echo(
-                f"read       {name:<12} {window['rows']} row(s) "
-                f"served {window['start']} .. {window['end']}"
-            )
-    typer.echo(f"read       {'balance':<12} {read['balance_asof'] or 'not read'}")
+            served = f"served {window['start']} .. {window['end']}"
+            _row("read", f"{name:<12} {window['rows']} row(s) {served}")
+    _row("read", f"{'balance':<12} {read['balance_asof'] or 'not read'}")
     for label in ("appended", "already_present", "restated", "malformed"):
         counts = "  ".join(f"{name} {count}" for name, count in body[label].items())
-        typer.echo(f"{label:<10} {counts}")
+        _row(label, counts)
+    # One line per journal rather than one joined line: these are absolute
+    # paths, so a single row would wrap in any terminal and the operator's own
+    # next command is a copy of one of them.
+    for name, path in body["journals"].items():
+        _row("journals", f"{name:<12} {path}")
 
 
 @cashbook_app.command("sync")

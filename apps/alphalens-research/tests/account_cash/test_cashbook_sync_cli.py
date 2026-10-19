@@ -286,31 +286,56 @@ class ADryRunPlansAndWritesNothing(_CashbookCliCase):
         self.assertIn("dry run", result.stdout)
         self.assertEqual(self.journal_files(), {})
 
-    def test_the_human_rendering_carries_the_same_facts_as_the_json_one(self) -> None:
-        """The repo CLI doctrine: one internal result rendered two ways, and
-        the two must carry the same facts. Asserted against the JSON body of
-        the same invocation rather than against literals, so the claim is
-        "nothing was lost in the prose" and not "the prose says these words".
-        Without it the renderer could print a window BOUND where its row count
-        belongs and only the substring 'dry run' would be checked.
+    def test_the_human_rendering_carries_every_fact_the_json_one_publishes(self) -> None:
+        """The repo CLI doctrine: one internal result rendered two ways, and the
+        two must carry the same facts.
+
+        Driven by the PAYLOAD, over every leaf of it, so the next field added to
+        the body is covered without anybody remembering to list it here. The
+        earlier version checked a chosen subset and so could not see that the
+        prose dropped ``journals`` and ``synced`` outright, while this PR's test
+        plan claimed the prose carried every fact the JSON body does.
+
+        A leaf's token must appear as a whitespace-delimited FIELD, not as a
+        substring: ``synced: false`` renders ``no``, and ``no`` is inside
+        "nothing written" in the header, so a substring check for it passes
+        whatever the renderer drops.
         """
         payload = _strict_json(self.sync("--dry-run", "--format", "json").stdout)
 
         human = self.sync("--dry-run").stdout
 
-        self.assertIn(payload["asked"]["since"], human)
-        self.assertIn(payload["asked"]["until"], human)
-        for name in ("events", "trades"):
-            window = payload["read"][name]
-            with self.subTest(window=name):
-                self.assertIn(f"{window['rows']} row(s)", human)
-                self.assertIn(window["start"], human)
-                self.assertIn(window["end"], human)
-        self.assertIn(payload["read"]["balance_asof"], human)
-        for label in ("appended", "already_present", "restated", "malformed"):
-            for journal, count in payload[label].items():
-                with self.subTest(counts=label, journal=journal):
-                    self.assertIn(f"{journal} {count}", human)
+        fields = set(human.split())
+        for path, value in _leaves(payload):
+            if path in _HUMAN_EXEMPT_KEYS:
+                continue
+            with self.subTest(field=path):
+                self.assertIn(_human_token(value), fields)
+
+    def test_every_published_count_appears_under_its_own_label(self) -> None:
+        """The other half, which full coverage alone does not give: the counts
+        are mostly zeros, so a renderer that printed one mapping's numbers under
+        another's label would satisfy every field check above."""
+        payload = _strict_json(self.sync("--dry-run", "--format", "json").stdout)
+
+        human = self.sync("--dry-run").stdout
+
+        for label in ("appended", "already_present", "restated", "malformed", "journals"):
+            block = _label_block(human, label)
+            for name, value in payload[label].items():
+                with self.subTest(label=label, entry=name):
+                    self.assertIn(f"{name} {value}", block)
+
+    def test_the_label_column_fits_the_widest_label(self) -> None:
+        """``already_present`` is 15 characters and the label field was 10 wide,
+        so that one row started its value column five characters late. Asserted
+        as "every body row agrees", not against the number 15, so a new label
+        either fits or turns this red."""
+        human = self.sync("--dry-run").stdout
+
+        body = human.splitlines()[1:]
+        starts = {len(line) - len(line.split(maxsplit=1)[1]) for line in body if line.strip()}
+        self.assertEqual(len(starts), 1, body)
 
 
 class TheEnvelopeIsTheSameContract(_CashbookCliCase):
@@ -403,6 +428,53 @@ class TheEnvelopeIsTheSameContract(_CashbookCliCase):
         payload = _strict_json(self.sync("--dry-run", "--format", "json").stdout)
 
         self.assertEqual(payload["malformed"], {"cash_events": 1, "trade_rows": 0})
+
+
+#: The one published key the prose does not carry. ``schema`` is the machine
+#: contract's own identity, not a fact about this sweep, and an operator cannot
+#: act on it. Named rather than silently skipped so a second exemption is a line
+#: somebody writes down — which is the discipline, since everything else is
+#: derived from the payload and therefore covered the day it is added.
+_HUMAN_EXEMPT_KEYS = ("schema",)
+
+
+def _leaves(value: Any, prefix: str = "") -> list[tuple[str, Any]]:
+    """Every LEAF of a published body, as ``(dotted path, value)``.
+
+    Containers are skipped: ``read`` carries no fact of its own, and asserting
+    a token for it would mean asserting one for the word "read".
+    """
+    if isinstance(value, dict):
+        found: list[tuple[str, Any]] = []
+        for key, child in value.items():
+            found.extend(_leaves(child, f"{prefix}{key}."))
+        return found
+    return [(prefix.rstrip("."), value)]
+
+
+def _human_token(value: Any) -> str:
+    """How one published leaf has to read in the prose.
+
+    ``yes`` / ``no`` rather than ``true`` / ``false``: the JSON body is what a
+    machine branches on, and a human renderer printing JSON literals is the
+    tell of a renderer that is really a serialiser.
+    """
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if value is None:
+        return "not read"
+    return str(value)
+
+
+def _label_block(human: str, label: str) -> str:
+    """Every prose line whose first field is ``label``, whitespace collapsed.
+
+    Per label rather than over the whole output, because the counts are mostly
+    zeros: ``cash_events 0`` is in three mappings at once, so a check against
+    the full text cannot tell which label printed it.
+    """
+    lines = [" ".join(line.split()) for line in human.splitlines() if line.strip()]
+    return " | ".join(line for line in lines if line.split()[0] == label)
 
 
 def _every_key(value: Any, prefix: str = "") -> list[str]:
