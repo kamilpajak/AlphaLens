@@ -63,6 +63,29 @@ CASHBOOK_CLI = _COMMANDS_DIR / "cashbook.py"
 EMITTING_CLI_MODULES = (BROKER_CLI, ENVELOPE_CLI, CASHBOOK_CLI)
 
 
+def _modules_importing_the_envelope() -> set[Path]:
+    """Every command module that reaches the emitters, found by its IMPORTS.
+
+    The floor under :data:`EMITTING_CLI_MODULES`: that tuple is hand-written,
+    so without this a new group built on the shared envelope — or an existing
+    entry deleted — leaves the registry walks above reading fewer modules than
+    emit codes, which is green and blind.
+    """
+    found: set[Path] = set()
+    for path in sorted(_COMMANDS_DIR.glob("*.py")):
+        if path == ENVELOPE_CLI:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.ImportFrom)
+                and node.module is not None
+                and node.module.split(".")[-1] == ENVELOPE_CLI.stem
+            ):
+                found.add(path)
+    return found
+
+
 def _json_lines(stderr: str) -> list[dict]:
     """Every stderr line that parses as a JSON object."""
     found = []
@@ -474,6 +497,25 @@ class EveryEmittedCodeIsRegistered(unittest.TestCase):
         emitted = [code for tree in _module_asts() for code in _fail_with_codes(tree)]
 
         self.assertGreater(len(emitted), 5)
+
+
+class TheWalkedModuleListIsComplete(unittest.TestCase):
+    """The list of walked modules is itself checked, in both directions.
+
+    Before this, dropping ``CASHBOOK_CLI`` from the tuple left every test in
+    this file green: the one thing keeping a second group's codes inside the
+    registry walks was an unguarded tuple entry.
+    """
+
+    def test_every_module_that_imports_the_envelope_is_walked(self) -> None:
+        walked = set(EMITTING_CLI_MODULES)
+
+        self.assertEqual(_modules_importing_the_envelope() | {ENVELOPE_CLI}, walked)
+
+    def test_the_import_scan_found_something(self) -> None:
+        """Positive control: an empty scan would satisfy the equality above as
+        soon as the tuple held only the defining module."""
+        self.assertIn(CASHBOOK_CLI, _modules_importing_the_envelope())
 
 
 class TheRegistryHonoursItsOwnRules(unittest.TestCase):
