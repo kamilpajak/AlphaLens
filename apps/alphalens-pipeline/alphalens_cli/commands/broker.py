@@ -105,13 +105,25 @@ from broker_contract.trade_intent.codec import discarded_paths as _discarded_pat
 
 # The JSON envelope and the failure contract live in `_cli_envelope` since
 # #1689, when `alphalens cashbook` became their second consumer. Re-exported
-# under their original private names so every call site in this module — and
-# every test that patches one of them HERE — keeps resolving. The suppression
-# covers exactly two names this module no longer references itself, both of
-# them read through `commands.broker` by gates that predate the move:
-# `_CLI_FAILURE_CODES` and `_FAILURE_CODES`. The exit-status set and
-# `_exit_code_for` are NOT re-exported — nothing outside `_cli_envelope` read
-# them, so listing them here would have claimed a consumer that does not exist.
+# under their original private names so every call site in this module, and
+# every reader that RESOLVES one of them through `commands.broker`, keeps
+# working. The suppression covers exactly two names this module no longer
+# references itself, both of them read through `commands.broker` by gates that
+# predate the move: `_CLI_FAILURE_CODES` and `_FAILURE_CODES`. The exit-status
+# set and `_exit_code_for` are NOT re-exported — nothing outside
+# `_cli_envelope` read them, so listing them here would have claimed a consumer
+# that does not exist.
+#
+# RESOLVING, not PATCHING. A re-export is a second name bound to one object, so
+# reading it here is the same object; replacing it here is not. A function's
+# globals are the module it was DEFINED in, so `_fail_with` reads
+# `_FAILURE_CODES` out of `_cli_envelope` whatever `commands.broker` has bound
+# — measured: patching `commands.broker._FAILURE_CODES` to `{}` left
+# `_fail_with` answering off the real registry, while the same patch on
+# `_cli_envelope` reached it. No test patches these names here today (every
+# `commands.broker._*` patch target is an unrelated name), so nothing is
+# broken; a patch aimed at this module would simply have no effect, which is
+# the trap worth naming. Patch them in `_cli_envelope`.
 from alphalens_cli.commands._cli_envelope import (  # noqa: F401
     _CLI_FAILURE_CODES,
     _FAILURE_CODES,
