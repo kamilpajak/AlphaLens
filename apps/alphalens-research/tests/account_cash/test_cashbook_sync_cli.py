@@ -286,6 +286,32 @@ class ADryRunPlansAndWritesNothing(_CashbookCliCase):
         self.assertIn("dry run", result.stdout)
         self.assertEqual(self.journal_files(), {})
 
+    def test_the_human_rendering_carries_the_same_facts_as_the_json_one(self) -> None:
+        """The repo CLI doctrine: one internal result rendered two ways, and
+        the two must carry the same facts. Asserted against the JSON body of
+        the same invocation rather than against literals, so the claim is
+        "nothing was lost in the prose" and not "the prose says these words".
+        Without it the renderer could print a window BOUND where its row count
+        belongs and only the substring 'dry run' would be checked.
+        """
+        payload = _strict_json(self.sync("--dry-run", "--format", "json").stdout)
+
+        human = self.sync("--dry-run").stdout
+
+        self.assertIn(payload["asked"]["since"], human)
+        self.assertIn(payload["asked"]["until"], human)
+        for name in ("events", "trades"):
+            window = payload["read"][name]
+            with self.subTest(window=name):
+                self.assertIn(f"{window['rows']} row(s)", human)
+                self.assertIn(window["start"], human)
+                self.assertIn(window["end"], human)
+        self.assertIn(payload["read"]["balance_asof"], human)
+        for label in ("appended", "already_present", "restated", "malformed"):
+            for journal, count in payload[label].items():
+                with self.subTest(counts=label, journal=journal):
+                    self.assertIn(f"{journal} {count}", human)
+
 
 class TheEnvelopeIsTheSameContract(_CashbookCliCase):
     def test_the_envelope_leads_with_schema_and_env(self) -> None:
