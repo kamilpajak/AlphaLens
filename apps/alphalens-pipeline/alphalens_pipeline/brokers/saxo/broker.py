@@ -1723,7 +1723,20 @@ class SaxoBroker:
     # ----- account cash (#1689, the cash book's read) -----
 
     def list_account_cash(self, since: dt.date, until: dt.date) -> AccountCashRead:
-        """Every cash movement the account booked between two dates, UNFILTERED."""
+        """Every cash movement the account booked between two dates, UNFILTERED.
+
+        Three GETs, never a write, in ``saxo/account_cash_read.py``; this
+        method resolves the two keys and delegates. Dates in, dates out, with
+        no padding: unlike :meth:`list_fill_history`, which widens its report
+        window by a day on each end, both report endpoints here filter on a
+        venue-stamped date, so the window asked for is the window read.
+
+        On SIM the refusal covers the WHOLE read, the balance included, even
+        though ``/port/v1/balances`` is not a report endpoint and
+        ``get_account`` reads it every daemon tick. The report rows would be
+        canned data from other accounts, and a balance with no rows beside it
+        answers nothing -- so the result is one refusal rather than a partial
+        one a caller could mistake for an answer."""
         if self._client.base_url == SIM_BASE_URL:
             return AccountCashRead(
                 events=None,

@@ -238,7 +238,7 @@ BASELINE: dict[str, int] = {
     # Counted with ``wc -l`` on the MERGED file, not added up from the diff:
     # the comment on the ``control_loop.py`` entry above records an earlier
     # attempt that counted from a diff and shipped the gate red.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/saxo/broker.py": 2443,
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/saxo/broker.py": 2456,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/saxo/client.py": 1141,
     "apps/alphalens-pipeline/alphalens_pipeline/data/alt_data/saxo_price_stream.py": 1395,
     "apps/alphalens-pipeline/alphalens_pipeline/feedback/ladder_chart.py": 1329,

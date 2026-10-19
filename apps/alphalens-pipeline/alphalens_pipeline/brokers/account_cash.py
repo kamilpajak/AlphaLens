@@ -36,6 +36,11 @@ import datetime as dt
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
+# DO NOT re-point these three at ``saxo/broker.py``, which defines its own
+# ``_opt_float`` and ``_opt_str`` under the same names: that version is
+# ``None if value is None else float(value)``, so it RAISES on a non-numeric
+# string and accepts ``bool``. These return ``None`` instead. The module
+# docstring says why one definition serves both mappings of the same rows.
 from alphalens_pipeline.brokers.fill_history import (
     ReadWindow,
     _opt_float,
