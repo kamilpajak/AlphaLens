@@ -20,6 +20,14 @@ This module imports nothing from ``saxo/broker.py``. That is structural, not
 stylistic: the adapter imports this module at the top of its own import block,
 so an import back the other way is a cycle. It is why the SIM refusal stays in
 the adapter, where ``list_fill_history`` already makes the same check.
+
+It DOES import ``SaxoClient``, and the distinction is the point: the cycle is
+with the ADAPTER, while ``saxo/client.py`` imports only ``saxo.errors`` and
+``saxo.tokens``. ``client: Any`` therefore cost the one coupling this module
+has for nothing -- the three reads are the client's own methods, and under
+``Any`` a rename of ``account_key``, ``from_date`` or ``to_date`` on either
+side was invisible to pyright, which is a blocking CI step, and to the suite,
+whose fake declares ``**kwargs``.
 """
 
 from __future__ import annotations
@@ -36,6 +44,7 @@ from alphalens_pipeline.brokers.account_cash import (
     VendorPayloadShapeError,
 )
 from alphalens_pipeline.brokers.fill_history import ReadWindow
+from alphalens_pipeline.brokers.saxo.client import SaxoClient
 
 
 def _map_every_row[Row](
@@ -96,7 +105,7 @@ def _require_plain_date(name: str, value: dt.date) -> dt.date:
 
 
 def read_account_cash(
-    client: Any,
+    client: SaxoClient,
     *,
     client_key: str,
     account_key: str,

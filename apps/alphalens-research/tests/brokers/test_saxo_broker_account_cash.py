@@ -16,10 +16,11 @@ Rows come from the LIVE account on 2026-10-03, the fixture
 from __future__ import annotations
 
 import datetime as dt
+import inspect
 import json
 import unittest
 from pathlib import Path
-from typing import Any
+from typing import Any, get_type_hints
 
 from alphalens_pipeline.brokers.account_cash import (
     BalanceSnapshot,
@@ -29,8 +30,9 @@ from alphalens_pipeline.brokers.account_cash import (
     VendorPayloadShapeError,
 )
 from alphalens_pipeline.brokers.fill_history import CostBooking, Execution, ReadWindow, _opt_int
+from alphalens_pipeline.brokers.saxo.account_cash_read import read_account_cash
 from alphalens_pipeline.brokers.saxo.broker import SaxoBroker
-from alphalens_pipeline.brokers.saxo.client import SIM_BASE_URL, SaxoRateLimitError
+from alphalens_pipeline.brokers.saxo.client import SIM_BASE_URL, SaxoClient, SaxoRateLimitError
 from broker_contract.contract import BrokerError, BrokerRateLimitError
 
 _VENUE = json.loads(
@@ -750,6 +752,49 @@ class TheRowsOwnIdentityIsRefusedRatherThanCoerced(unittest.TestCase):
             with self.subTest(uic=value):
                 self.assertIsNone(self._event(Uic=value).uic)
                 self.assertIsNone(self._trade(Uic=value).uic)
+
+
+class TheReadIsTypedAgainstTheRealClient(unittest.TestCase):
+    """``client: Any`` forfeited the only coupling this module has.
+
+    ``read_account_cash`` is a free function because ``saxo/broker.py`` sits
+    on its own size baseline, and its docstring explains the shape by the
+    cycle an import back into the adapter would make. But the three methods it
+    calls belong to ``SaxoClient``, in ``saxo/client.py``, which imports only
+    ``saxo.errors`` and ``saxo.tokens`` (verified) -- so naming that type
+    creates no cycle, and ``Any`` only hid a rename of ``account_key``,
+    ``from_date`` or ``to_date`` from pyright, which is a blocking CI step.
+
+    The fake stays a fake and is NOT swapped for the real client: it has to
+    answer a row that is not an object, a shape the real client's return type
+    forbids. What the second test does instead is check the fake's recorded
+    call against the real class, so the suite has power here too.
+    """
+
+    def test_the_client_parameter_names_the_saxo_client(self) -> None:
+        hints = get_type_hints(read_account_cash)
+        self.assertIs(hints["client"], SaxoClient)
+
+    def test_every_keyword_the_read_passes_is_one_the_real_client_declares(self) -> None:
+        """Derived from the call the read actually made, never from a literal.
+
+        The fake declares ``**kwargs: Any``, so it accepts any spelling and
+        the suite stays green under a rename on either side. These are the
+        names the read passed on a real run, checked against the signature of
+        the method it passed them to."""
+        client = _FakeClient()
+        SaxoBroker(client).list_account_cash(_SINCE, _UNTIL)  # type: ignore[arg-type]
+        methods = {
+            "bookings": SaxoClient.get_bookings_report,
+            "trades": SaxoClient.get_trades_report,
+            "balances": SaxoClient.get_balances,
+        }
+        self.assertEqual(sorted(dict(client.calls)), sorted(methods))
+        for endpoint, kwargs in client.calls:
+            declared = set(inspect.signature(methods[endpoint]).parameters)
+            for keyword in kwargs:
+                with self.subTest(endpoint=endpoint, keyword=keyword):
+                    self.assertIn(keyword, declared)
 
 
 class TheTwoMappingsOfTheSameRows(unittest.TestCase):
