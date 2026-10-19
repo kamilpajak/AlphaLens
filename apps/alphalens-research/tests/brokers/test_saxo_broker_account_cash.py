@@ -214,6 +214,17 @@ class TheCashEventMapping(unittest.TestCase):
             ),
         )
 
+    def test_the_instrument_id_is_an_int_and_not_a_float_that_compares_equal(self) -> None:
+        """``486.0 == 486`` is ``True``, and so is the dataclass comparison.
+
+        So the field-by-field test above cannot tell ``_opt_int`` from
+        ``_opt_float`` on this field. pyright does today -- the declared type
+        is ``int | None`` and pyright over the tree is a blocking CI step --
+        and it would stop the moment the annotation is loosened. The uic is a
+        key: Phase 4 groups rows by instrument and Phase 6 joins them to a
+        pick, and a float key misses a dict lookup that an equal int finds."""
+        self.assertIsInstance(self._event("58330463544").uic, int)
+
     def test_a_corporate_action_row_carries_its_event_name(self) -> None:
         """``CaEventName`` is present on exactly 2 of the 104 rows.
 
@@ -305,6 +316,10 @@ class TheTradeRowMapping(unittest.TestCase):
                 venue="Exchange",
             ),
         )
+
+    def test_the_instrument_id_is_an_int_and_not_a_float_that_compares_equal(self) -> None:
+        """The same swap on the trades side, invisible to the same comparison."""
+        self.assertIsInstance(self._row("6824247527").uic, int)
 
     def test_the_trade_rows_left_hand_keys_are_the_ones_read(self) -> None:
         """The trades side carries four uniform pairs of its own, and one of
