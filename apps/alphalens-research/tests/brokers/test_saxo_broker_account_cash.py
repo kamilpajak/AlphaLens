@@ -28,7 +28,7 @@ from alphalens_pipeline.brokers.account_cash import (
     TradeRow,
     VendorPayloadShapeError,
 )
-from alphalens_pipeline.brokers.fill_history import CostBooking, Execution, ReadWindow
+from alphalens_pipeline.brokers.fill_history import CostBooking, Execution, ReadWindow, _opt_int
 from alphalens_pipeline.brokers.saxo.broker import SaxoBroker
 from alphalens_pipeline.brokers.saxo.client import SIM_BASE_URL, SaxoRateLimitError
 from broker_contract.contract import BrokerError, BrokerRateLimitError
@@ -60,6 +60,20 @@ _BALANCE_BODY: dict[str, Any] = {
 
 _SINCE = dt.date(2026, 8, 1)
 _UNTIL = dt.date(2026, 10, 3)
+
+#: Marks a key the vendor did NOT send, so "absent" is expressible beside
+#: "sent as null". A dict override can only say the second, and the whole
+#: subject of the identity tests below is that the two are different facts.
+_ABSENT: Any = object()
+
+
+def _vendor_row(base: dict[str, Any], **overrides: Any) -> dict[str, Any]:
+    """``base`` with ``overrides`` applied, an ``_ABSENT`` value removing its key."""
+    row = {**base, **overrides}
+    for key, value in overrides.items():
+        if value is _ABSENT:
+            del row[key]
+    return row
 
 
 class _FakeClient:
@@ -555,6 +569,126 @@ class APayloadTheMappingCannotPlaceIsRefused(unittest.TestCase):
         self.assertEqual(read.events_window.rows, len(self.client.bookings))
         self.assertEqual(read.trades_window.rows, len(read.trades))
         self.assertEqual(read.trades_window.rows, len(self.client.trades))
+
+
+class TheRowsOwnIdentityIsRefusedRatherThanCoerced(unittest.TestCase):
+    """The store key, and the two fields beside it that must not invent a value.
+
+    Memo section 3 keys ``cash_events.jsonl`` on ``BkAmountId`` and folds the
+    journal latest-line-wins. ``str(row.get("BkAmountId", ""))`` turns an
+    absent key into ``''`` and a null into the string ``'None'``, so two rows
+    the vendor sent without a usable id fold onto ONE key: one cash movement
+    disappears while ``events_window.rows`` still equals the number published.
+    That is the claim :class:`VendorPayloadShapeError` exists to hold up, and
+    until now the refusal covered the payload SHAPE but not the one field the
+    store is keyed by.
+
+    The three fields are decided differently, on purpose:
+
+    * ``BkAmountId`` is the store key, so an absent, null or empty value is
+      refused and the whole window goes with it -- exactly as a row that is
+      not an object does.
+    * ``related_trade_id`` is not a key here, and must not invent a value
+      either: absent maps to ``None``, while a ``"0"`` the vendor SENT (the
+      two corporate-action rows) survives untouched. ``''`` was both at once.
+    * ``uic`` absent is legitimate -- a cash deposit has no instrument -- and
+      stays ``None``. A PRESENT value that cannot be read as an int is a
+      present-but-unusable fact, and Phase 4 groups rows by instrument, so it
+      is refused rather than nulled into the same bucket as "no instrument".
+    """
+
+    def setUp(self) -> None:
+        self.client = _FakeClient()
+        self.broker = SaxoBroker(self.client)  # type: ignore[arg-type]
+        self.booking_base = next(r for r in _VENUE["bookings"] if r["BkAmountId"] == "58330463544")
+        self.trade_base = next(r for r in _VENUE["trades"] if r["TradeId"] == "6824247527")
+
+    def _event(self, **overrides: Any) -> CashEvent:
+        self.client.bookings = [_vendor_row(self.booking_base, **overrides)]
+        read = self.broker.list_account_cash(_SINCE, _UNTIL)
+        assert read.events is not None
+        return read.events[0]
+
+    def _trade(self, **overrides: Any) -> TradeRow:
+        self.client.trades = [_vendor_row(self.trade_base, **overrides)]
+        read = self.broker.list_account_cash(_SINCE, _UNTIL)
+        assert read.trades is not None
+        return read.trades[0]
+
+    def test_a_row_the_vendor_sent_without_a_usable_id_refuses_the_whole_read(self) -> None:
+        """Absent, null and empty, each named in the refusal.
+
+        All 104 captured rows carry a non-empty ``BkAmountId``, so none of
+        these three shapes appears in the fixture: they are the shapes a
+        coercion to ``str`` makes indistinguishable from each other, and the
+        store cannot tell them apart afterwards."""
+        for value in (_ABSENT, None, "", "   "):
+            with self.subTest(bk_amount_id=value):
+                with self.assertRaises(VendorPayloadShapeError) as caught:
+                    self._event(BkAmountId=value)
+                self.assertIn("BkAmountId", str(caught.exception))
+
+    def test_two_id_less_rows_do_not_arrive_as_one_folded_record(self) -> None:
+        """The collapse the refusal prevents, in the shape the store would see.
+
+        Two rows, two different amounts, both with no id: coerced they share
+        the key ``''``, the fold keeps the last of them, and
+        ``events_window.rows`` still says 2."""
+        self.client.bookings = [
+            _vendor_row(self.booking_base, BkAmountId=_ABSENT, AmountAccountCurrency=-51.49),
+            _vendor_row(self.booking_base, BkAmountId=_ABSENT, AmountAccountCurrency=-2000.0),
+        ]
+        with self.assertRaises(VendorPayloadShapeError):
+            self.broker.list_account_cash(_SINCE, _UNTIL)
+
+    def test_an_absent_related_trade_id_is_none_and_not_the_empty_string(self) -> None:
+        """``''`` is a value the vendor never sends, and ``"0"`` is one it does.
+
+        Mapping absent to ``''`` puts the two one string apart on a field
+        Phase 4 reads to tell a trade booking from a corporate action."""
+        self.assertIsNone(self._event(RelatedTradeId=_ABSENT).related_trade_id)
+        self.assertIsNone(self._event(RelatedTradeId=None).related_trade_id)
+
+    def test_a_zero_related_trade_id_survives_as_the_vendor_sent_it(self) -> None:
+        """The two corporate-action rows carry ``"0"`` (see the CA row test).
+
+        So ``"0"`` must not be folded into the absent case: it is a value, and
+        this layer classifies nothing."""
+        self.assertEqual(self._event(RelatedTradeId="0").related_trade_id, "0")
+
+    def test_the_coercer_cannot_report_an_unreadable_instrument_id(self) -> None:
+        """Why the uic needs a refusal of its own rather than the coercer's.
+
+        ``_opt_int`` answers ``None`` for a present-but-unreadable value and
+        ``None`` for an absent one, so the mapping cannot tell "no instrument"
+        from "an instrument id this layer could not read" by its return value
+        alone. Measured: the string form of a whole number is the first case
+        and a float of the same number is not."""
+        self.assertIsNone(_opt_int("486.0"))
+        self.assertIsNone(_opt_int("oops"))
+        self.assertIsNone(_opt_int(None))
+        self.assertEqual(_opt_int(486.0), 486)
+
+    def test_a_present_instrument_id_that_is_not_an_int_refuses_the_read(self) -> None:
+        """On both row types: the capability reads ``Uic`` from both reports."""
+        for value in ("486.0", "oops", True, [486]):
+            with self.subTest(uic=value):
+                with self.assertRaises(VendorPayloadShapeError) as caught:
+                    self._event(Uic=value)
+                self.assertIn("Uic", str(caught.exception))
+                with self.assertRaises(VendorPayloadShapeError):
+                    self._trade(Uic=value)
+
+    def test_an_instrument_id_the_vendor_did_not_send_stays_none(self) -> None:
+        """A cash deposit has no instrument, so absent is an answer, not a defect.
+
+        Not observed on the capture -- all 104 bookings rows and all 41 trades
+        rows carry an int ``Uic``, the deposits included -- so only a
+        constructed row can tell this branch from the refusal beside it."""
+        for value in (_ABSENT, None):
+            with self.subTest(uic=value):
+                self.assertIsNone(self._event(Uic=value).uic)
+                self.assertIsNone(self._trade(Uic=value).uic)
 
 
 class TheTwoMappingsOfTheSameRows(unittest.TestCase):

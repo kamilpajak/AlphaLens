@@ -20,7 +20,9 @@ drops.
 
 The adapter REPORTS and the caller decides (#1122). Rows carry the vendor's
 values as sent: a signed amount stays signed, a booking type stays its raw
-string, a missing field stays ``None``. **Nothing here classifies.** There is
+string, a missing field stays ``None`` -- except on the two fields where a
+``None`` would read as another row's value, which :class:`VendorPayloadShapeError`
+refuses instead. **Nothing here classifies.** There is
 no bucket, no ``BkAmountType`` vocabulary and no total -- those are memo
 Phase 4, and a classifier keying on "a non-zero ``RelatedTradeId`` means a
 trade" folds 24 000 PLN of funding into trading P&L, because the three
@@ -64,7 +66,11 @@ SIM_REPORTS_UNUSABLE = "sim_reports_unusable"
 
 
 class VendorPayloadShapeError(BrokerError):
-    """A report row, or a balance body, that is not an object at all.
+    """A payload this mapping cannot place: a shape, or a row's own identity.
+
+    Three cases, and nothing else: a report row or a balance body that is not
+    an object at all; a row with no usable ``BkAmountId``, the field the store
+    is keyed on; and a PRESENT ``Uic`` that cannot be read as an int.
 
     The read REFUSES it instead of skipping it. This module's own claim --
     a sum over all rows is the period's whole money movement, and nothing can
@@ -75,10 +81,14 @@ class VendorPayloadShapeError(BrokerError):
     vanish, it makes an identity fail. Here the identity is that every row the
     vendor sent is a row the read published, and the refusal is what holds it.
 
-    This is NOT a refusal of a VALUE the mapping cannot read: a non-numeric
-    amount still maps to ``None`` and still does not raise, which is why the
-    coercers come from ``fill_history`` (see the module docstring). It covers
-    only the payload shape no coercer can be asked about.
+    This is NOT a refusal of every VALUE the mapping cannot read: a non-numeric
+    MONEY amount still maps to ``None`` and still does not raise, which is why
+    the coercers come from ``fill_history`` (see the module docstring). A
+    number the vendor garbled is one field of one row and the row count still
+    accounts for it. The two fields that do refuse are the ones a ``None``
+    would make another row's equal: the store key, where two rows then fold
+    onto one record, and the instrument id, where an unreadable value would
+    join the rows that genuinely have no instrument in Phase 4's grouping.
 
     A ``BrokerError`` subclass, so it carries the base ``failure_code`` of
     ``broker_failed`` and classifies at the CLI boundary instead of arriving
@@ -86,6 +96,48 @@ class VendorPayloadShapeError(BrokerError):
     is nothing for a caller to do differently about a vendor shape it cannot
     read, and a new code would need its own published row in the contract.
     """
+
+
+def _identity_or_refuse(row: dict[str, Any], key: str, *, report: str) -> str:
+    """The row's own key, refused rather than coerced when the vendor omits it.
+
+    ``str(row.get(key, ""))`` answers ``''`` for an absent key and the string
+    ``'None'`` for a null one, and both are keys the store would accept: memo
+    section 3 folds the journal latest-line-wins per key, so two such rows
+    become one record while the published row count still says two. Absent,
+    null and empty are one case here on purpose -- the store cannot tell them
+    apart afterwards either.
+    """
+    text = _opt_str(row.get(key))
+    if text is None:
+        raise VendorPayloadShapeError(
+            f"a {report} report row carries no usable {key} ({row.get(key)!r}), and the "
+            f"cash store is keyed on it with latest-line-wins, so two such rows would "
+            f"fold onto one record while the published row count still counted both"
+        )
+    return text
+
+
+def _instrument_id_or_refuse(row: dict[str, Any], key: str, *, report: str) -> int | None:
+    """``None`` when the vendor said nothing, the int when it did, a refusal otherwise.
+
+    Absent is an ANSWER on this field -- a cash deposit has no instrument --
+    so it stays ``None``. A present value no coercer can read is not that
+    answer, and ``_opt_int`` returns ``None`` for both cases, so the mapping
+    has to split them here or publish one as the other. Phase 4 groups rows by
+    instrument, which is where the two would meet.
+    """
+    value = row.get(key)
+    if value is None:
+        return None
+    number = _opt_int(value)
+    if number is None:
+        raise VendorPayloadShapeError(
+            f"a {report} report row carries {key}={value!r}, which is present and cannot "
+            f"be read as an int; mapped to None it would file the row under 'no "
+            f"instrument' beside the cash deposits, which is a different fact"
+        )
+    return number
 
 
 @dataclass(frozen=True)
@@ -105,14 +157,18 @@ class CashEvent:
     value_date: str | None
     uic: int | None
     instrument_symbol: str | None
-    related_trade_id: str
+    #: ``None`` when the vendor sent no ``RelatedTradeId`` at all. NEVER ``''``:
+    #: the two corporate-action rows carry a real ``"0"`` (memo section 1.1),
+    #: so an invented empty string would sit one character from a value the
+    #: vendor does send on a field Phase 4 reads to tell the two apart.
+    related_trade_id: str | None
     ca_event_name: str | None
 
     @classmethod
     def from_vendor_row(cls, row: dict[str, Any]) -> CashEvent:
         """Map one ``/cs/v1/reports/bookings`` row, field by field."""
         return cls(
-            bk_amount_id=str(row.get("BkAmountId", "")),
+            bk_amount_id=_identity_or_refuse(row, "BkAmountId", report="bookings"),
             bk_amount_type=str(row.get("BkAmountType", "")),
             amount_class=_opt_str(row.get("AmountClass")),
             amount=_opt_float(row.get("Amount")),
@@ -123,9 +179,9 @@ class CashEvent:
             conversion_cost_account_currency=_opt_float(row.get("ConversionRateAccountCurrency")),
             date=_opt_str(row.get("Date")),
             value_date=_opt_str(row.get("ValueDate")),
-            uic=_opt_int(row.get("Uic")),
+            uic=_instrument_id_or_refuse(row, "Uic", report="bookings"),
             instrument_symbol=_opt_str(row.get("InstrumentSymbol")),
-            related_trade_id=str(row.get("RelatedTradeId", "")),
+            related_trade_id=_opt_str(row.get("RelatedTradeId")),
             ca_event_name=_opt_str(row.get("CaEventName")),
         )
 
@@ -155,7 +211,7 @@ class TradeRow:
         return cls(
             trade_id=str(row.get("TradeId", "")),
             order_id=str(row.get("OrderId", "")),
-            uic=_opt_int(row.get("Uic")),
+            uic=_instrument_id_or_refuse(row, "Uic", report="trades"),
             instrument_symbol=_opt_str(row.get("InstrumentSymbol")),
             amount=_opt_float(row.get("Amount")),
             price=_opt_float(row.get("Price")),
