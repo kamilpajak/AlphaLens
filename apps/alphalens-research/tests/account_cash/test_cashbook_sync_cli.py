@@ -43,6 +43,14 @@ LIVE_FACTORY_SEAM = "alphalens_pipeline.brokers.saxo.broker.create_saxo_broker_l
 SHOW_SEAM = "alphalens_pipeline.brokers.automanager.unit_env._systemctl_show"
 READ_SEAM = "alphalens_pipeline.brokers.automanager.unit_env._read_text"
 
+#: The exit statuses this group answers, from the repo CLI doctrine. They are
+#: asserted by VALUE rather than as "non-zero": the status is the one thing a
+#: shell caller reads without parsing the JSON, and 7 vs 1 is what tells it
+#: whether re-running is safe without reconciling anything first.
+_EXIT_FAILED = 1
+_EXIT_USAGE = 2
+_EXIT_TRANSIENT = 7
+
 _SINCE = "2026-08-01"
 _UNTIL = "2026-10-03"
 _NOW = dt.datetime(2026, 10, 9, 0, 31, tzinfo=dt.UTC)
@@ -115,13 +123,20 @@ def _json_lines(stderr: str) -> list[dict]:
 
 
 def _failure_from(result) -> dict:
-    """The one failure object on a JSON-mode stderr.
+    """The one failure object on a JSON-mode stderr, and it is the LAST line.
 
     stderr carries operator chrome too (the ``env=… gateway=…`` banner), so the
-    machine rule is "exactly one stderr line is a JSON object".
+    machine rule has two halves: exactly one stderr line is a JSON object, AND
+    it is the last line. Both are asserted here rather than in one test,
+    because a caller that reads the last line is broken by chrome printed
+    after the object no matter which refusal produced it.
     """
     objects = _json_lines(result.stderr)
     assert len(objects) == 1, f"expected exactly one JSON line on stderr, got {objects}"
+    lines = [line for line in result.stderr.splitlines() if line.strip()]
+    assert _json_lines(lines[-1]) == objects, (
+        f"the failure object must be the LAST stderr line, got {lines[-1]!r}"
+    )
     return objects[0]
 
 
@@ -291,7 +306,7 @@ class AUsageRefusalRendersTheWayTheCallerAsked(_CashbookCliCase):
     def test_an_unknown_format_exits_two_with_stdout_empty(self) -> None:
         result = self.sync("--dry-run", "--format", "xml")
 
-        self.assertEqual(result.exit_code, 2)
+        self.assertEqual(result.exit_code, _EXIT_USAGE)
         self.assertEqual(result.stdout, "")
 
     def test_a_bad_date_exits_two_in_the_format_the_caller_asked_for(self) -> None:
@@ -299,7 +314,7 @@ class AUsageRefusalRendersTheWayTheCallerAsked(_CashbookCliCase):
             ["sync", "--since", "nope", "--until", _UNTIL, "--format", "json", "--dry-run"]
         )
 
-        self.assertEqual(result.exit_code, 2)
+        self.assertEqual(result.exit_code, _EXIT_USAGE)
         self.assertEqual(result.stdout, "")
         failure = _failure_from(result)
         self.assertEqual(failure["code"], "usage")
@@ -310,11 +325,48 @@ class AUsageRefusalRendersTheWayTheCallerAsked(_CashbookCliCase):
             ["sync", "--since", _UNTIL, "--until", _SINCE, "--format", "json", "--dry-run"]
         )
 
-        self.assertEqual(result.exit_code, 2)
+        self.assertEqual(result.exit_code, _EXIT_USAGE)
         self.assertEqual(result.stdout, "")
         failure = _failure_from(result)
         self.assertEqual(failure["code"], "usage")
         self.assertEqual(failure["details"]["option"], "--since")
+
+    def test_an_unknown_instance_name_is_refused_before_a_vendor_is_touched(self) -> None:
+        """``--env prod`` dies in ``_apply_env_option``, the broker group's own
+        door, and keeps that door's message: ``state_paths`` names the VARIABLE
+        and the offending value (D1), and the same sentence is what an explicit
+        option gets. A second spelling here would make this the only command in
+        the family that answers differently for one refusal."""
+        result = self.invoke(
+            ["sync", "--since", _SINCE, "--until", _UNTIL, "--env", "prod", "--format", "json"]
+        )
+
+        self.assertEqual(result.exit_code, _EXIT_USAGE)
+        self.assertEqual(result.stdout, "")
+        failure = _failure_from(result)
+        self.assertEqual(failure["code"], "usage")
+        self.assertIn("prod", failure["message"])
+        self.assertEqual(self.broker.calls, [])
+
+    def test_an_unknown_ambient_instance_is_refused_by_this_command_itself(self) -> None:
+        """The other door, and the one this module owns: with no ``--env`` the
+        instance comes from the ambient variable, which ``_apply_env_option``
+        never validates. This command resolves it itself, before any broker,
+        because it needs the value for the store root — so without its own
+        guard the ``ValueError`` escapes as a traceback at exit 1 instead of a
+        usage object, which is the mutation this test exists to catch."""
+        os.environ["ALPHALENS_BROKER_ENVIRONMENT"] = "prod"
+
+        result = self.invoke(
+            ["sync", "--since", _SINCE, "--until", _UNTIL, "--format", "json", "--dry-run"]
+        )
+
+        self.assertEqual(result.exit_code, _EXIT_USAGE)
+        self.assertEqual(result.stdout, "")
+        failure = _failure_from(result)
+        self.assertEqual(failure["code"], "usage")
+        self.assertIn("prod", failure["message"])
+        self.assertEqual(self.broker.calls, [])
 
 
 class TheRefusalsCarryTheirOwnCode(_CashbookCliCase):
@@ -325,7 +377,7 @@ class TheRefusalsCarryTheirOwnCode(_CashbookCliCase):
         self.broker = _FakeCashBroker(_sim_read())
         result = self.sync("--format", "json", env="sim")
 
-        self.assertNotEqual(result.exit_code, 0)
+        self.assertEqual(result.exit_code, _EXIT_FAILED)
         self.assertEqual(result.stdout, "")
         failure = _failure_from(result)
         self.assertEqual(failure["code"], "cashbook_sync_refused")
@@ -337,7 +389,7 @@ class TheRefusalsCarryTheirOwnCode(_CashbookCliCase):
         and the WRITE guard refuses them. One code, two reasons."""
         result = self.sync("--format", "json", env="sim")
 
-        self.assertNotEqual(result.exit_code, 0)
+        self.assertEqual(result.exit_code, _EXIT_FAILED)
         self.assertEqual(result.stdout, "")
         failure = _failure_from(result)
         self.assertEqual(failure["code"], "cashbook_sync_refused")
@@ -349,7 +401,7 @@ class TheRefusalsCarryTheirOwnCode(_CashbookCliCase):
         self.broker = _FakeBrokerWithoutTheCapability()
         result = self.sync("--format", "json")
 
-        self.assertNotEqual(result.exit_code, 0)
+        self.assertEqual(result.exit_code, _EXIT_FAILED)
         self.assertEqual(result.stdout, "")
         self.assertEqual(_failure_from(result)["code"], "broker_unsupported")
 
@@ -365,7 +417,7 @@ class TheRefusalsCarryTheirOwnCode(_CashbookCliCase):
         with mock.patch.object(sweep, "_LOCK_ACQUIRE_TIMEOUT_S", 0.0):
             result = self.sync("--format", "json")
 
-        self.assertNotEqual(result.exit_code, 0)
+        self.assertEqual(result.exit_code, _EXIT_TRANSIENT)
         self.assertEqual(result.stdout, "")
         failure = _failure_from(result)
         self.assertEqual(failure["code"], "cashbook_sweep_busy")
@@ -382,13 +434,21 @@ class TheRefusalsCarryTheirOwnCode(_CashbookCliCase):
         with mock.patch.object(cashbook_module, "_render_json", side_effect=_cannot_render):
             result = self.sync("--format", "json")
 
-        self.assertNotEqual(result.exit_code, 0)
+        self.assertEqual(result.exit_code, _EXIT_FAILED)
         self.assertEqual(result.stdout, "")
         self.assertEqual(self.journal_files(), {})
 
     def test_a_failed_append_reports_queue_write_failed_not_a_traceback(self) -> None:
         """The first journal of the sequence is unwritable, the lock is not: the
-        refusal must name the file it could not append to."""
+        refusal must name the file it could not append to.
+
+        The MESSAGE is asserted, not only the code: a sweep touches the lock and
+        then four journals, both failures report ``queue_write_failed``, and
+        ``details.journal`` resolves to the same file through the wrapped
+        ``OSError``'s own ``filename``. So the message is the only thing that
+        tells an operator whether to look at the lock or at the journal, and
+        without this assertion the append branch can be deleted outright.
+        """
         journal = paths.cash_events_path("live")
         journal.parent.mkdir(parents=True)
         journal.touch()
@@ -397,12 +457,13 @@ class TheRefusalsCarryTheirOwnCode(_CashbookCliCase):
 
         result = self.sync("--format", "json")
 
-        self.assertNotEqual(result.exit_code, 0)
+        self.assertEqual(result.exit_code, _EXIT_TRANSIENT)
         self.assertEqual(result.stdout, "")
         failure = _failure_from(result)
         self.assertEqual(failure["code"], "queue_write_failed")
         self.assertTrue(failure["retryable"])
         self.assertEqual(failure["details"]["journal"], str(journal))
+        self.assertIn("could not append to the account cash book", failure["message"])
 
     def test_an_unwritable_store_root_refuses_at_the_lock_with_the_same_code(self) -> None:
         """The lock is taken BEFORE the first append, so an unwritable root
@@ -415,11 +476,12 @@ class TheRefusalsCarryTheirOwnCode(_CashbookCliCase):
 
         result = self.sync("--format", "json")
 
-        self.assertNotEqual(result.exit_code, 0)
+        self.assertEqual(result.exit_code, _EXIT_TRANSIENT)
         self.assertEqual(result.stdout, "")
         failure = _failure_from(result)
         self.assertEqual(failure["code"], "queue_write_failed")
         self.assertEqual(failure["details"]["journal"], str(paths.sweep_lock_path("live")))
+        self.assertIn("sweep lock", failure["message"])
 
 
 def _cannot_render(payload: Any) -> None:
