@@ -31,6 +31,14 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+import typer
+from alphalens_pipeline.brokers.account_cash import (
+    AccountCashRead,
+    BalanceSnapshot,
+    CashEvent,
+    TradeRow,
+)
+from alphalens_pipeline.brokers.fill_history import ReadWindow
 from broker_contract.contract import (
     AccountSnapshot,
     InstrumentRef,
@@ -38,6 +46,8 @@ from broker_contract.contract import (
     OrderStatus,
 )
 from typer.testing import CliRunner
+
+from tests.brokers.automanager.trades_fixture import VENUE
 
 REGISTRY_SEAM = "alphalens_pipeline.brokers.registry.get_default_broker"
 LIVE_FACTORY_SEAM = "alphalens_pipeline.brokers.saxo.broker.create_saxo_broker_live_from_env"
@@ -172,6 +182,50 @@ _JSON_COMMANDS: tuple[tuple[str, list[str], bool, tuple[str, ...]], ...] = (
     ),
 )
 
+# The same contract, on the second group built on the same envelope (#1689).
+# Kept as its own table because the two groups are two Typer apps and the
+# schema prefix names the group; `TableCoversEveryJsonCommand` reads BOTH
+# against their own app, so a `cashbook` command that grows `--format` and is
+# not listed here fails exactly the way a broker one does.
+#
+# `--dry-run` is in the argv deliberately: the table runs every row several
+# times, and a sweep without it would APPEND to the cash book under the
+# isolated home.
+#
+# `--env live` is in it for a different reason: since #1689 F1 a sweep
+# authorises in BOTH directions, so the store's live-only write guard refuses a
+# SIM sweep whether or not it is a dry run. LIVE is therefore the only instance
+# on which a success-shaped row can run at all, which is why the refusal is
+# what `test_the_env_option_reaches_the_command` asserts below.
+_CASHBOOK_TABLE_ENV = "live"
+_CASHBOOK_JSON_COMMANDS: tuple[tuple[str, list[str], bool, tuple[str, ...]], ...] = (
+    (
+        "sync",
+        [
+            "sync",
+            "--since",
+            "2026-08-01",
+            "--until",
+            "2026-10-03",
+            "--dry-run",
+            "--env",
+            _CASHBOOK_TABLE_ENV,
+        ],
+        True,
+        (
+            "dry_run",
+            "synced",
+            "asked",
+            "read",
+            "appended",
+            "already_present",
+            "restated",
+            "malformed",
+            "journals",
+        ),
+    ),
+)
+
 
 # The commands that APPEND to an instance inbox. They refuse an ambient
 # ALPHALENS_BROKER_ENVIRONMENT that disagrees with their default instead of
@@ -283,6 +337,31 @@ class _ContractFakeBroker:
     def resolve_order_outcome(self, order_id: str) -> OrderState:
         return self.open_orders[0]
 
+    def list_account_cash(self, since: dt.date, until: dt.date) -> AccountCashRead:
+        """The account-cash capability ``cashbook sync`` needs (#1689).
+
+        Built from the same LIVE fixture the fill-history fake uses. Without
+        it the command refuses with ``broker_unsupported`` and prints nothing
+        on stdout, so the cashbook rows of the table could not pass.
+        """
+        events = tuple(CashEvent.from_vendor_row(row) for row in VENUE["bookings"])
+        trades = tuple(TradeRow.from_vendor_row(row) for row in VENUE["trades"])
+        return AccountCashRead(
+            events=events,
+            trades=trades,
+            balance=BalanceSnapshot(
+                currency="PLN",
+                cash_balance=20_738.68,
+                non_margin_positions_value=3_422.56,
+                total_value=24_161.24,
+                transactions_not_booked=0.0,
+                calculation_reliability="Ok",
+                asof=dt.datetime(2026, 10, 3, 15, 30, tzinfo=dt.UTC),
+            ),
+            events_window=ReadWindow(since.isoformat(), until.isoformat(), len(events)),
+            trades_window=ReadWindow(since.isoformat(), until.isoformat(), len(trades)),
+        )
+
 
 class _BrokerCliCase(unittest.TestCase):
     """Isolated home + textfile dir + a read-only broker on the registry seam."""
@@ -315,8 +394,12 @@ class _BrokerCliCase(unittest.TestCase):
         ]
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    def invoke(self, argv: list[str]):
+    def invoke(self, argv: list[str], *, app: typer.Typer | None = None):
         """Run one broker command with the SIM and LIVE gateways both faked.
+
+        ``app`` names the Typer group, defaulting to ``broker_app``: since
+        #1689 a second group is built on the same envelope and the same broker
+        seams, and it needs this exact set of patches.
 
         `arm` reads its document through a patched seam, so the table can
         exercise its envelope without a file. Inert for every other command.
@@ -340,7 +423,7 @@ class _BrokerCliCase(unittest.TestCase):
                 return_value=dt.datetime.combine(_ARM_TRADE_DATE, dt.time(15), tzinfo=dt.UTC),
             ),
         ):
-            return self.runner.invoke(broker_app, argv)
+            return self.runner.invoke(broker_app if app is None else app, argv)
 
 
 class JsonEnvelopeContractTest(_BrokerCliCase):
@@ -504,6 +587,63 @@ class StrictJsonTest(_BrokerCliCase):
         self.assertEqual(payload["gauges"]["a_up"], 1.5)
 
 
+class CashbookJsonEnvelopeContractTest(_BrokerCliCase):
+    """The same three rules, on the second group built on the same envelope.
+
+    Held here rather than beside the cashbook's own behaviour tests so the
+    group cannot keep its own idea of the contract: the rules are the group's
+    only because they are the CLI's.
+    """
+
+    def invoke_cashbook(self, argv: list[str]):
+        from alphalens_cli.commands.cashbook import cashbook_app
+
+        return self.invoke(argv, app=cashbook_app)
+
+    def test_stdout_is_exactly_one_json_object_carrying_schema_and_env(self) -> None:
+        for name, argv, _env, keys in _CASHBOOK_JSON_COMMANDS:
+            with self.subTest(command=name):
+                result = self.invoke_cashbook([*argv, "--format", "json"])
+                self.assertEqual(result.exit_code, 0, result.output)
+                payload = _strict_json(result.stdout)
+                self.assertEqual(list(payload)[:2], ["schema", "env"])
+                self.assertEqual(payload["schema"], f"alphalens.cashbook.{name}/v1")
+                self.assertEqual(payload["env"], _CASHBOOK_TABLE_ENV)
+                self.assertEqual(
+                    len(result.stdout.strip().splitlines()),
+                    1,
+                    f"{name} must print one compact JSON line",
+                )
+                for key in keys:
+                    self.assertIn(key, payload, f"{name} must carry {key}")
+
+    def test_the_env_option_reaches_the_command(self) -> None:
+        """The other instance, which cannot answer an envelope at all.
+
+        A sweep authorises in both directions (#1689 F1), so SIM is refused by
+        the store's live-only write guard whether or not it is a dry run. What
+        "the option reached the command" looks like here is therefore the
+        refusal and an empty stdout, not a second envelope — click keeps the
+        LAST value of a repeated option, so the `--env sim` below is what the
+        command resolves.
+        """
+        for name, argv, has_env_option, _keys in _CASHBOOK_JSON_COMMANDS:
+            if not has_env_option:
+                continue
+            with self.subTest(command=name):
+                result = self.invoke_cashbook([*argv, "--env", "sim", "--format", "json"])
+                self.assertEqual(result.exit_code, 1, result.output)
+                self.assertEqual(result.stdout, "")
+                self.assertIn("sim_store_refused", result.stderr)
+
+    def test_a_refusal_leaves_stdout_empty(self) -> None:
+        for name, argv, _env, _keys in _CASHBOOK_JSON_COMMANDS:
+            with self.subTest(command=name):
+                result = self.invoke_cashbook([*argv, "--format", "xml"])
+                self.assertEqual(result.exit_code, 2)
+                self.assertEqual(result.stdout, "")
+
+
 class TableCoversEveryJsonCommand(unittest.TestCase):
     """The table is checked against the APP, not maintained by hope.
 
@@ -513,16 +653,25 @@ class TableCoversEveryJsonCommand(unittest.TestCase):
     """
 
     def test_every_command_declaring_format_is_in_the_table(self) -> None:
+        """Both groups, each against its own table.
+
+        Reading `broker_app` alone was enough until #1689 gave the envelope a
+        second group: a `cashbook` command declaring `--format` would then have
+        gone red NOWHERE.
+        """
         import typer.main
         from alphalens_cli.commands.broker import broker_app
+        from alphalens_cli.commands.cashbook import cashbook_app
 
-        group = typer.main.get_command(broker_app)
-        declaring = {
-            name
-            for name, command in group.commands.items()  # type: ignore[attr-defined]
-            if any("--format" in param.opts for param in command.params)
-        }
-        self.assertEqual(declaring, {name for name, _argv, _env, _keys in _JSON_COMMANDS})
+        for app, table in ((broker_app, _JSON_COMMANDS), (cashbook_app, _CASHBOOK_JSON_COMMANDS)):
+            with self.subTest(group=app.info.name):
+                group = typer.main.get_command(app)
+                declaring = {
+                    name
+                    for name, command in group.commands.items()  # type: ignore[attr-defined]
+                    if any("--format" in param.opts for param in command.params)
+                }
+                self.assertEqual(declaring, {name for name, _argv, _env, _keys in table})
 
 
 class ReconcileEmptyJournalTest(_BrokerCliCase):

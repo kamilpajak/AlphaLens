@@ -106,7 +106,18 @@ ALLOWED_EXCLUDED_FILE_PREFIXES = ("test_",)
 # asked for in the diff. Lower one when the file shrinks; raise one
 # deliberately, in the PR that needs the room.
 BASELINE: dict[str, int] = {
-    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3507,
+    # Lowered from 3507 in #1689: the JSON envelope and the failure contract
+    # moved to `commands/_cli_envelope.py`, which took 345 lines out of this
+    # file. The old entry left it 6 lines above the stale floor (3507 x 0.9 =
+    # 3156.3), so the next small deletion anywhere in the file would have gone
+    # red for a reason that had nothing to do with it.
+    # Raised by 6 in #1689's review: the re-export comment above that import
+    # block said every test patching one of those names HERE keeps resolving,
+    # which is true of resolving and false of patching. Six lines buy the
+    # distinction, the mechanism (a function's globals are its DEFINING module)
+    # and the measurement. Asked for rather than paid for by deleting six lines
+    # of someone else's explanation, which is how a ratchet gets gamed.
+    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3168,
     "apps/alphalens-pipeline/alphalens_cli/commands/thematic.py": 1708,
     # Raised again, by 8, to say that the raise page's ticker fallback is
     # unreachable by construction. It sits beside the stop-PLACED page's

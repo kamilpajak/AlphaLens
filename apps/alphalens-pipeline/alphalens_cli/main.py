@@ -8,6 +8,7 @@ Top-level commands:
 Groups:
     broker/             — broker execution layer reads (SIM-only, ADR 0014)
     buffett/            — Buffett Mode-A observational lens over the brief (ad hoc)
+    cashbook/           — the account's own cash book: what the money did (#1689)
     edgar/              — Layer 1 SEC EDGAR event detection (LIVE)
     events/             — event-sourced candidate lane (epic #1293)
     literature/         — Perplexity scan via VPS systemd (LIVE)
@@ -28,6 +29,7 @@ from alphalens_cli.commands.audit import audit_command
 from alphalens_cli.commands.broker import broker_app
 from alphalens_cli.commands.buffett import buffett_app
 from alphalens_cli.commands.cache import cache_app
+from alphalens_cli.commands.cashbook import cashbook_app
 from alphalens_cli.commands.doctrine import audit_verdict_command
 from alphalens_cli.commands.edgar import edgar_app
 from alphalens_cli.commands.events import events_app
@@ -81,6 +83,7 @@ def _root_callback() -> None:
 app.add_typer(broker_app, name="broker")
 app.add_typer(buffett_app, name="buffett")
 app.add_typer(cache_app, name="cache")
+app.add_typer(cashbook_app, name="cashbook")
 app.add_typer(edgar_app, name="edgar")
 app.add_typer(events_app, name="events")
 app.add_typer(experts_app, name="experts")

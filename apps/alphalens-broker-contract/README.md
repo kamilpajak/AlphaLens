@@ -22,8 +22,11 @@ the daemon's own answers is what keeps the behaviour pinned).
 
 ## The failure contract (#1389)
 
-Every refusal or breakage the `alphalens broker` command group reports is one
-object, defined by `broker_contract.failure`:
+Every refusal or breakage the CLI's broker-family command groups report is one
+object, defined by `broker_contract.failure`. `alphalens broker` is the group
+this contract was written for; `alphalens cashbook` (#1689) reports through the
+same envelope, the same emitters and the same registry, so its codes are in the
+table below rather than in a second table of their own:
 
 ```json
 {
@@ -70,8 +73,10 @@ breaking change, so `unclassified` must never be a branch condition. Read it as
 | `pick_not_writable` | CLI | no | This pick key cannot take a write: the generation was disarmed, refused or expired, the daemon has already placed it, or the pick's validity window has already ended. `details.reason` is `generation_spent`, `already_placed` or `window_ended`. Carries a `suggestions` argv. |
 | `intent_malformed` | CLI | no | The submitted document does not match the published wire contract. `details.reason` names which gate refused it (see below). Nothing was queued. |
 | `venue_unsupported` | CLI | no | The document is well formed; this deployment does not trade that MIC. `details.mic` carries the venue. A venue list is deployment knowledge, never a document rule (#1122, #1404). |
-| `queue_write_failed` | CLI | **yes** | Appending to a broker journal failed (disk full, permissions). Nothing was queued and no broker order can be in flight — the commands that report this write only to the queue — so the same command may be re-run once the cause clears. `details.journal` names the file. |
+| `queue_write_failed` | CLI | **yes** | Appending to an append-only journal failed (disk full, permissions): a broker queue journal, or the account cash book. No broker order can be in flight either way — the commands that report this either write only to the queue or place nothing at all — and a cash-book sweep appends in an order that leaves a partial sweep for a re-sweep to close, so the same command may be re-run once the cause clears. One caveat on that re-run: a cash-book sweep's balance line is keyed on the sweep id, so if `balances.jsonl` holds a trailing `sweep_id` that `sweeps.jsonl` has no record for, re-run with `alphalens cashbook sync --sweep-id <that id>` — a fresh id adds a second snapshot instead of closing the window. `details.journal` names the file, and is null only when the failure identified none — or when what failed was not an append at all: a cash-book sweep that could not take its own lock publishes that path under `details.lock`, the key `cashbook_sweep_busy` already uses, and leaves `details.journal` null. |
 | `stream_metrics_missing` | CLI | no | The stream gauge textfile does not exist for this instance. Carries a `suggestions` argv. |
+| `cashbook_sync_refused` | CLI | no | The cash-book sweep will not read or store this account's cash. `details.reason` names which rule refused it (see below) and `details.env` names the instance. |
+| `cashbook_sweep_busy` | CLI | **yes** | Another sweep holds this instance's cash-book lock. Nothing was appended, so re-running needs no reconcile first. `details.lock` names the file. |
 | `unclassified` | CLI | no | Not yet given a code. Never branch on it. |
 
 #### `intent_invalid` publishes its `details` keys
@@ -117,6 +122,20 @@ deployment take it (`venue_unsupported`, `pick_not_writable`).
 | `pick_not_writable` | `generation_spent` | that generation was disarmed, refused or expired; a spent generation never comes back |
 | | `already_placed` | the daemon has already placed this pick, so rewriting it would change the queue and not the market |
 | | `window_ended` | the pick's validity window (`order_ttl_days` sessions after `trade_date`, see "The validity window") is already over, so the daemon would expire it unplaced on its next tick; `details.window_end` names the end. Typical cause: a copied armed line, or a re-arm under the next generation, keeps its old `trade_date` |
+
+#### `cashbook_sync_refused` publishes a `reason` too
+
+Same shape again, for a different store: one code for the mode "this sweep will
+not put these rows in the cash book", with a closed `details.reason` naming
+which rule refused it. The two reasons are the two halves of the same memo
+decision — the SIM report endpoints answer with canned rows belonging to other
+accounts, and storing fiction in a money store is worse than storing nothing —
+so one of them refuses the READ and the other refuses the WRITE.
+
+| code | `details.reason` | what refused |
+|---|---|---|
+| `cashbook_sync_refused` | `sim_reports_unusable` | the read answered nothing storable and said why: on SIM the bookings and trades reports are canned rows from other accounts. Nothing was read, so nothing can be stored |
+| | `sim_store_refused` | a write was aimed at a non-live environment. The store's write guard refuses it over every appender, so the environment's store root does not even come into existence |
 
 #### The exit declaration, and what it may say
 

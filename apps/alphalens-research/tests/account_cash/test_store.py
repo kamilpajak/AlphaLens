@@ -230,6 +230,60 @@ class EveryAppenderRefusesANonLiveEnvironment(IsolatedHomeTestCase):
                 self.assertNotIn("Path", annotations)
 
 
+class TheWriteGuardCanBeAskedWithoutWriting(IsolatedHomeTestCase):
+    """``assert_writable`` exists so a CALLER can authorise before it plans.
+
+    The appenders reach the guard on their way to a path, which is the right
+    shape for a write but reaches nobody who is not about to write. The CLI's
+    ``--dry-run`` writes nothing by construction, so it never touched an
+    appender and therefore never authorised: it reported a success for a sweep
+    the same invocation without ``--dry-run`` refuses (#1689 F1). Copying the
+    live-only rule into the CLI instead would be one rule computed on two
+    sides, which is the defect this repo has already paid for.
+    """
+
+    def test_a_non_live_environment_is_refused_with_the_appenders_own_reason(self) -> None:
+        with self.assertRaises(store.SimCashBookRefusedError) as ctx:
+            store.assert_writable(_SIM)
+        self.assertEqual(ctx.exception.reason, store.SIM_STORE_REFUSED)
+        self.assertEqual(ctx.exception.env, _SIM)
+
+    def test_asking_about_sim_creates_nothing(self) -> None:
+        """The root must not come into existence on SIM, and an authorisation
+        question must not be the thing that creates it."""
+        with self.assertRaises(store.SimCashBookRefusedError):
+            store.assert_writable(_SIM)
+        self.assertFalse(paths.account_cash_root(_SIM).exists())
+
+    def test_live_is_allowed_and_asking_creates_nothing_either(self) -> None:
+        self.assertIsNone(store.assert_writable(_LIVE))
+        self.assertFalse(paths.account_cash_root(_LIVE).exists())
+
+    def test_an_unknown_environment_is_a_value_error_and_not_the_sim_reason(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            store.assert_writable("prod")
+        self.assertNotIsInstance(ctx.exception, store.SimCashBookRefusedError)
+
+    def test_it_delegates_to_the_appenders_guard_rather_than_restating_it(self) -> None:
+        """The whole reason it lives in this module: one function decides.
+
+        Read off the SOURCE, because a second copy of ``!= ENV_LIVE`` here
+        would behave identically today and drift the first time the rule
+        changes.
+        """
+        node = next(
+            item
+            for item in _store_ast().body
+            if isinstance(item, ast.FunctionDef) and item.name == "assert_writable"
+        )
+        called = {
+            child.func.id
+            for child in ast.walk(node)
+            if isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
+        }
+        self.assertEqual(called, {"_writable_root"})
+
+
 class TheAppenderWritesThroughTheSharedJournalWriter(IsolatedHomeTestCase):
     def test_no_default_serialiser_is_passed_to_the_appender(self) -> None:
         """``default=str`` would turn an unrepresentable money value into a

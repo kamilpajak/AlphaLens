@@ -42,6 +42,8 @@ CLI_OWNED_CODES = frozenset(
         "intent_malformed",
         "venue_unsupported",
         "stream_metrics_missing",
+        "cashbook_sync_refused",
+        "cashbook_sweep_busy",
         "unclassified",
     }
 )

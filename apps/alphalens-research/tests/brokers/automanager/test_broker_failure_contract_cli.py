@@ -43,13 +43,47 @@ from typer.testing import CliRunner
 
 REGISTRY_SEAM = "alphalens_pipeline.brokers.registry.get_default_broker"
 
-BROKER_CLI = (
-    Path(__file__).resolve().parents[4]
-    / "alphalens-pipeline"
-    / "alphalens_cli"
-    / "commands"
-    / "broker.py"
+_COMMANDS_DIR = (
+    Path(__file__).resolve().parents[4] / "alphalens-pipeline" / "alphalens_cli" / "commands"
 )
+
+BROKER_CLI = _COMMANDS_DIR / "broker.py"
+
+#: The envelope and the failure emitters, moved out of `broker.py` in #1689.
+#: `_fail_with` is DEFINED here, so this is where its unregistered-code warning
+#: is logged and where a second code-resolving helper would hide.
+ENVELOPE_CLI = _COMMANDS_DIR / "_cli_envelope.py"
+
+#: The second group built on the same envelope (#1689). It emits codes of its
+#: own, so the registry walk must read it too.
+CASHBOOK_CLI = _COMMANDS_DIR / "cashbook.py"
+
+#: Every module that reaches the emitters. One entry per module, so a new group
+#: built on this envelope is added here rather than silently uncovered.
+EMITTING_CLI_MODULES = (BROKER_CLI, ENVELOPE_CLI, CASHBOOK_CLI)
+
+
+def _modules_importing_the_envelope() -> set[Path]:
+    """Every command module that reaches the emitters, found by its IMPORTS.
+
+    The floor under :data:`EMITTING_CLI_MODULES`: that tuple is hand-written,
+    so without this a new group built on the shared envelope — or an existing
+    entry deleted — leaves the registry walks above reading fewer modules than
+    emit codes, which is green and blind.
+    """
+    found: set[Path] = set()
+    for path in sorted(_COMMANDS_DIR.glob("*.py")):
+        if path == ENVELOPE_CLI:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.ImportFrom)
+                and node.module is not None
+                and node.module.split(".")[-1] == ENVELOPE_CLI.stem
+            ):
+                found.add(path)
+    return found
 
 
 def _json_lines(stderr: str) -> list[dict]:
@@ -81,7 +115,27 @@ def _failure_from(result) -> dict:
 
 
 def _module_ast() -> ast.Module:
+    """``broker.py`` ALONE.
+
+    Kept for the two walks whose subject is a broker command: the arming
+    commands stayed here, so widening them to the whole family would assert a
+    property of `broker.py` against modules that do not arm.
+    """
     return ast.parse(BROKER_CLI.read_text(encoding="utf-8"), filename=str(BROKER_CLI))
+
+
+def _module_asts() -> tuple[ast.Module, ...]:
+    """Every module that emits a failure code through this one contract.
+
+    The registry walks must read every one of them: after #1689 the emitters
+    live in ``_cli_envelope.py``, so a walk over ``broker.py`` alone would stop
+    seeing the helper definitions and would see no sibling group's codes at
+    all — green, and blind.
+    """
+    return tuple(
+        ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for path in EMITTING_CLI_MODULES
+    )
 
 
 # The ONE documented indirection: this helper reads the code off the caught
@@ -393,9 +447,10 @@ class EveryEmittedCodeIsRegistered(unittest.TestCase):
     def test_every_fail_with_call_uses_a_registered_code(self) -> None:
         from alphalens_cli.commands.broker import _FAILURE_CODES
 
-        for code in _fail_with_codes(_module_ast()):
-            self.assertIsNotNone(code, "_fail_with must be called with a literal code")
-            self.assertIn(code, _FAILURE_CODES)
+        for tree in _module_asts():
+            for code in _fail_with_codes(tree):
+                self.assertIsNotNone(code, "_fail_with must be called with a literal code")
+                self.assertIn(code, _FAILURE_CODES)
 
     def test_the_walk_can_actually_fail(self) -> None:
         """Positive control: the same walk over a snippet with an invented code
@@ -418,9 +473,9 @@ class EveryEmittedCodeIsRegistered(unittest.TestCase):
         """The exemption is a hole in the gate, so it must stay one hole. If a
         second helper starts resolving codes at runtime, this fails and forces
         the decision to be made again rather than inherited."""
-        tree = _module_ast()
         resolving = {
             node.name
+            for tree in _module_asts()
             for node in ast.walk(tree)
             if isinstance(node, ast.FunctionDef)
             and any(
@@ -439,7 +494,28 @@ class EveryEmittedCodeIsRegistered(unittest.TestCase):
 
     def test_the_module_actually_emits_codes(self) -> None:
         """Guard against the gate passing because it found nothing at all."""
-        self.assertGreater(len(_fail_with_codes(_module_ast())), 5)
+        emitted = [code for tree in _module_asts() for code in _fail_with_codes(tree)]
+
+        self.assertGreater(len(emitted), 5)
+
+
+class TheWalkedModuleListIsComplete(unittest.TestCase):
+    """The list of walked modules is itself checked, in both directions.
+
+    Before this, dropping ``CASHBOOK_CLI`` from the tuple left every test in
+    this file green: the one thing keeping a second group's codes inside the
+    registry walks was an unguarded tuple entry.
+    """
+
+    def test_every_module_that_imports_the_envelope_is_walked(self) -> None:
+        walked = set(EMITTING_CLI_MODULES)
+
+        self.assertEqual(_modules_importing_the_envelope() | {ENVELOPE_CLI}, walked)
+
+    def test_the_import_scan_found_something(self) -> None:
+        """Positive control: an empty scan would satisfy the equality above as
+        soon as the tuple held only the defining module."""
+        self.assertIn(CASHBOOK_CLI, _modules_importing_the_envelope())
 
 
 class TheRegistryHonoursItsOwnRules(unittest.TestCase):
@@ -470,10 +546,14 @@ class TheRegistryHonoursItsOwnRules(unittest.TestCase):
         The AST gate below catches an unregistered code in CI. This is what
         happens on the operator's machine if one ever slips past: the refusal
         still renders, and the log says the code was not registered.
+
+        The logger is the one of the module where `_fail_with` is DEFINED, not
+        the one where it is called or re-exported from — since #1689 that is
+        `_cli_envelope`.
         """
         from alphalens_cli.commands.broker import _fail_with
 
-        with self.assertLogs("alphalens_cli.commands.broker", level="WARNING") as logs:
+        with self.assertLogs("alphalens_cli.commands._cli_envelope", level="WARNING") as logs:
             exit_exc = _fail_with("not_a_registered_code", "boom")
 
         self.assertEqual(exit_exc.exit_code, 1)
