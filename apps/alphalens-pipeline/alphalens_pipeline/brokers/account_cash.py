@@ -4,7 +4,10 @@ The cash book's source of truth is ``/cs/v1/reports/bookings`` read
 **unfiltered** (memo section 2): every booking row is a cash movement in the
 account's own currency, so a sum over all rows for a period is that period's
 whole money movement by construction, and nothing can be missing without the
-row count saying so.
+row count saying so. What holds that second half up is
+:class:`VendorPayloadShapeError`: a row the mapping cannot place is refused,
+never skipped, because a skipped row leaves a count that agrees with the rows
+that survived it.
 
 This is a SECOND capability over the same endpoints as
 :mod:`alphalens_pipeline.brokers.fill_history`, not a widening of it. That one
@@ -37,6 +40,8 @@ import datetime as dt
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
+from broker_contract.contract import BrokerError
+
 # DO NOT re-point these three at ``saxo/broker.py``, which defines its own
 # ``_opt_float`` and ``_opt_str`` under the same names: that version is
 # ``None if value is None else float(value)``, so it RAISES on a non-numeric
@@ -56,6 +61,31 @@ from alphalens_pipeline.brokers.fill_history import (
 # public vocabulary, declared beside the field that carries it; the adapter's
 # ``_SIM_REPORTS_UNUSABLE`` keeps its own spelling for the fill-history read.
 SIM_REPORTS_UNUSABLE = "sim_reports_unusable"
+
+
+class VendorPayloadShapeError(BrokerError):
+    """A report row, or a balance body, that is not an object at all.
+
+    The read REFUSES it instead of skipping it. This module's own claim --
+    a sum over all rows is the period's whole money movement, and nothing can
+    be missing without the row count saying so (memo section 2) -- is false
+    the moment one row can be dropped: the movement is gone, and the published
+    count agrees with the rows that survived, so nothing says anything. Memo
+    section 5(b) states the shape the memo wants: a dropped row does not
+    vanish, it makes an identity fail. Here the identity is that every row the
+    vendor sent is a row the read published, and the refusal is what holds it.
+
+    This is NOT a refusal of a VALUE the mapping cannot read: a non-numeric
+    amount still maps to ``None`` and still does not raise, which is why the
+    coercers come from ``fill_history`` (see the module docstring). It covers
+    only the payload shape no coercer can be asked about.
+
+    A ``BrokerError`` subclass, so it carries the base ``failure_code`` of
+    ``broker_failed`` and classifies at the CLI boundary instead of arriving
+    there as an unclassified traceback. It registers no code of its own: there
+    is nothing for a caller to do differently about a vendor shape it cannot
+    read, and a new code would need its own published row in the contract.
+    """
 
 
 @dataclass(frozen=True)
@@ -203,4 +233,5 @@ __all__ = [
     "CashEvent",
     "SupportsAccountCash",
     "TradeRow",
+    "VendorPayloadShapeError",
 ]

@@ -10,6 +10,12 @@ the whole point of this capability (memo section 1.4). The client's three
 readers already return every row of every page with no filtering of their own
 (``saxo/client.py``), so the unfiltered read needs no client change.
 
+Unfiltered means every row or no rows: a payload this mapping cannot place
+raises :class:`VendorPayloadShapeError` and the whole window is refused,
+rather than publishing the rows around it under a count that agrees with
+them. The client type-checks nothing inside ``Data`` (it returns
+``list(payload.get("Data") or [])``), so that shape is the vendor's to send.
+
 This module imports nothing from ``saxo/broker.py``. That is structural, not
 stylistic: the adapter imports this module at the top of its own import block,
 so an import back the other way is a cycle. It is why the SIM refusal stays in
@@ -19,6 +25,7 @@ the adapter, where ``list_fill_history`` already makes the same check.
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from alphalens_pipeline.brokers.account_cash import (
@@ -26,8 +33,35 @@ from alphalens_pipeline.brokers.account_cash import (
     BalanceSnapshot,
     CashEvent,
     TradeRow,
+    VendorPayloadShapeError,
 )
 from alphalens_pipeline.brokers.fill_history import ReadWindow
+
+
+def _map_every_row[Row](
+    rows: Sequence[Any],
+    mapper: Callable[[dict[str, Any]], Row],
+    *,
+    report: str,
+) -> tuple[Row, ...]:
+    """Map every row the vendor sent, or refuse the read naming the one that stopped it.
+
+    Not ``if isinstance(row, dict)`` in a comprehension, which is what the
+    fill-history read does: that one is filtered by design, so one more
+    dropped row is one more filtered row, while here a dropped row is a cash
+    movement that vanishes from a read whose published count then agrees with
+    the rows that survived. ``VendorPayloadShapeError`` says why that is
+    refused rather than skipped."""
+    mapped: list[Row] = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise VendorPayloadShapeError(
+                f"the {report} report row at index {index} of {len(rows)} is "
+                f"{type(row).__name__}, not an object, so the read refuses the whole "
+                f"window rather than publishing the rows around it"
+            )
+        mapped.append(mapper(row))
+    return tuple(mapped)
 
 
 def read_account_cash(
@@ -51,13 +85,15 @@ def read_account_cash(
     trade_rows = client.get_trades_report(
         client_key, account_key=account_key, from_date=from_date, to_date=to_date
     )
-    events = tuple(CashEvent.from_vendor_row(row) for row in booking_rows if isinstance(row, dict))
-    trades = tuple(TradeRow.from_vendor_row(row) for row in trade_rows if isinstance(row, dict))
+    events = _map_every_row(booking_rows, CashEvent.from_vendor_row, report="bookings")
+    trades = _map_every_row(trade_rows, TradeRow.from_vendor_row, report="trades")
     balance_body = client.get_balances(client_key, account_key=account_key)
-    balance = BalanceSnapshot.from_vendor_body(
-        balance_body if isinstance(balance_body, dict) else {},
-        asof=dt.datetime.now(dt.UTC),
-    )
+    if not isinstance(balance_body, dict):
+        raise VendorPayloadShapeError(
+            f"the balance body is {type(balance_body).__name__}, not an object; mapped "
+            f"anyway it would read as a balance of nothing, stamped with a fresh asof"
+        )
+    balance = BalanceSnapshot.from_vendor_body(balance_body, asof=dt.datetime.now(dt.UTC))
     return AccountCashRead(
         events=events,
         trades=trades,

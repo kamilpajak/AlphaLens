@@ -26,11 +26,12 @@ from alphalens_pipeline.brokers.account_cash import (
     CashEvent,
     SupportsAccountCash,
     TradeRow,
+    VendorPayloadShapeError,
 )
 from alphalens_pipeline.brokers.fill_history import CostBooking, Execution, ReadWindow
 from alphalens_pipeline.brokers.saxo.broker import SaxoBroker
 from alphalens_pipeline.brokers.saxo.client import SIM_BASE_URL, SaxoRateLimitError
-from broker_contract.contract import BrokerRateLimitError
+from broker_contract.contract import BrokerError, BrokerRateLimitError
 
 _VENUE = json.loads(
     (
@@ -67,9 +68,12 @@ class _FakeClient:
     def __init__(self, *, base_url: str = _LIVE_BASE) -> None:
         self.base_url = base_url
         self.calls: list[tuple[str, dict[str, Any]]] = []
-        self.bookings: list[dict[str, Any]] = [dict(r) for r in _VENUE["bookings"]]
-        self.trades: list[dict[str, Any]] = [dict(r) for r in _VENUE["trades"]]
-        self.balance: dict[str, Any] = dict(_BALANCE_BODY)
+        # Typed loosely on purpose: the vendor can hand over a row, or a
+        # whole body, that is not an object, and a fake that cannot express
+        # that shape cannot test what the read does with it.
+        self.bookings: list[Any] = [dict(r) for r in _VENUE["bookings"]]
+        self.trades: list[Any] = [dict(r) for r in _VENUE["trades"]]
+        self.balance: Any = dict(_BALANCE_BODY)
         self.rate_limited = False
 
     def get_client_info(self) -> dict[str, Any]:
@@ -78,19 +82,19 @@ class _FakeClient:
     def get_accounts(self) -> dict[str, Any]:
         return {"Data": [{"AccountKey": "AK-1"}]}
 
-    def get_trades_report(self, client_key: str, **kwargs: Any) -> list[dict[str, Any]]:
+    def get_trades_report(self, client_key: str, **kwargs: Any) -> list[Any]:
         self.calls.append(("trades", {"client_key": client_key, **kwargs}))
         return list(self.trades)
 
-    def get_bookings_report(self, client_key: str, **kwargs: Any) -> list[dict[str, Any]]:
+    def get_bookings_report(self, client_key: str, **kwargs: Any) -> list[Any]:
         self.calls.append(("bookings", {"client_key": client_key, **kwargs}))
         if self.rate_limited:
             raise SaxoRateLimitError("429")
         return list(self.bookings)
 
-    def get_balances(self, client_key: str, account_key: str | None = None) -> dict[str, Any]:
+    def get_balances(self, client_key: str, account_key: str | None = None) -> Any:
         self.calls.append(("balances", {"client_key": client_key, "account_key": account_key}))
-        return dict(self.balance)
+        return self.balance
 
 
 class TheCapability(unittest.TestCase):
@@ -459,6 +463,83 @@ class OnSim(unittest.TestCase):
         self.assertIsNone(read.trades)
         self.assertIsNone(read.balance)
         self.assertEqual(read.skipped_reason, "sim_reports_unusable")
+
+
+class APayloadTheMappingCannotPlaceIsRefused(unittest.TestCase):
+    """All of the account's money or none of it.
+
+    Memo section 2 is the claim this holds up: a sum over all rows is the
+    period's whole money movement "by construction: nothing can be missing
+    without the row count saying so". A read that skips the row it cannot map
+    and then publishes the count of the rows that survived breaks that claim
+    twice over -- the movement is gone AND the count agrees with itself.
+    Section 5(b) states the mechanism the memo wants instead: a dropped row
+    does not vanish, it makes an identity fail.
+
+    So the read refuses. The refusal is a ``BrokerError`` subclass, which is
+    what makes it classify as ``broker_failed`` at the CLI boundary instead of
+    arriving there as an unclassified traceback -- PR-A registers no failure
+    code of its own, and the base class is the taxonomy's documented answer
+    for exactly that.
+
+    What this is NOT: a mapping that refuses a VALUE it cannot read. A
+    non-numeric amount still maps to ``None`` and still does not raise (see
+    the money tests). The refusal is about a payload that is not an object at
+    all, which is the one shape no coercer can be asked about."""
+
+    def setUp(self) -> None:
+        self.client = _FakeClient()
+        self.broker = SaxoBroker(self.client)  # type: ignore[arg-type]
+
+    def test_a_booking_row_that_is_not_an_object_refuses_the_whole_read(self) -> None:
+        """One unreadable row among 104 refuses, rather than publishing 103.
+
+        ``get_bookings_report`` returns ``list(payload.get("Data") or [])``
+        and type-checks nothing inside it, so a non-object row is a shape the
+        vendor can hand over."""
+        self.client.bookings = [*self.client.bookings[:3], "not an object"]
+        with self.assertRaises(VendorPayloadShapeError) as caught:
+            self.broker.list_account_cash(_SINCE, _UNTIL)
+        self.assertIn("bookings", str(caught.exception))
+        self.assertIn("3", str(caught.exception))
+
+    def test_a_trade_row_that_is_not_an_object_refuses_the_whole_read(self) -> None:
+        self.client.trades = [*self.client.trades[:2], None]
+        with self.assertRaises(VendorPayloadShapeError) as caught:
+            self.broker.list_account_cash(_SINCE, _UNTIL)
+        self.assertIn("trades", str(caught.exception))
+
+    def test_a_balance_body_that_is_not_an_object_refuses_the_whole_read(self) -> None:
+        """A body of every field ``None`` is the same defect in the other half.
+
+        Mapped from a payload that is not an object it reads as a balance the
+        vendor answered with nothing, stamped with a fresh ``asof``. Phase 4's
+        cross-check is the only independent check on the money, and it would
+        run against that."""
+        self.client.balance = []
+        with self.assertRaises(VendorPayloadShapeError):
+            self.broker.list_account_cash(_SINCE, _UNTIL)
+
+    def test_the_refusal_classifies_as_a_broker_failure(self) -> None:
+        self.client.bookings = ["not an object"]
+        with self.assertRaises(BrokerError):
+            self.broker.list_account_cash(_SINCE, _UNTIL)
+
+    def test_the_published_count_is_the_rows_published(self) -> None:
+        """The identity the refusal buys, on the real fixture.
+
+        With no row droppable, the count of rows published and the count the
+        vendor sent are the same number, and the memo's claim holds by
+        construction rather than by a caller comparing two fields."""
+        read = self.broker.list_account_cash(_SINCE, _UNTIL)
+        assert read.events is not None
+        assert read.trades is not None
+        assert read.events_window is not None
+        assert read.trades_window is not None
+        self.assertEqual(read.events_window.rows, len(read.events))
+        self.assertEqual(read.events_window.rows, len(self.client.bookings))
+        self.assertEqual(read.trades_window.rows, len(read.trades))
+        self.assertEqual(read.trades_window.rows, len(self.client.trades))
 
 
 class TheTwoMappingsOfTheSameRows(unittest.TestCase):
