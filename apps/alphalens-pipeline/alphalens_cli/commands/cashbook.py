@@ -157,6 +157,13 @@ def _window(read_window: Any) -> dict[str, Any] | None:
 def _sync_body(plan: Any, *, dry_run: bool, journals: dict[str, str]) -> dict[str, Any]:
     """The sweep facts, from the PLAN and nothing else.
 
+    There is no ``refused`` field. A refusal raises before this body is built,
+    so the field could only ever be ``null`` — and a published ``/v1`` field a
+    client can branch on but never observe is the same defect as a money total
+    this schema does not own: it would have to mean something else later. A
+    refusal is a non-zero exit with one failure object on stderr, and that is
+    the only place a reason is published.
+
     From the plan rather than from the record, because the body is rendered
     before the append (see the module docstring) and a ``--dry-run`` writes no
     record at all. The counts therefore exist in two places —
@@ -192,7 +199,6 @@ def _sync_body(plan: Any, *, dry_run: bool, journals: dict[str, str]) -> dict[st
         },
         "malformed": dict(plan.malformed),
         "journals": journals,
-        "refused": None,
     }
 
 

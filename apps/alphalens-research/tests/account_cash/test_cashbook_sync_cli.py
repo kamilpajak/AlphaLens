@@ -140,7 +140,6 @@ _PUBLISHED_KEYS = (
     "journals.trade_rows",
     "journals.balances",
     "journals.sweeps",
-    "refused",
 )
 
 
