@@ -302,6 +302,16 @@ def read_balances(*, env: str) -> list[BalanceSnapshot]:
     journal has no identity to fold a broken line onto. Phase 4 reads these
     for the balance cross-check, and it will want a count -- the shape to
     widen then is this return type, not the log.
+
+    **Until it does, a log line is the ONLY channel**, and the sweep record
+    cannot carry it either: ``SweepPlan.malformed`` and ``SweepRecord.malformed``
+    both hold ``cash_events`` and ``trade_rows`` only, because the plan folds
+    just the two keyed journals. So a corrupt balance line is today invisible
+    to every later reader of the store. Deliberately not fixed here rather than
+    merely unnoticed: a third ``malformed`` key is a change to the
+    ``sweeps.jsonl`` wire form, and the codec's count maps are key-agnostic in
+    both directions so it stays additive -- it belongs with the Phase 4
+    consumer that gives it a meaning, not with a counter nothing reads.
     """
     latest, _, _, _ = _fold_by_key(
         paths.balances_path(env),
