@@ -1,0 +1,293 @@
+"""The account-cash capability: what the account's money actually did (#1689).
+
+The cash book's source of truth is ``/cs/v1/reports/bookings`` read
+**unfiltered** (memo section 2): every booking row is a cash movement in the
+account's own currency, so a sum over all rows for a period is that period's
+whole money movement by construction, and nothing can be missing without the
+row count saying so. What holds that second half up is
+:class:`VendorPayloadShapeError`: a row the mapping cannot place is refused,
+never skipped, because a skipped row leaves a count that agrees with the rows
+that survived it.
+
+This is a SECOND capability over the same endpoints as
+:mod:`alphalens_pipeline.brokers.fill_history`, not a widening of it. That one
+keeps only bookings whose ``related_trade_id`` is in the trades it kept
+(the ``kept_trades`` filter in ``SaxoBroker.list_fill_history``); on the
+2026-10-03 LIVE capture that drops 5 of 104 rows worth 24 004.05 PLN -- the
+three deposits and the two corporate-action rows (memo section 1.4). It is
+fill-shaped by construction and correctly so; the cash book needs the rows it
+drops.
+
+The adapter REPORTS and the caller decides (#1122). Rows carry the vendor's
+values as sent: a signed amount stays signed, a booking type stays its raw
+string, a missing field stays ``None`` -- except on the two fields where a
+``None`` would read as another row's value, which :class:`VendorPayloadShapeError`
+refuses instead. **Nothing here classifies.** There is
+no bucket, no ``BkAmountType`` vocabulary and no total -- those are memo
+Phase 4, and a classifier keying on "a non-zero ``RelatedTradeId`` means a
+trade" folds 24 000 PLN of funding into trading P&L, because the three
+deposits carry non-trade ``RelatedTradeId`` values (memo section 1.1).
+
+The coercers come from :mod:`alphalens_pipeline.brokers.fill_history` by their
+private names, deliberately: there is ONE definition of the coercion rules for
+both mappings of the same vendor rows, and it is a sibling module in this same
+package. ``saxo/broker.py`` defines its own ``_opt_float`` with different
+semantics -- ``float(value)``, which RAISES on a non-numeric string and accepts
+``bool`` -- and binding that one would put a traceback on the money path.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+from dataclasses import dataclass
+from typing import Any, Protocol, runtime_checkable
+
+from broker_contract.contract import BrokerError
+
+# DO NOT re-point these three at ``saxo/broker.py``, which defines its own
+# ``_opt_float`` and ``_opt_str`` under the same names: that version is
+# ``None if value is None else float(value)``, so it RAISES on a non-numeric
+# string and accepts ``bool``. These return ``None`` instead. The module
+# docstring says why one definition serves both mappings of the same rows.
+from alphalens_pipeline.brokers.fill_history import (
+    ReadWindow,
+    _opt_float,
+    _opt_int,
+    _opt_str,
+    parse_utc,
+)
+
+# ``AccountCashRead.skipped_reason`` on SIM: the SIM report endpoints answer
+# with canned rows from other accounts, and storing fiction in a money store is
+# worse than storing nothing (memo section 3). This is the capability's own
+# public vocabulary, declared beside the field that carries it; the adapter's
+# ``_SIM_REPORTS_UNUSABLE`` keeps its own spelling for the fill-history read.
+SIM_REPORTS_UNUSABLE = "sim_reports_unusable"
+
+
+class VendorPayloadShapeError(BrokerError):
+    """A payload this mapping cannot place: a shape, or a row's own identity.
+
+    Three cases, and nothing else: a report row or a balance body that is not
+    an object at all; a row with no usable ``BkAmountId``, the field the store
+    is keyed on; and a PRESENT ``Uic`` that cannot be read as an int.
+
+    The read REFUSES it instead of skipping it. This module's own claim --
+    a sum over all rows is the period's whole money movement, and nothing can
+    be missing without the row count saying so (memo section 2) -- is false
+    the moment one row can be dropped: the movement is gone, and the published
+    count agrees with the rows that survived, so nothing says anything. Memo
+    section 5(b) states the shape the memo wants: a dropped row does not
+    vanish, it makes an identity fail. Here the identity is that every row the
+    vendor sent is a row the read published, and the refusal is what holds it.
+
+    This is NOT a refusal of every VALUE the mapping cannot read: a non-numeric
+    MONEY amount still maps to ``None`` and still does not raise, which is why
+    the coercers come from ``fill_history`` (see the module docstring). A
+    number the vendor garbled is one field of one row and the row count still
+    accounts for it. The two fields that do refuse are the ones a ``None``
+    would make another row's equal: the store key, where two rows then fold
+    onto one record, and the instrument id, where an unreadable value would
+    join the rows that genuinely have no instrument in Phase 4's grouping.
+
+    A ``BrokerError`` subclass, so it carries the base ``failure_code`` of
+    ``broker_failed`` and classifies at the CLI boundary instead of arriving
+    there as an unclassified traceback. It registers no code of its own: there
+    is nothing for a caller to do differently about a vendor shape it cannot
+    read, and a new code would need its own published row in the contract.
+    """
+
+
+def _identity_or_refuse(row: dict[str, Any], key: str, *, report: str) -> str:
+    """The row's own key, refused rather than coerced when the vendor omits it.
+
+    ``str(row.get(key, ""))`` answers ``''`` for an absent key and the string
+    ``'None'`` for a null one, and both are keys the store would accept: memo
+    section 3 folds the journal latest-line-wins per key, so two such rows
+    become one record while the published row count still says two. Absent,
+    null and empty are one case here on purpose -- the store cannot tell them
+    apart afterwards either.
+    """
+    text = _opt_str(row.get(key))
+    if text is None:
+        raise VendorPayloadShapeError(
+            f"a {report} report row carries no usable {key} ({row.get(key)!r}), and the "
+            f"cash store is keyed on it with latest-line-wins, so two such rows would "
+            f"fold onto one record while the published row count still counted both"
+        )
+    return text
+
+
+def _instrument_id_or_refuse(row: dict[str, Any], key: str, *, report: str) -> int | None:
+    """``None`` when the vendor said nothing, the int when it did, a refusal otherwise.
+
+    Absent is an ANSWER on this field -- a cash deposit has no instrument --
+    so it stays ``None``. A present value no coercer can read is not that
+    answer, and ``_opt_int`` returns ``None`` for both cases, so the mapping
+    has to split them here or publish one as the other. Phase 4 groups rows by
+    instrument, which is where the two would meet.
+    """
+    value = row.get(key)
+    if value is None:
+        return None
+    number = _opt_int(value)
+    if number is None:
+        raise VendorPayloadShapeError(
+            f"a {report} report row carries {key}={value!r}, which is present and cannot "
+            f"be read as an int; mapped to None it would file the row under 'no "
+            f"instrument' beside the cash deposits, which is a different fact"
+        )
+    return number
+
+
+@dataclass(frozen=True)
+class CashEvent:
+    """One bookings-report row, UNFILTERED, with the vendor's raw type and signs."""
+
+    bk_amount_id: str
+    bk_amount_type: str
+    amount_class: str | None
+    amount: float | None
+    currency: str | None
+    amount_account_currency: float | None
+    account_currency: str | None
+    conversion_rate: float | None
+    conversion_cost_account_currency: float | None
+    date: str | None
+    value_date: str | None
+    uic: int | None
+    instrument_symbol: str | None
+    #: ``None`` when the vendor sent no ``RelatedTradeId`` at all. NEVER ``''``:
+    #: the two corporate-action rows carry a real ``"0"`` (memo section 1.1),
+    #: so an invented empty string would sit one character from a value the
+    #: vendor does send on a field Phase 4 reads to tell the two apart.
+    related_trade_id: str | None
+    ca_event_name: str | None
+
+    @classmethod
+    def from_vendor_row(cls, row: dict[str, Any]) -> CashEvent:
+        """Map one ``/cs/v1/reports/bookings`` row, field by field."""
+        return cls(
+            bk_amount_id=_identity_or_refuse(row, "BkAmountId", report="bookings"),
+            bk_amount_type=str(row.get("BkAmountType", "")),
+            amount_class=_opt_str(row.get("AmountClass")),
+            amount=_opt_float(row.get("Amount")),
+            currency=_opt_str(row.get("Currency")),
+            amount_account_currency=_opt_float(row.get("AmountAccountCurrency")),
+            account_currency=_opt_str(row.get("AccountCurrency")),
+            conversion_rate=_opt_float(row.get("ConversionRate")),
+            conversion_cost_account_currency=_opt_float(row.get("ConversionRateAccountCurrency")),
+            date=_opt_str(row.get("Date")),
+            value_date=_opt_str(row.get("ValueDate")),
+            uic=_instrument_id_or_refuse(row, "Uic", report="bookings"),
+            instrument_symbol=_opt_str(row.get("InstrumentSymbol")),
+            related_trade_id=_opt_str(row.get("RelatedTradeId")),
+            ca_event_name=_opt_str(row.get("CaEventName")),
+        )
+
+
+@dataclass(frozen=True)
+class TradeRow:
+    """One trades-report row: one execution (TradeId) of one order."""
+
+    trade_id: str
+    order_id: str
+    uic: int | None
+    instrument_symbol: str | None
+    amount: float | None
+    price: float | None
+    trade_event_type: str | None
+    to_open_or_close: str | None
+    trade_date: str | None
+    value_date: str | None
+    execution_time: dt.datetime | None
+    booked_amount_account_currency: float | None
+    account_currency: str | None
+    venue: str | None
+
+    @classmethod
+    def from_vendor_row(cls, row: dict[str, Any]) -> TradeRow:
+        """Map one ``/cs/v1/reports/trades`` row, field by field."""
+        return cls(
+            trade_id=str(row.get("TradeId", "")),
+            order_id=str(row.get("OrderId", "")),
+            uic=_instrument_id_or_refuse(row, "Uic", report="trades"),
+            instrument_symbol=_opt_str(row.get("InstrumentSymbol")),
+            amount=_opt_float(row.get("Amount")),
+            price=_opt_float(row.get("Price")),
+            trade_event_type=_opt_str(row.get("TradeEventType")),
+            to_open_or_close=_opt_str(row.get("ToOpenOrClose")),
+            trade_date=_opt_str(row.get("TradeDate")),
+            value_date=_opt_str(row.get("ValueDate")),
+            execution_time=parse_utc(row.get("TradeExecutionTime")),
+            booked_amount_account_currency=_opt_float(row.get("BookedAmountAccountCurrency")),
+            account_currency=_opt_str(row.get("AccountCurrency")),
+            venue=_opt_str(row.get("Venue")),
+        )
+
+
+@dataclass(frozen=True)
+class BalanceSnapshot:
+    """One ``/port/v1/balances`` body, as read."""
+
+    currency: str | None
+    cash_balance: float | None
+    non_margin_positions_value: float | None
+    total_value: float | None
+    transactions_not_booked: float | None
+    calculation_reliability: str | None
+    asof: dt.datetime
+
+    @classmethod
+    def from_vendor_body(cls, body: dict[str, Any], *, asof: dt.datetime) -> BalanceSnapshot:
+        """Map one ``/port/v1/balances`` body, field by field.
+
+        Named apart from ``contract.AccountSnapshot``, which maps the same
+        endpoint for the daemon and has no ``TransactionsNotBooked`` field at
+        all. That field is the one that parks a whole day's trading between
+        the fills and the nightly settlement batch (memo section 1.7 P5), and
+        it is also NOT a completeness signal: it returns to zero about
+        nineteen minutes before any report row exists (P7)."""
+        return cls(
+            currency=_opt_str(body.get("Currency")),
+            cash_balance=_opt_float(body.get("CashBalance")),
+            non_margin_positions_value=_opt_float(body.get("NonMarginPositionsValue")),
+            total_value=_opt_float(body.get("TotalValue")),
+            transactions_not_booked=_opt_float(body.get("TransactionsNotBooked")),
+            calculation_reliability=_opt_str(body.get("CalculationReliability")),
+            asof=asof,
+        )
+
+
+@dataclass(frozen=True)
+class AccountCashRead:
+    """Everything one ``list_account_cash`` call read.
+
+    ``events``, ``trades`` and ``balance`` are ``None`` when nothing was read
+    at all, and ``skipped_reason`` then says why. An empty tuple means "read,
+    and nothing was there"."""
+
+    events: tuple[CashEvent, ...] | None
+    trades: tuple[TradeRow, ...] | None
+    balance: BalanceSnapshot | None
+    events_window: ReadWindow | None = None
+    trades_window: ReadWindow | None = None
+    skipped_reason: str | None = None
+
+
+@runtime_checkable
+class SupportsAccountCash(Protocol):
+    """Extension capability: the account's own cash movements, UNFILTERED."""
+
+    def list_account_cash(self, since: dt.date, until: dt.date) -> AccountCashRead: ...
+
+
+__all__ = [
+    "SIM_REPORTS_UNUSABLE",
+    "AccountCashRead",
+    "BalanceSnapshot",
+    "CashEvent",
+    "SupportsAccountCash",
+    "TradeRow",
+    "VendorPayloadShapeError",
+]

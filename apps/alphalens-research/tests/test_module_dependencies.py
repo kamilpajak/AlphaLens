@@ -42,6 +42,12 @@ PACKAGE_DIRS: dict[str, Path] = {
     "intent_replay": WORKSPACE_ROOT / "apps" / "intent-replay" / "intent_replay",
 }
 
+#: The #1689 rule's declared name, so its positive control can FIND the rule
+#: without repeating the package path the rule is about. The path is a
+#: forward-looking one -- Phase 3 has not written that package yet -- and a
+#: guess repeated in two places is a pair that can disagree.
+_CASH_BOOK_RULE_NAME = "brokers must not import the account cash book (the read flows one way)"
+
 RULES = (
     {
         "name": "backtest must stay screener-agnostic",
@@ -143,6 +149,23 @@ RULES = (
         "name": "paper must not import brokers (brokers consumes paper, never the reverse)",
         "from_pkg": "alphalens_pipeline.paper",
         "forbidden_prefix": "alphalens_pipeline.brokers",
+        "exemptions": set(),
+    },
+    {
+        # #1689: the account cash book reads the broker through the
+        # SupportsAccountCash capability, and the read flows ONE way. Nothing
+        # under brokers/ may reach back into the cash book's store, codec or
+        # sweep — that would make the execution layer depend on a derived
+        # money record it is itself the source for, and it is the import edge
+        # the memo's own store section forbids. No top_level_only: every cycle
+        # this repo's audits have had to cut lived in a function-body import.
+        "name": _CASH_BOOK_RULE_NAME,
+        "from_pkg": "alphalens_pipeline.brokers",
+        # The package Phase 3 writes, named in the memo's section 3 beside the
+        # store root. The positive control below BUILDS its synthetic import
+        # from this string rather than repeating it, so moving the package is
+        # one edit here and not a silently diverging pair.
+        "forbidden_prefix": "alphalens_pipeline.account_cash",
         "exemptions": set(),
     },
     {
@@ -1227,6 +1250,63 @@ class TestModuleDependencies(unittest.TestCase):
         )
         self.assertTrue(
             any(m.startswith(data_rules[0]["forbidden_prefix"]) for m in modules),
+            "rule would not catch the synthetic violation",
+        )
+
+    def test_brokers_must_not_import_the_account_cash_book_positive_control(self):
+        """The brokers -> account-cash-book rule (#1689) cannot rot silently.
+
+        The read flows ONE way: the cash book reads the broker through the
+        ``SupportsAccountCash`` capability, and nothing under ``brokers/`` may
+        reach back into the store, the codec or the sweep. Declaring the rule
+        in the SAME PR as the capability is deliberate -- the memo asks for the
+        boundary before the thing it bounds exists -- but that leaves a rule no
+        real module can violate yet, which is a rule with no demonstrated
+        power. So this feeds the walker a synthetic violation instead, in a
+        function body, the sneakiest allowed-elsewhere shape and the one a
+        ``top_level_only`` rule would miss.
+
+        The synthetic import is BUILT from the rule's own ``forbidden_prefix``,
+        and the rule is found by its declared ``name``. Every other positive
+        control here repeats its prefix as a literal, which is safe for them:
+        their packages exist, so a literal that stopped matching would be a
+        rule naming nothing. This prefix names a package Phase 3 has not
+        written yet, and the memo pins the on-disk store root
+        (``~/.alphalens/account_cash/<env>/``), not a Python path -- so the
+        literal was a guess repeated twice, and the two could only disagree.
+        Measured on the repeated form: moving the prefix to
+        ``alphalens_pipeline.cashbook`` made this control fail with "the
+        brokers -> account_cash rule must exist exactly once", which reads as
+        a deleted rule rather than a moved package.
+        """
+        import tempfile
+
+        cash_rules = [rule for rule in RULES if rule["name"] == _CASH_BOOK_RULE_NAME]
+        self.assertEqual(
+            len(cash_rules), 1, "the brokers -> account_cash rule must exist exactly once"
+        )
+        self.assertEqual(cash_rules[0]["from_pkg"], "alphalens_pipeline.brokers")
+        forbidden = cash_rules[0]["forbidden_prefix"]
+
+        synthetic = (
+            "def sneaky():\n"
+            f"    from {forbidden}.store import append_cash_events\n"
+            "    return append_cash_events\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "synthetic_account_cash_violation.py"
+            path.write_text(synthetic)
+            modules = list(_iter_imports(path, include_function_scope=True))
+
+        self.assertIn(f"{forbidden}.store", modules)
+        self.assertNotIn(
+            "top_level_only",
+            cash_rules[0],
+            "the rule must catch function-scope (lazy) imports too — every cycle "
+            "this repo's audits cut lived in a function-body import",
+        )
+        self.assertTrue(
+            any(_violates(cash_rules[0], m) for m in modules),
             "rule would not catch the synthetic violation",
         )
 

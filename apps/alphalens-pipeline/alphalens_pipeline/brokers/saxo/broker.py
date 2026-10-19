@@ -53,6 +53,10 @@ from broker_contract.quantity import InstrumentQuantityRules, quantity_refusal
 from broker_contract.sizing import TradeSetupNotPlannableError
 
 from alphalens_pipeline.brokers import execution as execution_policy
+from alphalens_pipeline.brokers.account_cash import (
+    SIM_REPORTS_UNUSABLE,
+    AccountCashRead,
+)
 from alphalens_pipeline.brokers.automanager import live_rails
 from alphalens_pipeline.brokers.fill_history import (
     CostBooking,
@@ -62,6 +66,7 @@ from alphalens_pipeline.brokers.fill_history import (
     ReadWindow,
 )
 from alphalens_pipeline.brokers.notifications import NotificationPort
+from alphalens_pipeline.brokers.saxo.account_cash_read import read_account_cash
 from alphalens_pipeline.brokers.saxo.client import (
     LIVE_ACCOUNT_KEY_ENV,
     LIVE_STANDING_ENV,
@@ -1714,6 +1719,41 @@ class SaxoBroker:
             trades_window=ReadWindow(from_date, to_date, len(trade_rows)),
             bookings_window=ReadWindow(from_date, to_date, len(booking_rows)),
         )
+
+    # ----- account cash (#1689, the cash book's read) -----
+
+    def list_account_cash(self, since: dt.date, until: dt.date) -> AccountCashRead:
+        """Every cash movement the account booked between two dates, UNFILTERED.
+
+        Three GETs, never a write, in ``saxo/account_cash_read.py``; this
+        method resolves the two keys and delegates. Dates in, dates out, with
+        no padding: unlike :meth:`list_fill_history`, which widens its report
+        window by a day on each end, both report endpoints here filter on a
+        venue-stamped date, so the window asked for is the window read.
+
+        On SIM the refusal covers the WHOLE read, the balance included, even
+        though ``/port/v1/balances`` is not a report endpoint and
+        ``get_account`` reads it every daemon tick. The report rows would be
+        canned data from other accounts, and a balance with no rows beside it
+        answers nothing -- so the result is one refusal rather than a partial
+        one a caller could mistake for an answer."""
+        if self._client.base_url == SIM_BASE_URL:
+            return AccountCashRead(
+                events=None,
+                trades=None,
+                balance=None,
+                skipped_reason=SIM_REPORTS_UNUSABLE,
+            )
+        with _translate_saxo_errors():
+            client_key = str(self._client.get_client_info()["ClientKey"])
+            account_key = self._account_key or self._resolve_account_key()
+            return read_account_cash(
+                self._client,
+                client_key=client_key,
+                account_key=account_key,
+                since=since,
+                until=until,
+            )
 
     def tick_size(self, uic: int, price: float) -> float | None:
         """The instrument tick at ``price``, from one details GET per uic."""

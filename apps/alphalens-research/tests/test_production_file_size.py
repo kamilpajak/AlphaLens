@@ -228,7 +228,17 @@ BASELINE: dict[str, int] = {
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3302,
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/saxo/broker.py": 2416,
+    # Raised from 2416 for #1689's account-cash capability. The room goes to
+    # ONE method, ``list_account_cash``: the SIM refusal, the two key
+    # resolutions and the delegate. The read body itself is a separate module
+    # (``saxo/account_cash_read.py``) precisely so this file stays on a
+    # handful of lines, and the row shapes live in ``brokers/account_cash.py``
+    # beside the capability they belong to.
+    #
+    # Counted with ``wc -l`` on the MERGED file, not added up from the diff:
+    # the comment on the ``control_loop.py`` entry above records an earlier
+    # attempt that counted from a diff and shipped the gate red.
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/saxo/broker.py": 2456,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/saxo/client.py": 1141,
     "apps/alphalens-pipeline/alphalens_pipeline/data/alt_data/saxo_price_stream.py": 1395,
     "apps/alphalens-pipeline/alphalens_pipeline/feedback/ladder_chart.py": 1329,
