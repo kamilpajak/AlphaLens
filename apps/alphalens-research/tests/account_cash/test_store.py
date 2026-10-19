@@ -504,12 +504,17 @@ class AnUnreadableLineIsCountedAndNeverRaisedOutOfTheFold(IsolatedHomeTestCase):
         the file and not inside any guard.
         """
         rendered = codec.cash_event_to_jsonable(_event("2"))
-        whole = json.dumps({**rendered, "ca_event_name": "zażółć"}, ensure_ascii=False).encode(
-            "utf-8"
-        )
-        # Cut on the LEAD byte of the final two-byte sequence, so the file ends
+        # Written as an escape, not as the character: a non-ASCII literal in a
+        # source file is what `test_no_polish_chars.py` refuses, and the test
+        # needs the BYTES rather than the glyph.
+        euro_sign = "€"
+        whole = json.dumps(
+            {**rendered, "ca_event_name": f"fee {euro_sign}"}, ensure_ascii=False
+        ).encode("utf-8")
+        self.assertIn(b"\xe2\x82\xac", whole)
+        # Cut on the LEAD byte of that three-byte sequence, so the line ends
         # with a sequence that has no continuation byte.
-        torn = whole[: whole.rindex(b"\xc4") + 1]
+        torn = whole[: whole.index(b"\xe2") + 1]
         self.assertNotEqual(torn, whole)
         self._seed_and_append_bytes(torn)
 
