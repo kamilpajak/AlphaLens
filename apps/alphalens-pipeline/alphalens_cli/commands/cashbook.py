@@ -421,10 +421,16 @@ def sync_command(
             # happen, nothing is in flight, and a re-run is safe once the cause
             # clears. Ordered after `JournalWriteError`, which is itself an
             # `OSError` subclass and names its journal.
+            #
+            # Published under `details.lock`, the key the lock already owns in
+            # this contract (`cashbook_sweep_busy` publishes it), and
+            # `details.journal` stays null: the published row says that key
+            # names the file an append failed on, and this file is neither a
+            # journal nor one anything appended to.
             raise _fail_with(
                 "queue_write_failed",
                 f"could not take the account cash book's sweep lock: {exc}",
-                details={"journal": _failed_file(exc)},
+                details={"journal": None, "lock": _failed_file(exc)},
             ) from exc
 
     if rendered is not None:

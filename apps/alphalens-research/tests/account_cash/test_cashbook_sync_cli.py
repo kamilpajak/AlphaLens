@@ -621,7 +621,16 @@ class TheRefusalsCarryTheirOwnCode(_CashbookCliCase):
     def test_an_unwritable_store_root_refuses_at_the_lock_with_the_same_code(self) -> None:
         """The lock is taken BEFORE the first append, so an unwritable root
         fails there. Same failure mode, same code: no write happened, nothing is
-        in flight, and a re-run is safe once the cause clears."""
+        in flight, and a re-run is safe once the cause clears.
+
+        The lock path is published under ``details.lock``, which is the key the
+        lock already owns in this contract (``cashbook_sweep_busy`` publishes
+        it), and ``details.journal`` stays null — the published row says that
+        key names the journal an append failed on, and the lock is neither a
+        journal nor a file anything appended to. A machine consumer branching
+        on ``details.journal``, or an operator reading only that field, was
+        being pointed at the lock.
+        """
         root = paths.account_cash_root("live")
         root.mkdir(parents=True)
         root.chmod(0o500)
@@ -633,8 +642,23 @@ class TheRefusalsCarryTheirOwnCode(_CashbookCliCase):
         self.assertEqual(result.stdout, "")
         failure = _failure_from(result)
         self.assertEqual(failure["code"], "queue_write_failed")
-        self.assertEqual(failure["details"]["journal"], str(paths.sweep_lock_path("live")))
+        self.assertEqual(failure["details"]["lock"], str(paths.sweep_lock_path("live")))
+        self.assertIsNone(failure["details"]["journal"])
         self.assertIn("sweep lock", failure["message"])
+
+    def test_a_failed_append_names_no_lock(self) -> None:
+        """The other half: the two arms must not both publish both keys, or
+        neither field tells an operator which of the two failed."""
+        journal = paths.cash_events_path("live")
+        journal.parent.mkdir(parents=True)
+        journal.touch()
+        journal.chmod(0o400)
+        self.addCleanup(journal.chmod, 0o600)
+
+        failure = _failure_from(self.sync("--format", "json"))
+
+        self.assertEqual(failure["details"]["journal"], str(journal))
+        self.assertNotIn("lock", failure["details"])
 
 
 def _cannot_render(payload: Any) -> None:
