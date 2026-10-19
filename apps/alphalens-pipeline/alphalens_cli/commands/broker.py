@@ -107,24 +107,20 @@ from broker_contract.trade_intent.codec import discarded_paths as _discarded_pat
 # #1689, when `alphalens cashbook` became their second consumer. Re-exported
 # under their original private names so every call site in this module — and
 # every test that patches one of them HERE — keeps resolving. The suppression
-# below covers the names this module no longer references itself: they are the
-# registry and the exit-status set, which the gates and the sibling group read
-# through `commands.broker` because that is where they have always lived.
+# covers exactly two names this module no longer references itself, both of
+# them read through `commands.broker` by gates that predate the move:
+# `_CLI_FAILURE_CODES` and `_FAILURE_CODES`. The exit-status set and
+# `_exit_code_for` are NOT re-exported — nothing outside `_cli_envelope` read
+# them, so listing them here would have claimed a consumer that does not exist.
 from alphalens_cli.commands._cli_envelope import (  # noqa: F401
     _CLI_FAILURE_CODES,
-    _EXIT_FAILED,
-    _EXIT_NOT_FOUND,
-    _EXIT_TRANSIENT,
-    _EXIT_USAGE,
     _FAILURE_CODES,
     _FORMAT_HUMAN,
     _FORMAT_JSON,
     _FORMAT_OPTION,
     _OUTPUT_FORMAT,
-    _SUGGESTIONS_BY_CODE,
     _emit_json,
     _envelope,
-    _exit_code_for,
     _fail,
     _fail_from_broker_error,
     _fail_with,
