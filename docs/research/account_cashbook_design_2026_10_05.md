@@ -270,6 +270,8 @@ What is a cross-check and not the source:
 
 A new root, not inside `broker_orders/<env>/`: that root is the daemon's live money-path state, and a derived record among four queue journals will eventually be read as queue state. Per-env, never pooled, as `exec_quality_parquet` already is for SIM and LIVE fills.
 
+**The new package is `alphalens_pipeline/account_cash/`**, and the dependency rule that keeps the read one-way names exactly that path as its forbidden prefix (`tests/test_module_dependencies.py`), so the rule and the package cannot be two different guesses.
+
 **The path is declared inside the new package, not in `state_paths.py`.** `state_paths.py` is the one *broker-state* seam (ADR 0016) and lives in the keeper's package, which travels with the Stage-1 split while this layer's semantics stay in AlphaLens. Declaring the path there would invert the split argument and create an import edge this layer's own dependency rule forbids. The precedent for a non-broker store is `feedback/` and friends, which own their roots locally.
 
 **Append-only JSONL, folded by key, latest line wins**, through the existing appender (`brokers/journal.py:78-128`: one write, flush, fsync, torn-predecessor repair), so the registered `queue_write_failed` code applies unchanged. The reader mirrors `read_pick_fold` (`brokers/automanager/picks.py:262-309`), which counts malformed lines rather than dropping them.
