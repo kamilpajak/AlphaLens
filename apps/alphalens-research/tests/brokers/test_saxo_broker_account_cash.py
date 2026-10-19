@@ -433,6 +433,9 @@ class TheTwoMappingsOfTheSameRows(unittest.TestCase):
             "date",
             "related_trade_id",
         )
+        # Without this floor the whole test passes vacuously on an empty
+        # fixture list -- a property that is true AND empty.
+        self.assertEqual(len(_VENUE["bookings"]), 104)
         for row in _VENUE["bookings"]:
             event = CashEvent.from_vendor_row(row)
             booking = CostBooking.from_vendor_row(row)
@@ -452,6 +455,7 @@ class TheTwoMappingsOfTheSameRows(unittest.TestCase):
             "booked_amount_account_currency",
             "account_currency",
         )
+        self.assertEqual(len(_VENUE["trades"]), 41)
         for row in _VENUE["trades"]:
             mine = TradeRow.from_vendor_row(row)
             theirs = Execution.from_vendor_row(row)
