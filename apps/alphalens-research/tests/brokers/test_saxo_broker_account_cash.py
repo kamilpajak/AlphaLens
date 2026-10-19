@@ -79,17 +79,17 @@ class _FakeClient:
         return {"Data": [{"AccountKey": "AK-1"}]}
 
     def get_trades_report(self, client_key: str, **kwargs: Any) -> list[dict[str, Any]]:
-        self.calls.append(("trades", kwargs))
+        self.calls.append(("trades", {"client_key": client_key, **kwargs}))
         return list(self.trades)
 
     def get_bookings_report(self, client_key: str, **kwargs: Any) -> list[dict[str, Any]]:
-        self.calls.append(("bookings", kwargs))
+        self.calls.append(("bookings", {"client_key": client_key, **kwargs}))
         if self.rate_limited:
             raise SaxoRateLimitError("429")
         return list(self.bookings)
 
     def get_balances(self, client_key: str, account_key: str | None = None) -> dict[str, Any]:
-        self.calls.append(("balances", {"account_key": account_key}))
+        self.calls.append(("balances", {"client_key": client_key, "account_key": account_key}))
         return dict(self.balance)
 
 
@@ -148,6 +148,22 @@ class TheRead(unittest.TestCase):
         self.assertEqual(kwargs["from_date"], "2026-08-01")
         self.assertEqual(kwargs["to_date"], "2026-10-03")
         self.assertEqual(read.trades_window, ReadWindow("2026-08-01", "2026-10-03", 41))
+
+    def test_every_endpoint_is_asked_about_this_client_and_this_account(self) -> None:
+        """Both keys, on all three reads.
+
+        The two keys are different strings with the same shape, and the client
+        takes the client key positionally and the account key by name, so
+        passing one where the other belongs is a type-correct call. On a client
+        with more than one account that reads another account's money and
+        publishes it as this one's. The fixture's balance body is the same
+        whichever account it is asked for, so only the recorded call can tell."""
+        self.broker.list_account_cash(_SINCE, _UNTIL)
+        calls = dict(self.client.calls)
+        for endpoint in ("bookings", "trades", "balances"):
+            with self.subTest(endpoint=endpoint):
+                self.assertEqual(calls[endpoint]["client_key"], "CK-1")
+                self.assertEqual(calls[endpoint]["account_key"], "AK-1")
 
     def test_a_vendor_error_leaves_as_a_contract_error(self) -> None:
         """The network calls sit INSIDE ``_translate_saxo_errors()``.
