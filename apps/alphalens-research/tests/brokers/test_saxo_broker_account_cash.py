@@ -767,14 +767,26 @@ class TheRowsOwnIdentityIsRefusedRatherThanCoerced(unittest.TestCase):
         self.assertEqual(_opt_int(486.0), 486)
 
     def test_a_present_instrument_id_that_is_not_an_int_refuses_the_read(self) -> None:
-        """On both row types: the capability reads ``Uic`` from both reports."""
+        """On both row types: the capability reads ``Uic`` from both reports.
+
+        Each half asserts which REPORT the refusal names, and the trades half
+        puts a clean bookings row back first. Without both, the trades half has
+        no power: ``read_account_cash`` maps bookings before trades, so the bad
+        bookings row the first assertion left on the shared fake satisfies the
+        second one, and reverting the trades-side refusal alone keeps the whole
+        module green."""
         for value in ("486.0", "oops", True, [486]):
-            with self.subTest(uic=value):
+            with self.subTest(uic=value, report="bookings"):
                 with self.assertRaises(VendorPayloadShapeError) as caught:
                     self._event(Uic=value)
                 self.assertIn("Uic", str(caught.exception))
-                with self.assertRaises(VendorPayloadShapeError):
+                self.assertIn("bookings", str(caught.exception))
+            with self.subTest(uic=value, report="trades"):
+                self.client.bookings = [_vendor_row(self.booking_base)]
+                with self.assertRaises(VendorPayloadShapeError) as caught:
                     self._trade(Uic=value)
+                self.assertIn("Uic", str(caught.exception))
+                self.assertIn("trades", str(caught.exception))
 
     def test_an_instrument_id_the_vendor_did_not_send_stays_none(self) -> None:
         """A cash deposit has no instrument, so absent is an answer, not a defect.
