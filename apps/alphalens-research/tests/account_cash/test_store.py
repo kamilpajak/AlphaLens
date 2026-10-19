@@ -172,6 +172,38 @@ class EveryAppenderRefusesANonLiveEnvironment(IsolatedHomeTestCase):
         self.assertEqual(ctx.exception.reason, store.SIM_STORE_REFUSED)
         self.assertIn(_SIM, str(ctx.exception))
 
+    def test_the_published_reason_is_the_literal_the_cli_will_publish(self) -> None:
+        """Written out, not read off the constant under test.
+
+        The assertion above derives its expectation from
+        ``store.SIM_STORE_REFUSED`` itself, so the string was free to change to
+        anything at all. B2 puts it in ``details.reason``, where it becomes a
+        client-visible contract value a shell caller branches on.
+        """
+        self.assertEqual(store.SIM_STORE_REFUSED, "sim_store_refused")
+
+    def test_the_write_refusal_is_not_the_read_sides_reason(self) -> None:
+        """Two different facts that travel together on SIM: one says the
+        vendor's SIM reports answer with other accounts' rows, the other says a
+        write was aimed at a non-live store. Sharing a string would make them
+        indistinguishable to a caller that branches on it."""
+        from alphalens_pipeline.brokers.account_cash import SIM_REPORTS_UNUSABLE
+
+        self.assertNotEqual(store.SIM_STORE_REFUSED, SIM_REPORTS_UNUSABLE)
+
+    def test_a_non_live_write_is_refused_before_the_rows_are_even_rendered(self) -> None:
+        """Which guard answers a SIM append of an unrenderable row.
+
+        The environment refusal is the OUTER gate: the codec's complaint about
+        this batch is about rows that were never going to be written anywhere,
+        and answering it would publish ``CashBookDecodeError`` for what is a
+        refusal to write to SIM at all. Nothing pinned the order -- the A5 loop
+        uses finite rows and the A4 cases use LIVE, so the two guards never met.
+        """
+        with self.assertRaises(store.SimCashBookRefusedError):
+            store.append_cash_events([_event("1", amount=float("nan"))], env=_SIM)
+        self.assertFalse(paths.account_cash_root(_SIM).exists())
+
     def test_an_unknown_environment_is_refused_as_a_value_error(self) -> None:
         """Not a SIM refusal: an unknown env is a caller defect, and answering
         the SIM reason for it would publish a wrong reason to the CLI."""
@@ -361,6 +393,31 @@ class TheCashEventFold(IsolatedHomeTestCase):
         self.assertEqual(fold.lines, 2)
         self.assertEqual(fold.restated, 0)
 
+    def test_restated_counts_keys_and_not_restatement_events(self) -> None:
+        """``CashEventFold.restated`` documents "keys whose payload CHANGED".
+
+        No case restated the same key twice, so counting KEYS and counting
+        OCCURRENCES were indistinguishable -- swapping the set for a list left
+        every test green. It is the number a later reader compares against
+        ``lines - len(events)``, and under the occurrence reading a single
+        booking corrected twice reports two corrected bookings.
+        """
+        for amount in (-51.49, -61.49, -71.49):
+            store.append_cash_events([_event("1", amount_account_currency=amount)], env=_LIVE)
+
+        fold = store.read_cash_events(env=_LIVE)
+        self.assertEqual(fold.restated, 1)
+        self.assertEqual(fold.lines, 3)
+        self.assertEqual(len(fold.events), 1)
+        self.assertEqual(fold.events[0].amount_account_currency, -71.49)
+
+    def test_two_keys_each_restated_once_count_as_two(self) -> None:
+        """The other direction: a count that collapsed to a flag would satisfy
+        the test above."""
+        store.append_cash_events([_event("1"), _event("2")], env=_LIVE)
+        store.append_cash_events([_event("1", amount=-1.0), _event("2", amount=-2.0)], env=_LIVE)
+        self.assertEqual(store.read_cash_events(env=_LIVE).restated, 2)
+
     def test_the_published_order_is_by_date_then_id(self) -> None:
         """Sorted EXPLICITLY. ``read_pick_fold``'s own order is first-seen key
         order carrying the last value, which is the wrong order for a cash
@@ -458,6 +515,35 @@ class TheBalanceAndSweepJournalsDedupeOnTheSweepId(IsolatedHomeTestCase):
         store.append_sweep(_sweep("s1"), env=_LIVE)
         store.append_sweep(_sweep("s2", swept_at=later), env=_LIVE)
         self.assertEqual([record.sweep_id for record in store.read_sweeps(env=_LIVE)], ["s1", "s2"])
+
+    def test_three_balances_under_distinct_sweep_ids_are_published_oldest_first(self) -> None:
+        """``read_balances`` documents "oldest first", and every other
+        multi-balance case here puts both snapshots under ONE ``sweep_id`` --
+        so the fold collapses them and a one-element list satisfies any
+        ordering. The property was true and empty: reversing the sort was
+        green. Appended out of order on purpose, since an append-ordered
+        return would otherwise look sorted."""
+        middle = dt.datetime(2026, 10, 9, 0, 31, tzinfo=dt.UTC)
+        oldest = dt.datetime(2026, 10, 8, 0, 31, tzinfo=dt.UTC)
+        newest = dt.datetime(2026, 10, 10, 0, 31, tzinfo=dt.UTC)
+        store.append_balance(_balance(asof=middle), env=_LIVE, sweep_id="s2")
+        store.append_balance(_balance(asof=newest), env=_LIVE, sweep_id="s3")
+        store.append_balance(_balance(asof=oldest), env=_LIVE, sweep_id="s1")
+
+        self.assertEqual(
+            [snapshot.asof for snapshot in store.read_balances(env=_LIVE)],
+            [oldest, middle, newest],
+        )
+
+    def test_two_balances_sharing_an_instant_are_ordered_by_sweep_id(self) -> None:
+        """The tie-break, so the published order is total rather than
+        whatever the fold's insertion order happened to be."""
+        store.append_balance(_balance(), env=_LIVE, sweep_id="s2")
+        store.append_balance(_balance(cash_balance=1.0), env=_LIVE, sweep_id="s1")
+        self.assertEqual(
+            [snapshot.cash_balance for snapshot in store.read_balances(env=_LIVE)],
+            [1.0, 20738.68],
+        )
 
     def test_a_restated_balance_for_one_sweep_keeps_the_latest(self) -> None:
         store.append_balance(_balance(cash_balance=1.0), env=_LIVE, sweep_id="s1")

@@ -284,6 +284,58 @@ class EveryFieldIsOnTheWire(unittest.TestCase):
                     codec.cash_event_from_jsonable(partial)
 
 
+class AnExtraKeyIsKeptOutOfTheRecordAndNotRefused(unittest.TestCase):
+    """The TOLERANT half of the codec's deliberate asymmetry.
+
+    The strict half -- a missing key is refused -- is pinned above. This half
+    had no test at all, so making an extra key a refusal was green across all
+    117 tests. It is not a style choice: an extra key is how a line written by a
+    NEWER, additive writer arrives at an older reader, and refusing it would
+    make every line of that version malformed, which in this fold means the
+    booking vanishes from every later read while the line count still counts it.
+    """
+
+    def _rendered_with_an_extra_key(self) -> dict[str, Any]:
+        return {**codec.cash_event_to_jsonable(_EMPTY_EVENT), "settlement_batch_id": "B-7"}
+
+    def test_a_line_from_a_newer_writer_still_decodes(self) -> None:
+        decoded = codec.cash_event_from_jsonable(self._rendered_with_an_extra_key())
+        self.assertEqual(decoded, _EMPTY_EVENT)
+
+    def test_the_extra_key_is_reported_once_as_a_warning(self) -> None:
+        """Tolerated is not ignored: a reader must be able to see that this
+        line said more than the record carries."""
+        with self.assertLogs("alphalens_pipeline.account_cash.codec", level="WARNING") as logs:
+            codec.cash_event_from_jsonable(self._rendered_with_an_extra_key())
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("settlement_batch_id", logs.output[0])
+
+    def test_every_row_type_tolerates_an_extra_key(self) -> None:
+        """All four decoders share ``_warn_about_extra_keys``, and a fifth row
+        type added later must not quietly pick the strict half."""
+        cases = (
+            (
+                "cash_event",
+                codec.cash_event_to_jsonable(_EMPTY_EVENT),
+                codec.cash_event_from_jsonable,
+            ),
+            ("trade_row", codec.trade_row_to_jsonable(_EMPTY_TRADE), codec.trade_row_from_jsonable),
+            ("balance", codec.balance_to_jsonable(_BALANCE), codec.balance_from_jsonable),
+            ("sweep", codec.sweep_to_jsonable(_SWEEP), codec.sweep_from_jsonable),
+        )
+        for name, rendered, decode in cases:
+            with self.subTest(row=name):
+                self.assertEqual(decode({**rendered, "a_future_key": 1}), decode(rendered))
+
+    def test_a_missing_key_is_still_refused_on_the_same_row(self) -> None:
+        """The two halves on ONE payload, so a decode that became tolerant of
+        everything cannot satisfy the tests above."""
+        with_extra = self._rendered_with_an_extra_key()
+        del with_extra["amount"]
+        with self.assertRaises(codec.CashBookDecodeError):
+            codec.cash_event_from_jsonable(with_extra)
+
+
 class NoTupleSurvivesTheRender(unittest.TestCase):
     """#1405: ``dataclasses.asdict`` recurses a tuple INTO a tuple, which
     ``json.dumps`` then writes as an array a decode reads back as a list -- so
