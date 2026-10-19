@@ -325,6 +325,14 @@ def _queue_write_failed(exc: Exception, *, journal: Path) -> typer.Exit:
     for one event. Retryable: these commands touch only the queue, and the
     shared appender repairs a predecessor torn by the failed write, so the
     retry does not land on damaged bytes.
+
+    ``alphalens cashbook sync`` reports the same CODE and deliberately does not
+    call this helper (#1689). It writes no queue, so this message would name the
+    wrong store; it distinguishes a failed journal append from a lock it could
+    not take, which one message cannot carry; and its ``details.journal`` is
+    ``None`` when the failure named no file, which a ``Path`` parameter cannot
+    express. The published row in ``apps/alphalens-broker-contract/README.md``
+    covers both spellings, and that row is what keeps them one answer.
     """
     return _fail_with(
         "queue_write_failed",
