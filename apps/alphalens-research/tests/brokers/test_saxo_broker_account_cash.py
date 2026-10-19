@@ -330,18 +330,47 @@ class TheCashEventMapping(unittest.TestCase):
         self.assertEqual(event.amount_account_currency, 2000.0)
 
     def test_the_left_hand_key_of_each_uniform_pair_is_the_one_read(self) -> None:
-        """Four vendor key pairs are byte-identical on all 104 real rows.
+        """SEVEN mapped bookings fields have a twin key the capture cannot tell apart.
 
-        Measured on the fixture: ``RelatedTradeId == RelatedPositionId``,
-        ``Uic == UnderlyingInstrumentUic``,
-        ``InstrumentSymbol == UnderlyingInstrumentSymbol`` and
-        ``AccountCurrency == ClientCurrency``, each 104 of 104 with both keys
-        present on every row. So reading the right-hand key instead is
-        invisible on the whole real capture, and only a row whose twins
-        DISAGREE can tell the two apart. The parity test against
-        ``CostBooking`` cannot see this either: that mapping reads the same
-        left-hand keys, so both agree under the swap, and it carries neither
-        ``uic`` nor ``instrument_symbol`` at all."""
+        Re-measured on the fixture on 2026-10-19, because the count was
+        stated as four and the scan that produced it covered only the fields
+        whose twin is named ``Underlying*`` or ``Client*``:
+
+        ======================================================  ==================
+        pair                                                    identical rows
+        ======================================================  ==================
+        ``RelatedTradeId == RelatedPositionId``                 104 / 104
+        ``Uic == UnderlyingInstrumentUic``                      104 / 104
+        ``InstrumentSymbol == UnderlyingInstrumentSymbol``       104 / 104
+        ``AccountCurrency == ClientCurrency``                   104 / 104
+        ``AmountClass == CostClass``                             103 / 104
+        ``ConversionRateAccountCurrency == …ClientCurrency``     103 / 104
+        ``AmountClass == CostSubClass``                           44 / 104
+        ======================================================  ==================
+
+        So reading the right-hand key instead is invisible on the whole real
+        capture for the first four, and only a row whose twins DISAGREE can
+        tell the two apart. The last three disagree on at least one row, and
+        the criterion that matters is still the same: all seven agree on
+        ``58330463544``, the row the field-by-field test above asserts, so no
+        swap among them shows up there.
+
+        What the other tests see, measured by making each swap:
+
+        * ``AmountClass -> CostClass`` is invisible to the ENTIRE brokers test
+          package (3 652 tests green). ``CostBooking`` carries no
+          ``amount_class``, so the parity test is blind to it by field set.
+        * ``ConversionRateAccountCurrency -> …ClientCurrency`` is caught by the
+          parity test, but only on row ``58422790702`` and only by
+          ``-0.00999999999999978 != -0.00999999999999979`` -- a 1e-17 float
+          difference on one of 104 rows. That is an accident of this capture,
+          not a guard, and the next capture may not have it.
+        * The four ``Underlying*`` / ``Client*`` pairs stay invisible to the
+          parity test: ``CostBooking`` reads the same left-hand keys, so both
+          mappings agree under the swap, and it carries neither ``uic`` nor
+          ``instrument_symbol`` at all.
+
+        Hence every twin goes in the synthetic row below, uniform or not."""
         self.client.bookings = [
             {
                 **next(r for r in _VENUE["bookings"] if r["BkAmountId"] == "58330463544"),
@@ -349,6 +378,9 @@ class TheCashEventMapping(unittest.TestCase):
                 "UnderlyingInstrumentUic": 999,
                 "UnderlyingInstrumentSymbol": "WRONG:xnas",
                 "ClientCurrency": "EUR",
+                "CostClass": "WrongClass",
+                "CostSubClass": "WrongSubClass",
+                "ConversionRateClientCurrency": -999.99,
             }
         ]
         event = self._event("58330463544")
@@ -356,6 +388,8 @@ class TheCashEventMapping(unittest.TestCase):
         self.assertEqual(event.uic, 486)
         self.assertEqual(event.instrument_symbol, "F:xnys")
         self.assertEqual(event.account_currency, "PLN")
+        self.assertEqual(event.amount_class, "NotAssigned")
+        self.assertEqual(event.conversion_cost_account_currency, -0.130000000000003)
 
 
 class TheTradeRowMapping(unittest.TestCase):
@@ -801,12 +835,14 @@ class TheTwoMappingsOfTheSameRows(unittest.TestCase):
     """Drift containment between this capability and fill-history.
 
     STATED LIMIT, so it is not discovered later: this is drift containment,
-    not mapping verification. It is blind to all four uniform key pairs on
+    not mapping verification. It is blind to the four uniform key pairs on
     each side -- ``CostBooking`` reads the same left-hand keys, so both
     mappings still agree under a swap -- and ``CostBooking`` and ``Execution``
-    carry neither ``uic`` nor ``instrument_symbol`` at all, so two of the four
-    booking swaps fall outside its field set entirely. The twin-key tests are
-    the only checks with power there."""
+    carry neither ``uic`` nor ``instrument_symbol`` nor ``amount_class`` at
+    all, so three of the seven booking swaps fall outside its field set
+    entirely. On the ``ConversionRate`` twins it is red by accident rather
+    than by design: see the table in the bookings twin-key test. The twin-key
+    tests are the checks with power there."""
 
     def test_the_bookings_mappings_agree_on_every_shared_field(self) -> None:
         shared = (
