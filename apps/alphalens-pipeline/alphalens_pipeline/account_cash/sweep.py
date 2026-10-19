@@ -30,7 +30,22 @@ stopped by it, which is what the append-mode gate in
 
 The bounded spin injects its clock and sleep, the
 ``data/alt_data/sec_rate_coordinator.py`` shape: without that a contention test
-pays the full timeout on every run.
+pays the full timeout on every run. With the real clock the loser refuses after
+a measured 1.006 s and the env root holds the lock file and no journal.
+
+**Known residual, stated rather than discovered: plan-then-apply is TOCTOU.**
+:func:`plan_sweep` reads the folds and the lock is taken inside
+:func:`apply_sweep`, so two sweeps that plan against the same state and then
+both apply are not serialised by it -- the same shape the arming door carries
+and documents. Measured on 2026-10-19: both record ``appended: 1`` and
+``already_present: 0``, the journal gets two lines, and the fold still holds
+ONE record with the right amount and ``restated: 0``. So the cost is confined
+to the two sweep records' own counters, over-reporting what they appended and
+under-reporting what was already there; no money is double counted, because
+the fold is keyed and latest-line-wins and an identical duplicate is not a
+restatement. Closing it would mean re-planning inside the lock, which would let
+the body a caller already saw differ from what was appended -- the reason the
+window is accepted here rather than traded for that.
 
 Pure of ``typer``. The sweep is what a command drives, never the reverse.
 """
