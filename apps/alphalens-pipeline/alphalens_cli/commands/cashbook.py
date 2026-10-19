@@ -313,6 +313,8 @@ def sync_command(
       format      settled first, so every refusal below renders as asked
       window      both bounds as dates, then --since <= --until; an inverted
                   or unbounded window must not reach the vendor
+      sweep id    --sweep-id, when given, as an AWARE instant; a naive one
+                  would reach `apply_sweep` as a ValueError after the read
       instance    the same `state_paths` seam the broker group resolves, so
                   the gateway read and the store root cannot disagree
       capability  a broker without `list_account_cash` is
