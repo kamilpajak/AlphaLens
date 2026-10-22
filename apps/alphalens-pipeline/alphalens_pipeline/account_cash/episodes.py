@@ -23,6 +23,15 @@ whose quantity exceeds the running position is unassigned, and the episode it
 would have closed is ``window_clipped`` and excluded; a close with no open
 quantity at all produces no episode.
 
+**This walk is LONG-ONLY, and says so rather than guessing.** An instrument
+whose walk opens short and later returns to flat -- sell 10, buy 10 back -- is
+a short round trip, and the pairing here has no notion of one. The whole
+instrument is refused with :data:`UNASSIGNED_SHORT_OPEN` and publishes no
+episode, instead of reading the opening sell as store incompleteness and the
+buy-back as a fresh long position that never closes. A lone sell with no
+buy-back is NOT this case: it cannot be told apart from a close whose entry
+predates the sweep, so it stays ``no_open_in_store``.
+
 **An unreadable quantity is STICKY for the rest of that instrument.** Once one
 fill's quantity cannot be read, the running position is unknowable from that
 row on -- the fill may have been a buy -- so every LATER episode on that
@@ -89,7 +98,19 @@ EXCLUSION_ORDER: tuple[str, ...] = (STATE_WINDOW_CLIPPED, STATE_IMBALANCED, STAT
 UNASSIGNED_NO_OPEN = "no_open_in_store"
 #: The vendor sent no quantity on this fill, so the walk cannot place it.
 UNASSIGNED_QUANTITY_NOT_READ = "quantity_not_read"
-UNASSIGNED_REASONS: tuple[str, ...] = (UNASSIGNED_NO_OPEN, UNASSIGNED_QUANTITY_NOT_READ)
+#: The instrument's walk OPENS short and later returns to flat -- a short
+#: round trip. Long-only is a premise of this derivation (memo section 1.5),
+#: so the shape is named rather than modelled: a short episode's cost basis,
+#: its sign conventions and its realized net are all different quantities.
+#: Distinct from :data:`UNASSIGNED_NO_OPEN` on purpose -- that one means the
+#: entry predates the sweep, and reporting a short as incompleteness points
+#: the reader at a store gap that does not exist.
+UNASSIGNED_SHORT_OPEN = "short_open_not_modelled"
+UNASSIGNED_REASONS: tuple[str, ...] = (
+    UNASSIGNED_NO_OPEN,
+    UNASSIGNED_QUANTITY_NOT_READ,
+    UNASSIGNED_SHORT_OPEN,
+)
 
 #: Stated on every episode. The pairing is an assumption about the account's
 #: end-of-day netting, not a measurement, and publishing it as measured would
@@ -107,6 +128,7 @@ __all__ = [
     "UNASSIGNED_NO_OPEN",
     "UNASSIGNED_QUANTITY_NOT_READ",
     "UNASSIGNED_REASONS",
+    "UNASSIGNED_SHORT_OPEN",
     "CashEpisode",
     "EpisodeFold",
     "UnassignedFill",
@@ -283,6 +305,43 @@ def _walk_order(row: TradeRow) -> tuple[bool, dt.datetime, str]:
     return (row.execution_time is None, row.execution_time or _EPOCH, row.trade_id)
 
 
+def _opens_a_short_round_trip(ordered: Sequence[TradeRow]) -> bool:
+    """True when this instrument's walk opens SHORT and later returns to flat.
+
+    Two conditions, and both are needed. **Opens short**: the first fill is a
+    close beyond the epsilon, so there is nothing of the account's own for it
+    to close. **Returns to flat**: the signed quantity comes back to zero
+    later, which is the one thing a clipped entry cannot do -- a close whose
+    entry predates the sweep leaves the signed walk short forever, and on a
+    long-only account that is the likelier reading of a lone sell. So the two
+    together are what separate a bought-back short from
+    :data:`UNASSIGNED_NO_OPEN`, and dropping either would relabel a real
+    store-incompleteness signal.
+
+    Reads the signed quantity only to RECOGNISE the shape; nothing downstream
+    models a short position. An unreadable quantity makes the signed walk
+    unknowable, so this answers ``False`` and the instrument goes to the long
+    walk, where the sticky imbalanced flag refuses its episodes instead.
+
+    Called with one ``uic``'s own fills, which are never none.
+    """
+    quantities: list[float] = []
+    for row in ordered:
+        if row.amount is None:
+            return False
+        quantities.append(row.amount)
+
+    if quantities[0] >= -QTY_PRECISION:
+        return False
+
+    position = 0.0
+    for quantity in quantities:
+        position += quantity
+        if abs(position) <= QTY_PRECISION:
+            return True
+    return False
+
+
 def _unassigned(row: TradeRow, reason: str, *, quantity: float | None) -> UnassignedFill:
     pair = (row.booked_amount_account_currency, row.account_currency)
     return UnassignedFill(
@@ -323,8 +382,21 @@ class _InstrumentWalk:
         self._quantity_unreadable = False
 
     def run(self, uic_rows: Sequence[TradeRow]) -> None:
-        """Walk one instrument's fills, oldest first."""
-        for row in sorted(uic_rows, key=_walk_order):
+        """Walk one instrument's fills, oldest first.
+
+        An instrument whose walk opens short is refused WHOLE rather than
+        walked: every fill is listed with its own reason and no episode is
+        published, so the instrument states no eligible realized net. Pairing
+        a short long-only would publish a cost basis and a net that are not
+        the quantities those words name.
+        """
+        ordered = sorted(uic_rows, key=_walk_order)
+        if _opens_a_short_round_trip(ordered):
+            self.unassigned.extend(
+                _unassigned(row, UNASSIGNED_SHORT_OPEN, quantity=row.amount) for row in ordered
+            )
+            return
+        for row in ordered:
             self._step(row)
         if self._current is not None:
             self.episodes.append(self._current.finish())
