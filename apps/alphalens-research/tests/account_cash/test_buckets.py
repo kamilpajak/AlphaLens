@@ -217,6 +217,34 @@ class AnUnseenTypeCanOnlyMoveMoneyIntoUnclassified(unittest.TestCase):
         assert named[BUCKET_FEES].total.value is not None
         self.assertAlmostEqual(named[BUCKET_FEES].total.value, -155.31, places=6)
 
+    def test_one_absent_currency_nulls_its_bucket_the_same_way(self) -> None:
+        """The all-or-nothing rule covers the CURRENCY, not only the amount.
+
+        An amount nobody said was in the account currency is not an account
+        amount. A bucket comprehension that writes ``event.account_currency or
+        "PLN"`` never reaches ``acct_sum``'s guard: measured 2026-10-22, it
+        publishes ``share_legs`` as a complete -3110.06 PLN while the row-wise
+        total refuses, so the report would print numeric buckets beside a
+        refusing total and the identity would be unreadable rather than red.
+        """
+        rows = list(BOOKINGS)
+        share_leg = next(
+            index
+            for index, event in enumerate(rows)
+            if event.bk_amount_type == buckets.SHARE_AMOUNT
+        )
+        rows[share_leg] = event_like(rows[share_leg], account_currency=None)
+
+        fold = classify_buckets(tuple(rows))
+        named = _by_name(fold)
+
+        self.assertIsNone(named[BUCKET_SHARE_LEGS].total.value)
+        self.assertEqual(named[BUCKET_SHARE_LEGS].total.null_reason, "account_amount_not_reported")
+        self.assertEqual(named[BUCKET_SHARE_LEGS].rows, 41)
+        self.assertIsNone(fold.all_rows.value)
+        assert named[BUCKET_FEES].total.value is not None
+        self.assertAlmostEqual(named[BUCKET_FEES].total.value, -155.31, places=6)
+
     def test_unclassified_is_present_at_zero(self) -> None:
         """Printed even when empty, so a non-zero one is a CHANGED number."""
         named = _by_name(classify_buckets(BOOKINGS))
@@ -232,6 +260,32 @@ class AnUnseenTypeCanOnlyMoveMoneyIntoUnclassified(unittest.TestCase):
         self.assertEqual([bucket.name for bucket in fold.buckets], list(BUCKET_ORDER))
         self.assertEqual(fold.rows, 0)
         self.assertEqual(fold.all_rows.value, 0.0)
+
+
+class TheAccountCurrencyComesOffTheRows(unittest.TestCase):
+    def test_a_non_pln_account_publishes_its_own_currency_on_every_bucket(self) -> None:
+        """The capture is PLN on 104 of 104 rows, so nothing here reads the field.
+
+        Measured 2026-10-22: with the fold's account currency hard-coded to
+        ``"PLN"`` all 13 bucket tests stayed green. The direction of that
+        mutation is safe on a EUR account -- every bucket refuses with
+        ``currency_mixed`` -- but an EMPTY bucket publishes ``0.00 PLN`` on an
+        account that holds no zlotys, which is a money line with the wrong
+        unit on it. The empty bucket is therefore the assertion that proves
+        the read: its currency can come from nowhere but the rows.
+        """
+        rows = tuple(event_like(event, account_currency="EUR") for event in BOOKINGS)
+
+        fold = classify_buckets(rows)
+        named = _by_name(fold)
+
+        self.assertEqual(fold.all_rows.currency, "EUR")
+        for name in BUCKET_ORDER:
+            with self.subTest(bucket=name):
+                self.assertEqual(named[name].total.currency, "EUR")
+        self.assertEqual(named[BUCKET_UNCLASSIFIED].total.rendered, "0.00 EUR")
+        assert fold.all_rows.value is not None
+        self.assertAlmostEqual(fold.all_rows.value, ALL_BOOKINGS_TOTAL_PLN, places=6)
 
 
 class TheBucketIdentity(unittest.TestCase):
