@@ -413,7 +413,12 @@ class _InstrumentWalk:
             self.episodes.append(self._current.finish())
 
     def _step(self, row: TradeRow) -> None:
-        """Three rules, in the order the module docstring states them."""
+        """The four rules, in the order the module docstring states them.
+
+        The order is load-bearing: a fill inside the epsilon is checked AFTER
+        the over-close guard, because a close that both exceeds the position
+        and sits inside the epsilon is the over-close the walk already names.
+        """
         quantity = row.amount
         if quantity is None:
             self._quantity_not_read(row)
