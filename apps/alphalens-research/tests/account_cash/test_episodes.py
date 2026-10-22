@@ -39,6 +39,8 @@ from alphalens_pipeline.account_cash.episodes import (
     STATE_WINDOW_CLIPPED,
     UNASSIGNED_NO_OPEN,
     UNASSIGNED_QUANTITY_NOT_READ,
+    UNASSIGNED_REASONS,
+    UNASSIGNED_SHORT_OPEN,
     CashEpisode,
     EpisodeFold,
     derive_episodes,
@@ -51,6 +53,7 @@ from tests.account_cash.cashbook_fixture import (
     SYNTHETIC_SHARED_SYMBOL,
     SYNTHETIC_SHARED_SYMBOL_BUY_UIC,
     SYNTHETIC_SHARED_SYMBOL_SELL_UIC,
+    SYNTHETIC_SHORT_ROUND_TRIP_MONEY,
     SYNTHETIC_UNREAD_MIDWAY_FIRST_NET,
     SYNTHETIC_UNREAD_MIDWAY_LATER_MONEY,
     TRADES,
@@ -60,6 +63,7 @@ from tests.account_cash.cashbook_fixture import (
     synthetic_fractional_round_trip,
     synthetic_over_close_inside_epsilon,
     synthetic_partly_closed,
+    synthetic_short_round_trip,
     synthetic_trade_id_disagrees_with_time,
     synthetic_two_uics_one_symbol,
     synthetic_unread_quantity_first,
@@ -310,6 +314,101 @@ class TheWindowClippedDetectorIsTheQuantityWalk(unittest.TestCase):
             [episode.state for episode in _by_symbol(fold.episodes, "F:xnys")],
             [STATE_CLOSED, STATE_CLOSED],
         )
+
+
+class AWalkThatOpensShortIsNotModelled(unittest.TestCase):
+    """The account is long-only today, so a short walk gets its own reason.
+
+    Building short support would be a design change: a short episode's cost
+    basis, its sign conventions and its realized net are all different
+    quantities. What this says instead is that the shape is not modelled,
+    which is a statement the reader can act on -- and keeps the store's own
+    incompleteness signal meaning only incompleteness.
+    """
+
+    def test_a_short_round_trip_is_named_and_not_read_as_a_missing_entry(self) -> None:
+        """Sell 10, buy 10 back: flat, +100.00 realized, no long position.
+
+        Measured 2026-10-22 before this fix: one unassigned fill reasoned
+        ``no_open_in_store`` -- whose registered meaning is that the entry
+        predates what was swept -- plus a phantom long ``open`` episode with a
+        cost basis of -900.00 PLN, on an account that is actually flat. Both
+        halves are wrong, and the false incompleteness is the worse one: it
+        points the reader at a store gap that does not exist.
+        """
+        fold = derive_episodes(synthetic_short_round_trip())
+
+        self.assertEqual(fold.episodes, ())
+        self.assertEqual(len(fold.unassigned), 2)
+        for fill in fold.unassigned:
+            with self.subTest(trade_id=fill.trade_id):
+                self.assertEqual(fill.reason, UNASSIGNED_SHORT_OPEN)
+        self.assertEqual(
+            sorted(fill.quantity for fill in fold.unassigned if fill.quantity is not None),
+            [-10.0, 10.0],
+        )
+        self.assertEqual((fold.fills_read, fold.fills_assigned), (2, 0))
+
+        # The money is still in the partition, on the fills -- it is simply
+        # not an eligible realized net.
+        total = acct_sum(_money_pairs(fold), rows=fold.fills_read)
+        assert total.value is not None
+        self.assertAlmostEqual(total.value, SYNTHETIC_SHORT_ROUND_TRIP_MONEY, places=6)
+
+    def test_a_sell_that_is_never_bought_back_stays_store_incompleteness(self) -> None:
+        """The boundary of the new reason, and why it needs the flat return.
+
+        A sell with nothing open and no later buy-back is indistinguishable
+        from a close whose entry predates the sweep, and on a long-only
+        account that is the likelier reading -- it is what
+        ``no_open_in_store`` is registered to mean. The new reason therefore
+        fires only when the walk OPENS short and the position later comes back
+        to flat, which is the one shape that cannot be a clipped entry.
+        """
+        for rows in (synthetic_clipped_sell_only(), synthetic_clipped_partial()):
+            with self.subTest(rows=len(rows)):
+                fold = derive_episodes(rows)
+                reasons = {fill.reason for fill in fold.unassigned}
+                self.assertEqual(reasons, {UNASSIGNED_NO_OPEN})
+
+    def test_an_unreadable_quantity_keeps_the_instrument_on_the_long_walk(self) -> None:
+        """The pre-check needs every quantity to decide anything at all.
+
+        With one quantity unreadable the signed position is unknowable, so the
+        short pre-check cannot tell a buy-back from a clipped entry and must
+        not claim either. The instrument stays on the long walk, where the
+        sticky imbalanced flag is what refuses its episodes.
+        """
+        rows = synthetic_short_round_trip()
+        unreadable = (trade_like(rows[0], amount=None), rows[1])
+
+        fold = derive_episodes(unreadable)
+
+        self.assertEqual({fill.reason for fill in fold.unassigned}, {UNASSIGNED_QUANTITY_NOT_READ})
+        self.assertEqual([episode.state for episode in fold.episodes], [STATE_IMBALANCED])
+        self.assertFalse(fold.episodes[0].eligible)
+
+    def test_every_reason_the_walk_can_publish_is_registered(self) -> None:
+        """A reason nobody registered cannot be rendered or branched on.
+
+        The registry was decorative before this -- nothing read it -- so this
+        walks the shapes that produce each reason and checks the published
+        string against it, which is what makes a new reason that skips
+        ``UNASSIGNED_REASONS`` a failure here rather than at a consumer.
+        """
+        folds = (
+            derive_episodes(synthetic_short_round_trip()),
+            derive_episodes(synthetic_clipped_sell_only()),
+            derive_episodes(synthetic_unread_quantity_first()),
+        )
+        published = {fill.reason for fold in folds for fill in fold.unassigned}
+
+        self.assertEqual(
+            published,
+            {UNASSIGNED_SHORT_OPEN, UNASSIGNED_NO_OPEN, UNASSIGNED_QUANTITY_NOT_READ},
+        )
+        self.assertTrue(published <= set(UNASSIGNED_REASONS))
+        self.assertEqual(len(set(UNASSIGNED_REASONS)), len(UNASSIGNED_REASONS))
 
 
 class TheCoveragePartition(unittest.TestCase):

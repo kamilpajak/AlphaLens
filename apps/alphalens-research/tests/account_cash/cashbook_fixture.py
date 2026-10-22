@@ -534,6 +534,33 @@ def synthetic_unstamped_fill_sorts_last() -> tuple[TradeRow, ...]:
     )
 
 
+#: Sell 10, then buy 10 back -- a SHORT round trip. The account is long-only
+#: today and the capture holds no instrument whose first fill is a sell, so the
+#: over-close guard has no notion of a position that opens short: it reads the
+#: opening sell as ``no_open_in_store`` (the memo's own store-incompleteness
+#: signal) and the buy-back as a fresh long position that never closes.
+#: Realized here is +100.00, and the account ends flat.
+SYNTHETIC_SHORT_ROUND_TRIP_UIC = 990015
+SYNTHETIC_SHORT_ROUND_TRIP_MONEY = 100.00
+
+
+def synthetic_short_round_trip() -> tuple[TradeRow, ...]:
+    return tuple(
+        _synthetic_fill(
+            uic=SYNTHETIC_SHORT_ROUND_TRIP_UIC,
+            symbol="SHORT:xnas",
+            trade_id=trade_id,
+            amount=amount,
+            booked=booked,
+            minute=minute,
+        )
+        for trade_id, amount, booked, minute in (
+            ("9900150001", -10.0, 1000.00, 0),
+            ("9900150002", 10.0, -900.00, 5),
+        )
+    )
+
+
 #: An opening fill the venue calls ``ToOpen`` while its ``Amount`` is NEGATIVE.
 #: On the capture the word and the sign agree on 41 of 41 rows, so only a row
 #: where they disagree can show which of the two the walk reads.
