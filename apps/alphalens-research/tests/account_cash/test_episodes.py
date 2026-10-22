@@ -51,6 +51,8 @@ from tests.account_cash.cashbook_fixture import (
     SYNTHETIC_SHARED_SYMBOL,
     SYNTHETIC_SHARED_SYMBOL_BUY_UIC,
     SYNTHETIC_SHARED_SYMBOL_SELL_UIC,
+    SYNTHETIC_UNREAD_MIDWAY_FIRST_NET,
+    SYNTHETIC_UNREAD_MIDWAY_LATER_MONEY,
     TRADES,
     synthetic_clip_then_round_trip,
     synthetic_clipped_partial,
@@ -61,6 +63,8 @@ from tests.account_cash.cashbook_fixture import (
     synthetic_trade_id_disagrees_with_time,
     synthetic_two_uics_one_symbol,
     synthetic_unread_quantity_first,
+    synthetic_unread_quantity_inside_episode,
+    synthetic_unread_quantity_midway,
     synthetic_unstamped_fill_sorts_last,
     synthetic_word_disagrees_with_sign,
     synthetic_zero_quantity_fill,
@@ -571,6 +575,64 @@ class AQuantityThatCannotPairMarksTheEpisodeItBelongedTo(unittest.TestCase):
         self.assertEqual(fill.reason, UNASSIGNED_QUANTITY_NOT_READ)
         self.assertIsNone(fill.quantity)
         self.assertEqual((fold.fills_read, fold.fills_assigned), (3, 2))
+
+    def test_an_unreadable_quantity_marks_every_later_episode_on_that_uic(self) -> None:
+        """One unreadable quantity makes the POSITION unknowable from then on.
+
+        Both shapes already pinned here have exactly ONE episode after the
+        unreadable fill, so neither separates a flag consumed by one episode
+        from one that holds for the rest of the instrument's walk. Measured
+        2026-10-22 before this fix, with a round trip, then the unreadable
+        fill, then TWO more round trips: the first is closed and eligible at
+        +10.00, the second imbalanced, and the THIRD is published closed and
+        ELIGIBLE at +3.00. That third episode is money published as a complete
+        round trip although the fill nobody could read may have been a buy --
+        in which case none of the later rows are flat round trips at all.
+        """
+        fold = derive_episodes(synthetic_unread_quantity_midway())
+
+        states = [episode.state for episode in fold.episodes]
+        self.assertEqual(states, [STATE_CLOSED, STATE_IMBALANCED, STATE_IMBALANCED])
+
+        first, *later = fold.episodes
+        self.assertTrue(first.eligible)
+        assert first.net_acct.value is not None
+        self.assertAlmostEqual(first.net_acct.value, SYNTHETIC_UNREAD_MIDWAY_FIRST_NET, places=6)
+
+        for episode in later:
+            with self.subTest(trade_ids=episode.trade_ids):
+                self.assertFalse(episode.eligible)
+                self.assertEqual(episode.exclusion_reason, STATE_IMBALANCED)
+                self.assertIsNone(episode.net_acct.value)
+                self.assertEqual(episode.net_acct.null_reason, NULL_NOT_CLOSED)
+                self.assertIsNone(episode.closed_date)
+                assert episode.money_acct.value is not None
+                self.assertAlmostEqual(
+                    episode.money_acct.value, SYNTHETIC_UNREAD_MIDWAY_LATER_MONEY, places=6
+                )
+
+        (fill,) = fold.unassigned
+        self.assertEqual(fill.reason, UNASSIGNED_QUANTITY_NOT_READ)
+        self.assertEqual((fold.fills_read, fold.fills_assigned), (7, 6))
+        total = acct_sum(_money_pairs(fold), rows=fold.fills_read)
+        assert total.value is not None
+        self.assertAlmostEqual(total.value, 15.00, places=6)
+
+    def test_an_unreadable_quantity_inside_an_episode_marks_the_later_ones_too(self) -> None:
+        """The same rule when the unreadable fill lands INSIDE an episode.
+
+        Here it arrives while a position is open rather than between two, so
+        the episode in flight is marked by the in-flight branch and the two
+        after it only by the sticky one. Without the sticky flag the third
+        round trip is again published closed and eligible.
+        """
+        fold = derive_episodes(synthetic_unread_quantity_inside_episode())
+
+        self.assertEqual(
+            [episode.state for episode in fold.episodes],
+            [STATE_CLOSED, STATE_IMBALANCED, STATE_IMBALANCED],
+        )
+        self.assertEqual([episode.eligible for episode in fold.episodes], [True, False, False])
 
     def test_an_excluded_episode_publishes_no_closed_date_at_all(self) -> None:
         """A date on an excluded episode is a date that places it in a window.
