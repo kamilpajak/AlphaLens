@@ -204,7 +204,7 @@ class EpisodeFold:
 class _Accumulator:
     """One episode under construction, on one ``uic``."""
 
-    def __init__(self, row: TradeRow) -> None:
+    def __init__(self, row: TradeRow, *, imbalanced: bool = False) -> None:
         self.uic = row.uic
         self.instrument_symbol = row.instrument_symbol
         self.opened_date = row.trade_date
@@ -214,7 +214,7 @@ class _Accumulator:
         self.trade_ids: list[str] = []
         self.entry_pairs: list[tuple[float | None, str | None]] = []
         self.all_pairs: list[tuple[float | None, str | None]] = []
-        self.imbalanced = False
+        self.imbalanced = imbalanced
         self.clipped = False
 
     def assign(self, row: TradeRow, quantity: float) -> None:
@@ -289,6 +289,89 @@ def _unassigned(row: TradeRow, reason: str, *, quantity: float | None) -> Unassi
     )
 
 
+class _InstrumentWalk:
+    """The quantity walk over ONE ``uic``'s fills, in execution order.
+
+    Extracted from :func:`derive_episodes`, where the same logic read as one
+    function of cognitive complexity 28 against this project's S3776 limit of
+    15 -- four pieces of mutable state (the running position, the episode in
+    flight, the two output lists) threaded through four nested branches. Each
+    decision is now its own method and the state is this object's, so no
+    method is deeper than one branch. Nothing here decides anything the
+    inlined walk did not.
+
+    One instance per instrument: the position and the episode in flight are
+    per-``uic`` by construction, so a shared instance could not leak one
+    instrument's position into another's.
+    """
+
+    def __init__(self) -> None:
+        self.episodes: list[CashEpisode] = []
+        self.unassigned: list[UnassignedFill] = []
+        self.assigned = 0
+        self._position = 0.0
+        self._current: _Accumulator | None = None
+        self._pending_imbalance = False
+
+    def run(self, uic_rows: Sequence[TradeRow]) -> None:
+        """Walk one instrument's fills, oldest first."""
+        for row in sorted(uic_rows, key=_walk_order):
+            self._step(row)
+        if self._current is not None:
+            self.episodes.append(self._current.finish())
+
+    def _step(self, row: TradeRow) -> None:
+        """Three rules, in the order the module docstring states them."""
+        quantity = row.amount
+        if quantity is None:
+            self._quantity_not_read(row)
+            return
+        if quantity < 0.0 and -quantity > self._position + QTY_PRECISION:
+            self._over_close(row, quantity)
+            return
+        self._place(row, quantity)
+
+    def _quantity_not_read(self, row: TradeRow) -> None:
+        """The vendor sent no quantity, so the walk cannot place this fill.
+
+        Its money still counts, on the fill rather than on the episode, so the
+        money partition stays exact; the episode it belonged to cannot pair
+        its quantity any more.
+        """
+        self.unassigned.append(_unassigned(row, UNASSIGNED_QUANTITY_NOT_READ, quantity=None))
+        if self._current is not None:
+            self._current.imbalanced = True
+        else:
+            self._pending_imbalance = True
+
+    def _over_close(self, row: TradeRow, quantity: float) -> None:
+        """The close exceeds everything the store knows was opened.
+
+        The position is RESET afterwards, so a clean round trip later on the
+        same instrument is still real realized money (amendment W8).
+        """
+        self.unassigned.append(_unassigned(row, UNASSIGNED_NO_OPEN, quantity=quantity))
+        if self._current is not None:
+            self._current.clipped = True
+            self.episodes.append(self._current.finish())
+            self._current = None
+        self._position = 0.0
+
+    def _place(self, row: TradeRow, quantity: float) -> None:
+        """Assign the fill, and close the episode if it brought the walk flat."""
+        if self._current is None:
+            self._current = _Accumulator(row, imbalanced=self._pending_imbalance)
+            self._pending_imbalance = False
+        self._current.assign(row, quantity)
+        self.assigned += 1
+        self._position += quantity
+        if abs(self._position) <= QTY_PRECISION:
+            self._current.closed_date = row.trade_date
+            self.episodes.append(self._current.finish())
+            self._current = None
+            self._position = 0.0
+
+
 def derive_episodes(rows: Sequence[TradeRow]) -> EpisodeFold:
     """Flat-to-flat spans per ``uic``, FIFO over the account's own fills.
 
@@ -297,6 +380,11 @@ def derive_episodes(rows: Sequence[TradeRow]) -> EpisodeFold:
     ``booked_amount_account_currency`` with ``account_currency`` (the money),
     and ``trade_date`` (the dates). ``to_open_or_close`` and
     ``trade_event_type`` are deliberately not read -- see the module docstring.
+
+    The per-instrument walk itself is :class:`_InstrumentWalk`; this function
+    groups and concatenates. The published order is the input's own order of
+    first appearance per ``uic``, which is what it was when the walk was
+    inlined here.
     """
     by_uic: dict[int | None, list[TradeRow]] = {}
     for row in rows:
@@ -307,48 +395,11 @@ def derive_episodes(rows: Sequence[TradeRow]) -> EpisodeFold:
     assigned = 0
 
     for uic_rows in by_uic.values():
-        position = 0.0
-        current: _Accumulator | None = None
-        pending_imbalance = False
-
-        for row in sorted(uic_rows, key=_walk_order):
-            quantity = row.amount
-            if quantity is None:
-                # Its money still counts, on the fill rather than on the
-                # episode, so the money partition stays exact; the episode it
-                # belonged to cannot pair its quantity any more.
-                unassigned.append(_unassigned(row, UNASSIGNED_QUANTITY_NOT_READ, quantity=None))
-                if current is not None:
-                    current.imbalanced = True
-                else:
-                    pending_imbalance = True
-                continue
-
-            if quantity < 0.0 and -quantity > position + QTY_PRECISION:
-                # The close exceeds everything the store knows was opened.
-                unassigned.append(_unassigned(row, UNASSIGNED_NO_OPEN, quantity=quantity))
-                if current is not None:
-                    current.clipped = True
-                    episodes.append(current.finish())
-                    current = None
-                position = 0.0
-                continue
-
-            if current is None:
-                current = _Accumulator(row)
-                current.imbalanced = pending_imbalance
-                pending_imbalance = False
-            current.assign(row, quantity)
-            assigned += 1
-            position += quantity
-            if abs(position) <= QTY_PRECISION:
-                current.closed_date = row.trade_date
-                episodes.append(current.finish())
-                current = None
-                position = 0.0
-
-        if current is not None:
-            episodes.append(current.finish())
+        walk = _InstrumentWalk()
+        walk.run(uic_rows)
+        episodes.extend(walk.episodes)
+        unassigned.extend(walk.unassigned)
+        assigned += walk.assigned
 
     return EpisodeFold(
         episodes=tuple(episodes),
