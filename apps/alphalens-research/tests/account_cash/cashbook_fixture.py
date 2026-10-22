@@ -561,6 +561,31 @@ def synthetic_short_round_trip() -> tuple[TradeRow, ...]:
     )
 
 
+#: ONE fill whose quantity is inside ``QTY_PRECISION``, on an instrument with
+#: no open position -- so it closes nothing and opens nothing. The capture has
+#: no such fill: every one of its 41 rows moves whole shares. The walk's three
+#: guards each let it through for a different reason (it is not a null
+#: quantity; the over-close threshold compares against the same epsilon it
+#: sits inside; and the flat check then reads a position of zero as "back to
+#: flat"), so it lands as a ``closed`` eligible episode carrying its money as
+#: a realized net.
+SYNTHETIC_CLOSES_NOTHING_UIC = 990016
+
+
+def synthetic_closes_nothing(*, amount: float, booked: float) -> tuple[TradeRow, ...]:
+    """One quantity-less-but-readable fill, with nothing open to apply it to."""
+    return (
+        _synthetic_fill(
+            uic=SYNTHETIC_CLOSES_NOTHING_UIC,
+            symbol="NOTHING:xnas",
+            trade_id="9900160001",
+            amount=amount,
+            booked=booked,
+            minute=0,
+        ),
+    )
+
+
 #: An opening fill the venue calls ``ToOpen`` while its ``Amount`` is NEGATIVE.
 #: On the capture the word and the sign agree on 41 of 41 rows, so only a row
 #: where they disagree can show which of the two the walk reads.

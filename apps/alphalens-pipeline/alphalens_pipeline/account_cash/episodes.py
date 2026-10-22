@@ -21,7 +21,10 @@ by "the first row is a close". The discriminating case is a PARTIAL over-close
 Three rules, in order: a fill the walk places in full is assigned; a close
 whose quantity exceeds the running position is unassigned, and the episode it
 would have closed is ``window_clipped`` and excluded; a close with no open
-quantity at all produces no episode.
+quantity at all produces no episode. A fourth rule falls out of the epsilon:
+a fill INSIDE ``QTY_PRECISION`` -- zero included -- arriving with no open
+position closes nothing and opens nothing, so it is unassigned rather than an
+episode that was never a round trip.
 
 **This walk is LONG-ONLY, and says so rather than guessing.** An instrument
 whose walk opens short and later returns to flat -- sell 10, buy 10 back -- is
@@ -98,6 +101,12 @@ EXCLUSION_ORDER: tuple[str, ...] = (STATE_WINDOW_CLIPPED, STATE_IMBALANCED, STAT
 UNASSIGNED_NO_OPEN = "no_open_in_store"
 #: The vendor sent no quantity on this fill, so the walk cannot place it.
 UNASSIGNED_QUANTITY_NOT_READ = "quantity_not_read"
+#: A fill whose quantity is inside ``QTY_PRECISION`` -- zero included --
+#: arriving with no open position: it closes nothing and opens nothing. Its
+#: own reason rather than :data:`UNASSIGNED_NO_OPEN`, for the same argument
+#: as :data:`UNASSIGNED_SHORT_OPEN`: nothing here says an entry was swept
+#: away, because nothing was being closed.
+UNASSIGNED_CLOSES_NOTHING = "closes_nothing"
 #: The instrument's walk OPENS short and later returns to flat -- a short
 #: round trip. Long-only is a premise of this derivation (memo section 1.5),
 #: so the shape is named rather than modelled: a short episode's cost basis,
@@ -109,6 +118,7 @@ UNASSIGNED_SHORT_OPEN = "short_open_not_modelled"
 UNASSIGNED_REASONS: tuple[str, ...] = (
     UNASSIGNED_NO_OPEN,
     UNASSIGNED_QUANTITY_NOT_READ,
+    UNASSIGNED_CLOSES_NOTHING,
     UNASSIGNED_SHORT_OPEN,
 )
 
@@ -125,6 +135,7 @@ __all__ = [
     "STATE_IMBALANCED",
     "STATE_OPEN",
     "STATE_WINDOW_CLIPPED",
+    "UNASSIGNED_CLOSES_NOTHING",
     "UNASSIGNED_NO_OPEN",
     "UNASSIGNED_QUANTITY_NOT_READ",
     "UNASSIGNED_REASONS",
@@ -410,7 +421,27 @@ class _InstrumentWalk:
         if quantity < 0.0 and -quantity > self._position + QTY_PRECISION:
             self._over_close(row, quantity)
             return
+        if self._current is None and abs(quantity) <= QTY_PRECISION:
+            self._closes_nothing(row, quantity)
+            return
         self._place(row, quantity)
+
+    def _closes_nothing(self, row: TradeRow, quantity: float) -> None:
+        """A fill inside the epsilon arriving with no open position.
+
+        It opens nothing and closes nothing, so it is no more an episode than
+        a close the walk cannot place is. Each of the other guards lets it
+        through for its own reason: the quantity IS readable; the over-close
+        threshold compares against the same epsilon the quantity sits inside,
+        so it does not fire; and the flat check then reads a position of zero
+        as "back to flat" and publishes a ``closed`` eligible episode whose
+        money becomes a realized net.
+
+        The discriminator is the open position, never the quantity: the same
+        fill BETWEEN a buy and its sell belongs to that round trip, and
+        refusing it there would move real money out of a real net.
+        """
+        self.unassigned.append(_unassigned(row, UNASSIGNED_CLOSES_NOTHING, quantity=quantity))
 
     def _quantity_not_read(self, row: TradeRow) -> None:
         """The vendor sent no quantity, so the walk cannot place this fill.
