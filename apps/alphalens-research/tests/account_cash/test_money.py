@@ -31,6 +31,7 @@ from alphalens_pipeline.account_cash.money import (
     BALANCE_TOLERANCE_ACCT,
     NULL_ACCT_AMOUNT_NOT_REPORTED,
     NULL_CURRENCY_MIXED,
+    NULL_CURRENCY_NOT_STATED,
     NULL_NON_FINITE,
     AcctAmount,
     acct_difference,
@@ -348,6 +349,68 @@ class TheDifferenceOfTwoTotals(unittest.TestCase):
         )
 
         self.assertEqual(difference.null_reason, NULL_CURRENCY_MIXED)
+
+    def test_a_unit_less_operand_refuses_instead_of_adopting_the_other_side(self) -> None:
+        """A number with no stated currency must not be given one here.
+
+        Measured 2026-10-22 before this fix: ``acct_difference(AcctAmount(0.0,
+        None, 0), acct_sum([(5.0, "PLN")], rows=1))`` answered **-5.00 PLN**.
+        The unit-less side silently adopted PLN, because the resolved currency
+        is the single stated one and only the OTHER side stated anything. This
+        is the path that can reach a balance cross-check -- the one consumer
+        of ``BALANCE_TOLERANCE_ACCT`` -- so a zero that nobody said was in the
+        account currency would be compared against the account's own balance
+        as if it were.
+
+        Asserted on BOTH sides: an implementation guarding only ``left`` keeps
+        the defect for ``acct_difference(real, unit_less)``.
+        """
+        unit_less = acct_sum([], rows=0)
+        real = acct_sum([(5.0, "PLN")], rows=1)
+        self.assertIsNone(unit_less.currency)
+
+        for name, (left, right) in {
+            "unit_less_left": (unit_less, real),
+            "unit_less_right": (real, unit_less),
+        }.items():
+            with self.subTest(case=name):
+                difference = acct_difference(left, right)
+
+                self.assertIsNone(difference.value)
+                self.assertEqual(difference.null_reason, NULL_CURRENCY_NOT_STATED)
+                self.assertIsNone(difference.currency)
+                self.assertEqual(difference.rows, 1)
+
+    def test_a_named_absence_keeps_its_own_reason_even_with_no_currency(self) -> None:
+        """Ordering: the operand's own reason beats the unit-less refusal.
+
+        A null carries no number, so there is nothing for the other side's
+        currency to launder; reporting ``currency_not_stated`` instead of
+        ``account_amount_not_reported`` would replace the informative reason
+        with a less informative one.
+        """
+        absent = acct_null(NULL_ACCT_AMOUNT_NOT_REPORTED, None, rows=1)
+        real = acct_sum([(5.0, "PLN")], rows=1)
+
+        self.assertEqual(acct_difference(absent, real).null_reason, NULL_ACCT_AMOUNT_NOT_REPORTED)
+        self.assertEqual(acct_difference(real, absent).null_reason, NULL_ACCT_AMOUNT_NOT_REPORTED)
+
+    def test_the_empty_sum_stays_a_neutral_element_and_not_a_refusal(self) -> None:
+        """The other half of the unit-less zero, and it stays as it is.
+
+        ``acct_sum([], rows=0)`` is what the bucket identity adds through: the
+        five bucket values are summed, and an empty bucket contributing a
+        refusal rather than a zero would turn the identity into a refusal
+        whenever any bucket is empty -- which is every window with no
+        dividend. A zero with no unit cannot launder a currency onto anything,
+        because nothing subtracts it against a stated one any more.
+        """
+        empty = acct_sum([], rows=0)
+
+        self.assertEqual(empty.value, 0.0)
+        self.assertIsNone(empty.currency)
+        self.assertIsNone(empty.null_reason)
+        self.assertEqual(acct_sum([(5.0, "PLN"), (empty.value, "PLN")], rows=2).value, 5.0)
 
 
 class TheRenderedForm(unittest.TestCase):

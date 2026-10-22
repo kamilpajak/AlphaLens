@@ -63,6 +63,14 @@ NULL_ACCT_AMOUNT_NOT_REPORTED = "account_amount_not_reported"
 #: the account has exactly one currency, and a second one means either a
 #: vendor change or a bug, never a convertible total.
 NULL_CURRENCY_MIXED = "currency_mixed"
+#: An operand of :func:`acct_difference` carries a NUMBER with no stated
+#: currency. Refused rather than resolved from the other side: the resolved
+#: currency is the single stated one, so a unit-less operand would silently
+#: adopt whatever the other side says and be published as an account amount
+#: nobody reported in the account currency. This is the one path that reaches
+#: a balance cross-check, which is why the laundering matters here and not on
+#: the empty :func:`acct_sum` that produces the same unit-less zero.
+NULL_CURRENCY_NOT_STATED = "currency_not_stated"
 #: A NaN or an infinity reached a money field, or a TOTAL stopped fitting in
 #: one float. Named here rather than left to the CLI's ``allow_nan=False``,
 #: which turns the whole report into a refusal where this turns one line into
@@ -84,6 +92,7 @@ NULL_SIM_REPORTS_UNUSABLE = "sim_reports_unusable"
 NULL_REASONS: tuple[str, ...] = (
     NULL_ACCT_AMOUNT_NOT_REPORTED,
     NULL_CURRENCY_MIXED,
+    NULL_CURRENCY_NOT_STATED,
     NULL_NON_FINITE,
     NULL_NOT_CLOSED,
     NULL_NEVER_OPENED,
@@ -94,6 +103,7 @@ __all__ = [
     "BALANCE_TOLERANCE_ACCT",
     "NULL_ACCT_AMOUNT_NOT_REPORTED",
     "NULL_CURRENCY_MIXED",
+    "NULL_CURRENCY_NOT_STATED",
     "NULL_NEVER_OPENED",
     "NULL_NON_FINITE",
     "NULL_NOT_CLOSED",
@@ -250,6 +260,17 @@ def acct_difference(left: AcctAmount, right: AcctAmount) -> AcctAmount:
     ``rows`` is both sides' counts added, because the difference rests on every
     row that went into either sum -- it is not a row count of its own, and
     publishing one side's count would describe half the basis.
+
+    A NUMBER with no stated currency refuses (``currency_not_stated``) rather
+    than taking the other side's. The resolved currency is the single stated
+    one, so without this guard an empty total -- ``0.0`` with no unit, which
+    :func:`acct_sum` publishes by design -- subtracted against a real PLN
+    total would answer ``-5.00 PLN``: a figure in a currency nobody reported
+    it in. This function is the only producer of the number
+    :data:`BALANCE_TOLERANCE_ACCT` is compared against, so that is a laundered
+    unit arriving at a balance cross-check. A named ABSENCE is different and
+    keeps its own reason: it carries no number for a currency to be attached
+    to, and its reason is the more informative one.
     """
     rows = left.rows + right.rows
     stated = sorted({side.currency for side in (left, right) if side.currency is not None})
@@ -259,6 +280,8 @@ def acct_difference(left: AcctAmount, right: AcctAmount) -> AcctAmount:
         return acct_null(left.null_reason, resolved, rows=rows)
     if right.null_reason is not None:
         return acct_null(right.null_reason, resolved, rows=rows)
+    if left.currency is None or right.currency is None:
+        return acct_null(NULL_CURRENCY_NOT_STATED, None, rows=rows)
     if len(stated) > 1:
         return acct_null(NULL_CURRENCY_MIXED, None, rows=rows)
 
