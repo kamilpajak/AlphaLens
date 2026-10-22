@@ -100,6 +100,36 @@ class TheAccountCurrencySumIsTheOnlySummer(unittest.TestCase):
         self.assertEqual(total.rows, 0)
         self.assertIsNone(total.null_reason)
 
+    def test_the_accumulation_is_exact_and_not_a_float_sum(self) -> None:
+        """The ``Decimal(str(amount))`` claim, as an EQUALITY not a tolerance.
+
+        The real capture cannot tell the two accumulators apart: its 104
+        two-decimal rows agree to 4e-13, which is ten orders of magnitude
+        under the one-grosz tolerance, so a float sum passes every other test
+        in this file. Only a pair of rows whose float sum is inexact pins it,
+        and the published value is compared with ``assertEqual`` -- an
+        ``assertAlmostEqual`` here would pass for both.
+        """
+        total = acct_sum([(0.1, "PLN"), (0.2, "PLN")], rows=2)
+
+        self.assertEqual(total.value, 0.3)
+        self.assertNotEqual(0.1 + 0.2, 0.3)
+
+    def test_the_row_count_is_the_callers_statement_and_never_the_item_count(self) -> None:
+        """``rows`` is passed rather than counted, and that is the point.
+
+        A count taken from the pairs agrees with whatever subset reached the
+        summer, so a caller that drops rows before summing would publish an
+        agreeing count -- the exact failure the parameter exists to prevent.
+        The two numbers are deliberately different here, which is the only
+        way to show which of them is published.
+        """
+        total = acct_sum([(1.0, "PLN")], rows=5)
+
+        self.assertEqual(total.rows, 5)
+        self.assertEqual(total.value, 1.0)
+        self.assertEqual(acct_sum([], rows=7, currency="PLN").rows, 7)
+
 
 class AMoneyRecordContributesAllOfItsMoneyOrNone(unittest.TestCase):
     def test_one_absent_amount_nulls_the_whole_sum(self) -> None:
@@ -174,6 +204,35 @@ class AMoneyRecordContributesAllOfItsMoneyOrNone(unittest.TestCase):
 
         self.assertIsNone(total.value)
         self.assertEqual(total.null_reason, NULL_NON_FINITE)
+
+    def test_a_total_that_overflows_a_float_is_a_named_null_and_not_a_crash(self) -> None:
+        """The non-finite guard covers the PUBLISHED total, not only the inputs.
+
+        Two finite amounts can sum past the float range: the ``Decimal``
+        accumulator holds 2e308 exactly and ``float()`` of it is an infinity,
+        which :class:`AcctAmount` refuses to hold. Without this branch the
+        refusal arrives as a ``ValueError`` raised out of a money derivation,
+        which is the same shape as the ``allow_nan=False`` refusal this module
+        exists to replace -- it turns the whole report into an error where a
+        named null turns one line into one. No vendor row reaches it; the
+        branch is here because a traceback is not a report.
+        """
+        total = acct_sum([(1e308, "PLN"), (1e308, "PLN")], rows=2)
+
+        self.assertIsNone(total.value)
+        self.assertEqual(total.null_reason, NULL_NON_FINITE)
+        self.assertEqual(total.currency, "PLN")
+        self.assertEqual(total.rows, 2)
+
+    def test_a_difference_that_overflows_a_float_is_a_named_null_too(self) -> None:
+        left = acct_sum([(1e308, "PLN")], rows=1)
+        right = acct_sum([(-1e308, "PLN")], rows=1)
+
+        difference = acct_difference(left, right)
+
+        self.assertIsNone(difference.value)
+        self.assertEqual(difference.null_reason, NULL_NON_FINITE)
+        self.assertEqual(difference.rows, 2)
 
     def test_a_non_finite_value_cannot_be_constructed_at_all(self) -> None:
         with self.assertRaises(ValueError):

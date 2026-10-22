@@ -63,9 +63,11 @@ NULL_ACCT_AMOUNT_NOT_REPORTED = "account_amount_not_reported"
 #: the account has exactly one currency, and a second one means either a
 #: vendor change or a bug, never a convertible total.
 NULL_CURRENCY_MIXED = "currency_mixed"
-#: A NaN or an infinity reached a money field. Named here rather than left to
-#: the CLI's ``allow_nan=False``, which turns the whole report into a refusal
-#: where this turns one line into one.
+#: A NaN or an infinity reached a money field, or a TOTAL stopped fitting in
+#: one float. Named here rather than left to the CLI's ``allow_nan=False``,
+#: which turns the whole report into a refusal where this turns one line into
+#: one -- and rather than left to :class:`AcctAmount`'s own ``ValueError``,
+#: which is that same whole-report refusal arriving as a traceback.
 NULL_NON_FINITE = "non_finite"
 #: An episode that has not returned to flat has no realized net to publish.
 NULL_NOT_CLOSED = "not_closed"
@@ -174,6 +176,23 @@ def acct_null(reason: str, currency: str | None, *, rows: int) -> AcctAmount:
     return AcctAmount(value=None, currency=currency, rows=rows, null_reason=reason)
 
 
+def _published(total: Decimal, currency: str | None, *, rows: int) -> AcctAmount:
+    """``total`` as a float, or ``non_finite`` when it no longer fits in one.
+
+    The input guards cannot see this: two finite amounts can sum past the float
+    range, and :class:`AcctAmount` refuses to hold the infinity ``float()``
+    then produces. Published as the SAME named null an infinite input gets,
+    because the consumer's question is the same one -- there is no number to
+    print on this line -- and raising instead would turn one unprintable line
+    into a report-wide traceback. ONE place publishes a total, so neither
+    accumulator can grow its own answer to this.
+    """
+    value = float(total)
+    if not math.isfinite(value):
+        return acct_null(NULL_NON_FINITE, currency, rows=rows)
+    return AcctAmount(value=value, currency=currency, rows=rows)
+
+
 def acct_sum(
     pairs: Iterable[tuple[float | None, str | None]],
     *,
@@ -199,7 +218,9 @@ def acct_sum(
 
     Refuses in this order: an absent amount or an absent currency
     (``account_amount_not_reported``), a non-finite amount (``non_finite``),
-    two stated currencies (``currency_mixed``). Accumulation is over
+    two stated currencies (``currency_mixed``), and finally a TOTAL that does
+    not fit in a float (``non_finite`` again, see :func:`_published`).
+    Accumulation is over
     ``Decimal(str(amount))`` and the result is published as a ``float``, so the
     sum of 104 two-decimal rows is exact rather than exact to within a float
     epsilon that then has to be argued about against a one-grosz tolerance.
@@ -220,7 +241,7 @@ def acct_sum(
         return acct_null(NULL_CURRENCY_MIXED, None, rows=rows)
 
     total = sum((Decimal(str(amount)) for amount, _ in items if amount is not None), Decimal(0))
-    return AcctAmount(value=float(total), currency=resolved, rows=rows)
+    return _published(total, resolved, rows=rows)
 
 
 def acct_difference(left: AcctAmount, right: AcctAmount) -> AcctAmount:
@@ -243,4 +264,4 @@ def acct_difference(left: AcctAmount, right: AcctAmount) -> AcctAmount:
 
     assert left.value is not None and right.value is not None  # the dataclass invariant
     difference = Decimal(str(left.value)) - Decimal(str(right.value))
-    return AcctAmount(value=float(difference), currency=resolved, rows=rows)
+    return _published(difference, resolved, rows=rows)
