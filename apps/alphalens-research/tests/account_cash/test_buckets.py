@@ -40,7 +40,11 @@ from alphalens_pipeline.account_cash.buckets import (
     bucket_of,
     classify_buckets,
 )
-from alphalens_pipeline.account_cash.money import acct_sum
+from alphalens_pipeline.account_cash.money import (
+    NULL_CURRENCY_NOT_STATED,
+    acct_difference,
+    acct_sum,
+)
 
 from tests.account_cash.cashbook_fixture import BOOKINGS, event_like, events_of_type
 
@@ -260,6 +264,35 @@ class AnUnseenTypeCanOnlyMoveMoneyIntoUnclassified(unittest.TestCase):
         self.assertEqual([bucket.name for bucket in fold.buckets], list(BUCKET_ORDER))
         self.assertEqual(fold.rows, 0)
         self.assertEqual(fold.all_rows.value, 0.0)
+
+    def test_an_empty_window_publishes_unit_less_zeros_and_that_is_the_contract(self) -> None:
+        """Stated, because the alternative readings are both worse.
+
+        With no rows there is no currency to read, so all five buckets and
+        ``all_rows`` publish ``0.00`` with no unit -- six money lines with no
+        currency on them. Refusing instead would turn the bucket identity into
+        a refusal on any window with an empty bucket, which is every window
+        with no dividend; defaulting to ``"PLN"`` would print zlotys on an
+        account that may hold none. So the zero stays a neutral element and
+        naming the currency is the caller's job. What makes that safe is the
+        other half of the same fix: a unit-less NUMBER can no longer be
+        differenced against a stated one, so it cannot adopt a currency
+        downstream.
+        """
+        fold = classify_buckets(())
+
+        self.assertIsNone(fold.all_rows.currency)
+        self.assertEqual(fold.all_rows.rendered, "0.00")
+        for bucket in fold.buckets:
+            with self.subTest(bucket=bucket.name):
+                self.assertEqual(bucket.total.value, 0.0)
+                self.assertIsNone(bucket.total.currency)
+                self.assertEqual(bucket.total.rendered, "0.00")
+
+        self.assertEqual(
+            acct_difference(fold.all_rows, acct_sum([(5.0, "PLN")], rows=1)).null_reason,
+            NULL_CURRENCY_NOT_STATED,
+        )
 
 
 class TheAccountCurrencyComesOffTheRows(unittest.TestCase):

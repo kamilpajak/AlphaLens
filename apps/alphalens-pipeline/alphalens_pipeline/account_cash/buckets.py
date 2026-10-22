@@ -160,6 +160,18 @@ def classify_buckets(events: Sequence[CashEvent]) -> BucketFold:
     a total over exactly those. ``rows`` on the fold counts every row handed
     in, including one whose type nobody has seen, so the published count can
     never agree with a subset that survived the classification.
+
+    **The ACCOUNT CURRENCY is also the caller's, and this reads it off the
+    rows only because it can.** With no rows there is nothing to read it from,
+    so an empty window publishes six zeros (five buckets and ``all_rows``)
+    with no unit on them -- ``"0.00"``, not ``"0.00 PLN"``. That is kept
+    rather than refused: the bucket identity sums the five bucket values, and
+    an empty bucket refusing would turn the identity into a refusal on every
+    window with no dividend. The zero is a neutral element and cannot launder
+    a unit onto anything -- :func:`~.money.acct_difference` refuses a unit-less
+    operand rather than adopting the other side's currency. Naming the
+    account's currency on an empty window is therefore the CALLER's job; the
+    store-side half knows it from the balance snapshot.
     """
     rows = list(events)
     currency = _account_currency(rows)
