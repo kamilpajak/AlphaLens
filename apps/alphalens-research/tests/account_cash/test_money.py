@@ -23,7 +23,7 @@ import unittest
 from dataclasses import fields
 from decimal import Decimal
 
-from alphalens_pipeline.account_cash import money
+from alphalens_pipeline.account_cash import buckets, money
 from alphalens_pipeline.account_cash.money import (
     BALANCE_TOLERANCE_ACCT,
     NULL_ACCT_AMOUNT_NOT_REPORTED,
@@ -56,7 +56,7 @@ ALL_BOOKINGS_TOTAL_PLN = 20738.68
 
 
 def _share_leg_pairs() -> list[tuple[float | None, str | None]]:
-    return acct_pairs(events_of_type("Share Amount"))
+    return acct_pairs(events_of_type(buckets.SHARE_AMOUNT))
 
 
 def _shifted(amount: float | None, by: str) -> float:
