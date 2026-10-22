@@ -224,6 +224,249 @@ def synthetic_partly_closed() -> tuple[TradeRow, ...]:
     )
 
 
+#: Buy 1.5, sell 1.2 -- a residual of 0.3 shares, INSIDE ``QTY_PRECISION``
+#: (0.5, half a share on a whole-share venue). Every quantity in the capture is
+#: a whole share, so the epsilon in the walk's flat check and the one in
+#: ``finish()`` are both unexercised there: ``== 0.0`` and ``opened == closed``
+#: pass on all 41 real rows.
+SYNTHETIC_FRACTIONAL_UIC = 990005
+
+
+def synthetic_fractional_round_trip() -> tuple[TradeRow, ...]:
+    return (
+        _synthetic_fill(
+            uic=SYNTHETIC_FRACTIONAL_UIC,
+            symbol="FRACTION:xnas",
+            trade_id="9900050001",
+            amount=1.5,
+            booked=-150.00,
+            minute=0,
+        ),
+        _synthetic_fill(
+            uic=SYNTHETIC_FRACTIONAL_UIC,
+            symbol="FRACTION:xnas",
+            trade_id="9900050002",
+            amount=-1.2,
+            booked=130.00,
+            minute=5,
+        ),
+    )
+
+
+#: Buy 2, sell 2.4 -- an over-close of 0.4, also inside ``QTY_PRECISION``, so
+#: the walk places it rather than refusing it. This is the OTHER side of the
+#: clip threshold from :func:`synthetic_clipped_partial`: that one must clip
+#: and this one must not.
+SYNTHETIC_OVER_CLOSE_INSIDE_EPSILON_UIC = 990006
+
+
+def synthetic_over_close_inside_epsilon() -> tuple[TradeRow, ...]:
+    return (
+        _synthetic_fill(
+            uic=SYNTHETIC_OVER_CLOSE_INSIDE_EPSILON_UIC,
+            symbol="EPSILON:xnas",
+            trade_id="9900060001",
+            amount=2.0,
+            booked=-200.00,
+            minute=0,
+        ),
+        _synthetic_fill(
+            uic=SYNTHETIC_OVER_CLOSE_INSIDE_EPSILON_UIC,
+            symbol="EPSILON:xnas",
+            trade_id="9900060002",
+            amount=-2.4,
+            booked=250.00,
+            minute=5,
+        ),
+    )
+
+
+#: A quantity-less fill arriving BEFORE any open on its ``uic``, then a clean
+#: buy 4 / sell 4. The capture's one null-amount fill (``MARA`` 6827730144) is
+#: not the first on its instrument, so the branch that remembers an unpairable
+#: quantity until the next episode opens is never taken there.
+SYNTHETIC_UNREAD_QUANTITY_FIRST_UIC = 990007
+
+
+def synthetic_unread_quantity_first() -> tuple[TradeRow, ...]:
+    return (
+        trade_like(
+            _synthetic_fill(
+                uic=SYNTHETIC_UNREAD_QUANTITY_FIRST_UIC,
+                symbol="UNREAD:xnas",
+                trade_id="9900070001",
+                amount=0.0,
+                booked=-10.00,
+                minute=0,
+            ),
+            amount=None,
+        ),
+        _synthetic_fill(
+            uic=SYNTHETIC_UNREAD_QUANTITY_FIRST_UIC,
+            symbol="UNREAD:xnas",
+            trade_id="9900070002",
+            amount=4.0,
+            booked=-400.00,
+            minute=5,
+        ),
+        _synthetic_fill(
+            uic=SYNTHETIC_UNREAD_QUANTITY_FIRST_UIC,
+            symbol="UNREAD:xnas",
+            trade_id="9900070003",
+            amount=-4.0,
+            booked=440.00,
+            minute=10,
+        ),
+    )
+
+
+#: Buy 2, sell 5, then buy 1 / sell 1 -- a clipped close followed by a clean
+#: round trip on the same ``uic``. The shape amendment W8 discusses: the second
+#: round trip is real money, and it only survives if the walk's position is
+#: RESET after a close it could not place.
+SYNTHETIC_CLIP_THEN_ROUND_TRIP_UIC = 990008
+
+
+def synthetic_clip_then_round_trip() -> tuple[TradeRow, ...]:
+    return tuple(
+        _synthetic_fill(
+            uic=SYNTHETIC_CLIP_THEN_ROUND_TRIP_UIC,
+            symbol="CLIPTHEN:xnas",
+            trade_id=trade_id,
+            amount=amount,
+            booked=booked,
+            minute=minute,
+        )
+        for trade_id, amount, booked, minute in (
+            ("9900080001", 2.0, -200.00, 0),
+            ("9900080002", -5.0, 480.00, 5),
+            ("9900080003", 1.0, -100.00, 10),
+            ("9900080004", -1.0, 105.00, 15),
+        )
+    )
+
+
+#: Two different ``uic`` values sharing one ``instrument_symbol`` -- a ticker
+#: reuse or a dual listing. The capture is 1:1 between the two, so grouping by
+#: symbol instead of by ``uic`` answers the same thing there; here it would
+#: fold a buy on one instrument and a sell on another into one round trip.
+SYNTHETIC_SHARED_SYMBOL = "SAME:xnas"
+SYNTHETIC_SHARED_SYMBOL_BUY_UIC = 990009
+SYNTHETIC_SHARED_SYMBOL_SELL_UIC = 990010
+
+
+def synthetic_two_uics_one_symbol() -> tuple[TradeRow, ...]:
+    return (
+        _synthetic_fill(
+            uic=SYNTHETIC_SHARED_SYMBOL_BUY_UIC,
+            symbol=SYNTHETIC_SHARED_SYMBOL,
+            trade_id="9900090001",
+            amount=3.0,
+            booked=-300.00,
+            minute=0,
+        ),
+        _synthetic_fill(
+            uic=SYNTHETIC_SHARED_SYMBOL_SELL_UIC,
+            symbol=SYNTHETIC_SHARED_SYMBOL,
+            trade_id="9900100001",
+            amount=-3.0,
+            booked=320.00,
+            minute=5,
+        ),
+    )
+
+
+#: Buy 3, a fill whose quantity is exactly ZERO, sell 3. No zero-quantity fill
+#: exists in the capture, so a walk that counts one as an ENTRY -- and puts its
+#: money in the cost basis -- is invisible on the real rows.
+SYNTHETIC_ZERO_QUANTITY_UIC = 990011
+
+
+def synthetic_zero_quantity_fill() -> tuple[TradeRow, ...]:
+    return tuple(
+        _synthetic_fill(
+            uic=SYNTHETIC_ZERO_QUANTITY_UIC,
+            symbol="ZEROQTY:xnas",
+            trade_id=trade_id,
+            amount=amount,
+            booked=booked,
+            minute=minute,
+        )
+        for trade_id, amount, booked, minute in (
+            ("9900110001", 3.0, -300.00, 0),
+            ("9900110002", 0.0, -7.00, 5),
+            ("9900110003", -3.0, 350.00, 10),
+        )
+    )
+
+
+#: The buy is stamped EARLIER and carries the HIGHER trade id. On the capture
+#: the trade ids happen to be monotone in ``TradeExecutionTime``, so a walk
+#: ordered by trade id alone answers the same thing there; here the two orders
+#: disagree and only one of them is a round trip.
+SYNTHETIC_ID_AGAINST_TIME_UIC = 990012
+
+
+def synthetic_trade_id_disagrees_with_time() -> tuple[TradeRow, ...]:
+    return (
+        _synthetic_fill(
+            uic=SYNTHETIC_ID_AGAINST_TIME_UIC,
+            symbol="IDVSTIME:xnas",
+            trade_id="9900129999",
+            amount=3.0,
+            booked=-300.00,
+            minute=0,
+        ),
+        _synthetic_fill(
+            uic=SYNTHETIC_ID_AGAINST_TIME_UIC,
+            symbol="IDVSTIME:xnas",
+            trade_id="9900120001",
+            amount=-3.0,
+            booked=310.00,
+            minute=5,
+        ),
+    )
+
+
+#: A round trip, plus a later buy with NO execution stamp. Every real row
+#: carries one, so the "no stamp sorts last" half of the walk's key is
+#: unexercised on the capture; sorting it first would merge the round trip into
+#: the open position.
+SYNTHETIC_UNSTAMPED_UIC = 990013
+
+
+def synthetic_unstamped_fill_sorts_last() -> tuple[TradeRow, ...]:
+    return (
+        _synthetic_fill(
+            uic=SYNTHETIC_UNSTAMPED_UIC,
+            symbol="NOSTAMP:xnas",
+            trade_id="9900130001",
+            amount=2.0,
+            booked=-200.00,
+            minute=0,
+        ),
+        _synthetic_fill(
+            uic=SYNTHETIC_UNSTAMPED_UIC,
+            symbol="NOSTAMP:xnas",
+            trade_id="9900130002",
+            amount=-2.0,
+            booked=210.00,
+            minute=5,
+        ),
+        trade_like(
+            _synthetic_fill(
+                uic=SYNTHETIC_UNSTAMPED_UIC,
+                symbol="NOSTAMP:xnas",
+                trade_id="9900130003",
+                amount=1.0,
+                booked=-100.00,
+                minute=10,
+            ),
+            execution_time=None,
+        ),
+    )
+
+
 #: An opening fill the venue calls ``ToOpen`` while its ``Amount`` is NEGATIVE.
 #: On the capture the word and the sign agree on 41 of 41 rows, so only a row
 #: where they disagree can show which of the two the walk reads.
