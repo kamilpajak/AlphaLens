@@ -220,10 +220,10 @@ def acct_sum(
     (``account_amount_not_reported``), a non-finite amount (``non_finite``),
     two stated currencies (``currency_mixed``), and finally a TOTAL that does
     not fit in a float (``non_finite`` again, see :func:`_published`).
-    Accumulation is over
-    ``Decimal(str(amount))`` and the result is published as a ``float``, so the
-    sum of 104 two-decimal rows is exact rather than exact to within a float
-    epsilon that then has to be argued about against a one-grosz tolerance.
+    Accumulation is over ``Decimal(str(amount))`` and the result is published
+    as a ``float``, so the sum of 104 two-decimal rows is exact rather than
+    exact to within a float epsilon that then has to be argued about against a
+    one-grosz tolerance.
     """
     items = list(pairs)
     stated = sorted(
