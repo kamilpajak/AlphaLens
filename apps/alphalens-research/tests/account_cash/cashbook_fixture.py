@@ -320,6 +320,73 @@ def synthetic_unread_quantity_first() -> tuple[TradeRow, ...]:
     )
 
 
+#: A complete round trip, then a fill whose quantity cannot be read, then TWO
+#: more round trips -- all on one ``uic``. The capture's one null-amount fill
+#: (``MARA`` 6827730144) has a single episode after it, and
+#: :func:`synthetic_unread_quantity_first` has one too, so neither can tell a
+#: flag that marks ONE episode from a flag that marks the rest of the
+#: instrument's walk. Once a quantity is unreadable the position is unknowable
+#: from that point on: the unreadable fill may have been a buy, in which case
+#: the later rows are not flat round trips at all.
+SYNTHETIC_UNREAD_QUANTITY_MIDWAY_UIC = 990014
+
+#: The realized net of the FIRST round trip, which is before the unreadable
+#: fill and therefore still eligible, and of each of the two after it, which
+#: are not. Two different literals, so a fix that nulls the whole instrument
+#: is told apart from one that nulls only what follows the fill.
+SYNTHETIC_UNREAD_MIDWAY_FIRST_NET = 10.00
+SYNTHETIC_UNREAD_MIDWAY_LATER_MONEY = 3.00
+
+
+def _synthetic_unread_midway(*, unreadable_minute: int) -> tuple[TradeRow, ...]:
+    """Round trip, two more round trips, and one unreadable fill between them.
+
+    ``unreadable_minute`` places the unreadable fill: 10 puts it BETWEEN two
+    episodes, 17 puts it INSIDE the second one. The stamp is what the walk
+    sorts on, so the position in this tuple would not move it.
+    """
+    rows = [
+        _synthetic_fill(
+            uic=SYNTHETIC_UNREAD_QUANTITY_MIDWAY_UIC,
+            symbol="MIDWAY:xnas",
+            trade_id=trade_id,
+            amount=amount,
+            booked=booked,
+            minute=minute,
+        )
+        for trade_id, amount, booked, minute in (
+            ("9900140001", 10.0, -1000.00, 0),
+            ("9900140002", -10.0, 1010.00, 5),
+            ("9900140004", 5.0, -500.00, 15),
+            ("9900140005", -5.0, 503.00, 20),
+            ("9900140006", 5.0, -500.00, 25),
+            ("9900140007", -5.0, 503.00, 30),
+        )
+    ]
+    unreadable = trade_like(
+        _synthetic_fill(
+            uic=SYNTHETIC_UNREAD_QUANTITY_MIDWAY_UIC,
+            symbol="MIDWAY:xnas",
+            trade_id="9900140003",
+            amount=0.0,
+            booked=-1.00,
+            minute=unreadable_minute,
+        ),
+        amount=None,
+    )
+    return (*rows[:2], unreadable, *rows[2:])
+
+
+def synthetic_unread_quantity_midway() -> tuple[TradeRow, ...]:
+    """The unreadable fill BETWEEN the first episode and the second."""
+    return _synthetic_unread_midway(unreadable_minute=10)
+
+
+def synthetic_unread_quantity_inside_episode() -> tuple[TradeRow, ...]:
+    """The unreadable fill INSIDE the second episode, between its two legs."""
+    return _synthetic_unread_midway(unreadable_minute=17)
+
+
 #: Buy 2, sell 5, then buy 1 / sell 1 -- a clipped close followed by a clean
 #: round trip on the same ``uic``. The shape amendment W8 discusses: the second
 #: round trip is real money, and it only survives if the walk's position is

@@ -23,6 +23,12 @@ whose quantity exceeds the running position is unassigned, and the episode it
 would have closed is ``window_clipped`` and excluded; a close with no open
 quantity at all produces no episode.
 
+**An unreadable quantity is STICKY for the rest of that instrument.** Once one
+fill's quantity cannot be read, the running position is unknowable from that
+row on -- the fill may have been a buy -- so every LATER episode on that
+``uic`` is ``imbalanced`` and not eligible, not just the one in flight or the
+one that opens next.
+
 **What this cannot see, and the report says so rather than hiding it:** an
 episode whose entry is PARTLY before the store -- bought 10 before, bought 10
 inside, sold 10 inside -- never takes the walk negative and reads as a
@@ -311,7 +317,10 @@ class _InstrumentWalk:
         self.assigned = 0
         self._position = 0.0
         self._current: _Accumulator | None = None
-        self._pending_imbalance = False
+        #: STICKY. Once one quantity on this instrument could not be read the
+        #: position is unknowable for the REST of the walk, so every later
+        #: episode is imbalanced too -- see :meth:`_quantity_not_read`.
+        self._quantity_unreadable = False
 
     def run(self, uic_rows: Sequence[TradeRow]) -> None:
         """Walk one instrument's fills, oldest first."""
@@ -337,12 +346,18 @@ class _InstrumentWalk:
         Its money still counts, on the fill rather than on the episode, so the
         money partition stays exact; the episode it belonged to cannot pair
         its quantity any more.
+
+        The flag is STICKY, and that is the point: the unreadable fill may
+        have been a BUY, in which case the instrument is not flat where the
+        walk thinks it is and nothing after this row is a flat round trip
+        either. Marking only the episode in flight -- or only the one that
+        opens next -- publishes the one after that as ``closed`` and eligible,
+        which is money published as realized on an unknowable position.
         """
         self.unassigned.append(_unassigned(row, UNASSIGNED_QUANTITY_NOT_READ, quantity=None))
+        self._quantity_unreadable = True
         if self._current is not None:
             self._current.imbalanced = True
-        else:
-            self._pending_imbalance = True
 
     def _over_close(self, row: TradeRow, quantity: float) -> None:
         """The close exceeds everything the store knows was opened.
@@ -360,8 +375,7 @@ class _InstrumentWalk:
     def _place(self, row: TradeRow, quantity: float) -> None:
         """Assign the fill, and close the episode if it brought the walk flat."""
         if self._current is None:
-            self._current = _Accumulator(row, imbalanced=self._pending_imbalance)
-            self._pending_imbalance = False
+            self._current = _Accumulator(row, imbalanced=self._quantity_unreadable)
         self._current.assign(row, quantity)
         self.assigned += 1
         self._position += quantity
