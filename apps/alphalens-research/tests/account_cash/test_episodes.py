@@ -37,6 +37,7 @@ from alphalens_pipeline.account_cash.episodes import (
     STATE_IMBALANCED,
     STATE_OPEN,
     STATE_WINDOW_CLIPPED,
+    UNASSIGNED_CLOSES_NOTHING,
     UNASSIGNED_NO_OPEN,
     UNASSIGNED_QUANTITY_NOT_READ,
     UNASSIGNED_REASONS,
@@ -60,6 +61,7 @@ from tests.account_cash.cashbook_fixture import (
     synthetic_clip_then_round_trip,
     synthetic_clipped_partial,
     synthetic_clipped_sell_only,
+    synthetic_closes_nothing,
     synthetic_fractional_round_trip,
     synthetic_over_close_inside_epsilon,
     synthetic_partly_closed,
@@ -807,6 +809,59 @@ class TheGroupingKeyIsTheUicAndNotTheSymbol(unittest.TestCase):
         (fill,) = fold.unassigned
         self.assertEqual(fill.reason, UNASSIGNED_NO_OPEN)
         self.assertEqual(fill.uic, SYNTHETIC_SHARED_SYMBOL_SELL_UIC)
+
+
+class AFillThatClosesNothingIsNotAnEpisode(unittest.TestCase):
+    """A fill inside the epsilon, with nothing open, opened and closed nothing.
+
+    Measured 2026-10-22 before this fix: one ``amount=0.0`` / ``booked=-7.50``
+    row published ``state=closed``, ``eligible=True``, ``opened_qty=0.0``,
+    ``net=-7.50`` and a stamped ``closed_date``; one ``amount=-0.3`` /
+    ``booked=+5.00`` row published ``closed``, eligible, ``net=+5.00``. The
+    money landed in the realized total instead of in ``unassigned``.
+    """
+
+    def test_a_fill_inside_the_epsilon_with_nothing_open_is_unassigned(self) -> None:
+        """Both signs, because both reach it by a different route.
+
+        A negative one routes to the close side and survives the over-close
+        guard, which compares against the same epsilon it sits inside. A
+        positive one opens an episode whose position is immediately "flat".
+        Zero is on the boundary of both.
+        """
+        cases = {
+            "zero": (0.0, -7.50),
+            "inside_epsilon_close": (-0.3, 5.00),
+            "inside_epsilon_open": (0.3, -4.00),
+        }
+        for name, (amount, booked) in cases.items():
+            with self.subTest(case=name):
+                fold = derive_episodes(synthetic_closes_nothing(amount=amount, booked=booked))
+
+                self.assertEqual(fold.episodes, ())
+                (fill,) = fold.unassigned
+                self.assertEqual(fill.reason, UNASSIGNED_CLOSES_NOTHING)
+                self.assertEqual(fill.quantity, amount)
+                assert fill.money_acct.value is not None
+                self.assertAlmostEqual(fill.money_acct.value, booked, places=6)
+                self.assertEqual((fold.fills_read, fold.fills_assigned), (1, 0))
+
+    def test_the_same_fill_inside_an_open_episode_still_belongs_to_it(self) -> None:
+        """The discriminator is the OPEN POSITION, not the quantity.
+
+        A zero-quantity fill between a buy and its sell is part of that round
+        trip and its money belongs to the episode -- refusing it there would
+        move real money out of a real net. So the two shapes are asserted
+        together: same fill, opposite answers, and the only difference is
+        whether a position was open when it arrived.
+        """
+        fold = derive_episodes(synthetic_zero_quantity_fill())
+
+        (episode,) = fold.episodes
+        self.assertEqual(episode.state, STATE_CLOSED)
+        self.assertEqual(fold.unassigned, ())
+        self.assertEqual(episode.money_acct.rows, 3)
+        self.assertEqual((fold.fills_read, fold.fills_assigned), (3, 3))
 
 
 class AZeroQuantityFillIsNotAnEntry(unittest.TestCase):
