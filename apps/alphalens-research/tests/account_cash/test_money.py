@@ -19,11 +19,14 @@ layer and each one is pinned by a test that fails without it:
 
 from __future__ import annotations
 
+import ast
+import inspect
+import math
 import unittest
 from dataclasses import fields
 from decimal import Decimal
 
-from alphalens_pipeline.account_cash import buckets, money
+from alphalens_pipeline.account_cash import buckets, episodes, money
 from alphalens_pipeline.account_cash.money import (
     BALANCE_TOLERANCE_ACCT,
     NULL_ACCT_AMOUNT_NOT_REPORTED,
@@ -39,6 +42,7 @@ from alphalens_pipeline.brokers.account_cash import BalanceSnapshot, CashEvent, 
 from tests.account_cash.cashbook_fixture import (
     BALANCE,
     BOOKINGS,
+    TRADES,
     acct_pairs,
     event_like,
     events_of_type,
@@ -310,6 +314,122 @@ class TheRenderedForm(unittest.TestCase):
         with self.assertRaises(ValueError):
             acct_null("made_up_reason", "PLN", rows=1)
         self.assertEqual(len(set(money.NULL_REASONS)), len(money.NULL_REASONS))
+
+
+# --- The FX disclosure, held structurally (amendment W3) ----------------------
+
+_SUMMING_FUNCTIONS = frozenset({"acct_sum", "acct_difference"})
+_CASH_EVENT_FIELDS = frozenset(field.name for field in fields(CashEvent))
+
+#: The only two booking-row fields a sum in this layer may read.
+_SUMMABLE_CASH_EVENT_FIELDS = frozenset({"amount_account_currency", "account_currency"})
+
+
+def _cash_event_attributes_inside_sums(source: str) -> tuple[frozenset[str], int]:
+    """Which ``CashEvent`` fields the sums in ``source`` read, and how many sums.
+
+    Scoped to the arguments of a call to :func:`acct_sum` or
+    :func:`acct_difference` on purpose. A walk over every attribute access in
+    the module cannot answer this question: ``uic``, ``amount``,
+    ``instrument_symbol``, ``value_date`` and ``account_currency`` are fields
+    of BOTH ``CashEvent`` and ``TradeRow``, and ``episodes.py`` legitimately
+    reads the quantity and the instrument off a trade row.
+
+    The match is by NAME, so the walk is conservative: an attribute named like
+    a booking field counts even when it is read off another object (an
+    ``AcctAmount``'s own ``.currency``, say). That is the safe direction for a
+    guard whose whole job is to refuse a field, and it is measured -- pointing
+    ``all_rows`` at the buckets instead of the rows turns this test red through
+    exactly that path.
+    """
+    read: set[str] = set()
+    sums = 0
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")
+        if name not in _SUMMING_FUNCTIONS:
+            continue
+        sums += 1
+        for argument in [*node.args, *(keyword.value for keyword in node.keywords)]:
+            for inner in ast.walk(argument):
+                if isinstance(inner, ast.Attribute) and inner.attr in _CASH_EVENT_FIELDS:
+                    read.add(inner.attr)
+    return frozenset(read), sums
+
+
+class TheFxDisclosureIsNeverSummedIntoAnyTotal(unittest.TestCase):
+    """``ConversionRateAccountCurrency`` is a DISCLOSURE, not a cash movement.
+
+    It is already in the account currency, so every guard ``acct_sum`` has --
+    null, non-finite, mixed currency -- lets it through. The cash book contains
+    no FX booking type at all (memo section 1.3 measurement 3), which is what
+    settles that the charge is inside the rate the leg was booked at. Adding it
+    into a net double counts at about 0.25% of notional per leg.
+    """
+
+    def test_the_fx_disclosure_is_never_summed_into_any_total(self) -> None:
+        read: set[str] = set()
+        sums = 0
+        for module in (money, buckets, episodes):
+            with self.subTest(module=module.__name__):
+                module_read, module_sums = _cash_event_attributes_inside_sums(
+                    inspect.getsource(module)
+                )
+                self.assertNotIn("conversion_cost_account_currency", module_read)
+                read |= module_read
+                sums += module_sums
+
+        self.assertEqual(read, set(_SUMMABLE_CASH_EVENT_FIELDS))
+        self.assertGreaterEqual(
+            sums,
+            3,
+            "the three pure modules must build their totals through acct_sum with the "
+            "summed fields in the call, or this walk sees nothing and proves nothing",
+        )
+
+    def test_the_walk_goes_red_when_a_sum_reads_the_fx_disclosure(self) -> None:
+        """The positive control. Without it the walk above could be vacuous."""
+        control = (
+            "def total(events):\n"
+            "    return acct_sum(\n"
+            "        [\n"
+            "            (\n"
+            "                event.amount_account_currency\n"
+            "                + event.conversion_cost_account_currency,\n"
+            "                event.account_currency,\n"
+            "            )\n"
+            "            for event in events\n"
+            "        ],\n"
+            "        rows=len(events),\n"
+            "    )\n"
+        )
+
+        read, sums = _cash_event_attributes_inside_sums(control)
+
+        self.assertEqual(sums, 1)
+        self.assertIn("conversion_cost_account_currency", read)
+        self.assertNotEqual(read, set(_SUMMABLE_CASH_EVENT_FIELDS))
+
+
+class TheSumIsNeverPointedAtTheInstrumentCurrency(unittest.TestCase):
+    def test_no_production_sum_reads_the_instrument_currency_amount(self) -> None:
+        """``amount`` and ``currency`` are the INSTRUMENT's (memo section 4)."""
+        for module in (money, buckets, episodes):
+            with self.subTest(module=module.__name__):
+                read, _ = _cash_event_attributes_inside_sums(inspect.getsource(module))
+                self.assertNotIn("amount", read)
+                self.assertNotIn("currency", read)
+                self.assertNotIn("conversion_rate", read)
+
+    def test_the_fixture_pairs_are_the_account_currency_ones(self) -> None:
+        """A floor on the fixture helper the tests above sum through."""
+        self.assertEqual(len(acct_pairs(BOOKINGS)), ALL_BOOKING_ROWS)
+        self.assertEqual(
+            acct_pairs(BOOKINGS)[0],
+            (BOOKINGS[0].amount_account_currency, BOOKINGS[0].account_currency),
+        )
+        self.assertTrue(all(math.isfinite(row.amount or 0.0) for row in TRADES))
 
 
 if __name__ == "__main__":
