@@ -23,7 +23,7 @@ import ast
 import inspect
 import math
 import unittest
-from dataclasses import fields
+from dataclasses import dataclass, fields
 from decimal import Decimal
 
 from alphalens_pipeline.account_cash import buckets, episodes, money
@@ -447,15 +447,52 @@ _CASH_EVENT_FIELDS = frozenset(field.name for field in fields(CashEvent))
 _SUMMABLE_CASH_EVENT_FIELDS = frozenset({"amount_account_currency", "account_currency"})
 
 
-def _cash_event_attributes_inside_sums(source: str) -> tuple[frozenset[str], int]:
-    """Which ``CashEvent`` fields the sums in ``source`` read, and how many sums.
+@dataclass(frozen=True)
+class _MoneySites:
+    """What reached money in one module, and how many places did so."""
 
-    Scoped to the arguments of a call to :func:`acct_sum` or
-    :func:`acct_difference` on purpose. A walk over every attribute access in
-    the module cannot answer this question: ``uic``, ``amount``,
-    ``instrument_symbol``, ``value_date`` and ``account_currency`` are fields
-    of BOTH ``CashEvent`` and ``TradeRow``, and ``episodes.py`` legitimately
-    reads the quantity and the instrument off a trade row.
+    #: ``CashEvent`` field names read at any of those places.
+    read: frozenset[str]
+    #: Calls to :func:`acct_sum` / :func:`acct_difference`.
+    calls: int
+    #: ``(amount, currency)`` tuples built anywhere, inside a call or not.
+    pairs: int
+
+
+def _is_currency_attribute(node: ast.expr) -> bool:
+    """True for ``<something>.<name ending in currency>``.
+
+    This is what makes a two-element tuple a MONEY PAIR rather than any other
+    pair: :func:`acct_sum`'s published shape is
+    ``(amount_in_account_currency, account_currency)``, so the second slot
+    naming a currency is the pair's signature. Keying on the shape instead of
+    on "a tuple of two attributes" is what keeps ``(event.uic,
+    event.instrument_symbol)`` -- both ``CashEvent`` field names -- from being
+    read as money, which is the false positive that would otherwise make this
+    guard fire on an honest grouping key.
+    """
+    return isinstance(node, ast.Attribute) and node.attr.endswith("currency")
+
+
+def _cash_event_fields_reaching_money(source: str) -> _MoneySites:
+    """Which ``CashEvent`` fields reach a money total in ``source``.
+
+    Two kinds of site, because one of them is not enough. The arguments of a
+    call to :func:`acct_sum` or :func:`acct_difference` catch ``buckets.py``,
+    which builds its pairs inline in the call. But ``episodes.py`` builds its
+    pairs in ``_Accumulator.assign`` and in ``_unassigned``, and sums them
+    later from an attribute -- so no field name is inside any summing call at
+    all, and a walk scoped to calls reports ``{account_currency}`` for the
+    whole module. Measured 2026-10-22: adding
+    ``+ row.conversion_cost_account_currency`` to the accumulator's pair left
+    the call-scoped walk's answer byte for byte unchanged. The second kind of
+    site is therefore every ``(amount, currency)`` tuple, wherever it is
+    built.
+
+    Neither kind walks every attribute access in the module: ``uic``,
+    ``amount``, ``instrument_symbol``, ``value_date`` and ``account_currency``
+    are fields of BOTH ``CashEvent`` and ``TradeRow``, and ``episodes.py``
+    legitimately reads the quantity and the instrument off a trade row.
 
     The match is by NAME, so the walk is conservative: an attribute named like
     a booking field counts even when it is read off another object (an
@@ -465,19 +502,51 @@ def _cash_event_attributes_inside_sums(source: str) -> tuple[frozenset[str], int
     exactly that path.
     """
     read: set[str] = set()
-    sums = 0
+    calls = 0
+    pairs = 0
+
+    def collect(node: ast.AST) -> None:
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Attribute) and inner.attr in _CASH_EVENT_FIELDS:
+                read.add(inner.attr)
+
     for node in ast.walk(ast.parse(source)):
+        if (
+            isinstance(node, ast.Tuple)
+            and len(node.elts) == 2
+            and _is_currency_attribute(node.elts[1])
+        ):
+            pairs += 1
+            collect(node)
         if not isinstance(node, ast.Call):
             continue
         name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")
         if name not in _SUMMING_FUNCTIONS:
             continue
-        sums += 1
+        calls += 1
         for argument in [*node.args, *(keyword.value for keyword in node.keywords)]:
-            for inner in ast.walk(argument):
-                if isinstance(inner, ast.Attribute) and inner.attr in _CASH_EVENT_FIELDS:
-                    read.add(inner.attr)
-    return frozenset(read), sums
+            collect(argument)
+
+    return _MoneySites(read=frozenset(read), calls=calls, pairs=pairs)
+
+
+#: A pair built AWAY from any summing call, the way ``_Accumulator.assign``
+#: and ``_unassigned`` build theirs. The control for the widened half of the
+#: walk: with the walk scoped to call arguments this source reads as clean.
+_PAIR_OUTSIDE_A_CALL = (
+    "def assign(self, row):\n"
+    "    pair = (\n"
+    "        row.booked_amount_account_currency\n"
+    "        + row.conversion_cost_account_currency,\n"
+    "        row.account_currency,\n"
+    "    )\n"
+    "    self.all_pairs.append(pair)\n"
+)
+
+#: A two-element tuple of two ``CashEvent`` field names that is NOT money.
+#: The negative control: a guard that fired here would go red on an honest
+#: grouping key, which is the shape that gets a guard switched off.
+_PAIR_THAT_IS_NOT_MONEY = "def key(event):\n    return (event.uic, event.instrument_symbol)\n"
 
 
 class TheFxDisclosureIsNeverSummedIntoAnyTotal(unittest.TestCase):
@@ -488,26 +557,43 @@ class TheFxDisclosureIsNeverSummedIntoAnyTotal(unittest.TestCase):
     no FX booking type at all (memo section 1.3 measurement 3), which is what
     settles that the charge is inside the rate the leg was booked at. Adding it
     into a net double counts at about 0.25% of notional per leg.
+
+    The walk covers the arguments of a summing call AND every
+    ``(amount, currency)`` pair, wherever it is built. The second half is what
+    reaches ``episodes.py``, which builds its pairs in the accumulator and in
+    the unassigned helper and sums them later from an attribute.
     """
 
     def test_the_fx_disclosure_is_never_summed_into_any_total(self) -> None:
-        read: set[str] = set()
-        sums = 0
-        for module in (money, buckets, episodes):
-            with self.subTest(module=module.__name__):
-                module_read, module_sums = _cash_event_attributes_inside_sums(
-                    inspect.getsource(module)
-                )
-                self.assertNotIn("conversion_cost_account_currency", module_read)
-                read |= module_read
-                sums += module_sums
+        measured = {
+            module.__name__: _cash_event_fields_reaching_money(inspect.getsource(module))
+            for module in (money, buckets, episodes)
+        }
+        # Accumulated BEFORE asserting: a failing subTest skips the rest of
+        # its block, so counting inside the loop made the two floors below
+        # fail along with the real assertion and report a second defect that
+        # was not there.
+        read = frozenset().union(*(sites.read for sites in measured.values()))
+        calls = sum(sites.calls for sites in measured.values())
+        pairs = sum(sites.pairs for sites in measured.values())
+
+        for name, sites in measured.items():
+            with self.subTest(module=name):
+                self.assertNotIn("conversion_cost_account_currency", sites.read)
 
         self.assertEqual(read, set(_SUMMABLE_CASH_EVENT_FIELDS))
         self.assertGreaterEqual(
-            sums,
+            calls,
             3,
-            "the three pure modules must build their totals through acct_sum with the "
-            "summed fields in the call, or this walk sees nothing and proves nothing",
+            "the three pure modules must build their totals through acct_sum, or this "
+            "walk sees nothing and proves nothing",
+        )
+        self.assertGreaterEqual(
+            pairs,
+            4,
+            "the money pairs must be written as (amount, currency) tuples, or the "
+            "widened half of this walk sees nothing: 2 in buckets.py and 2 in "
+            "episodes.py when this floor was measured",
         )
 
     def test_the_walk_goes_red_when_a_sum_reads_the_fx_disclosure(self) -> None:
@@ -527,11 +613,41 @@ class TheFxDisclosureIsNeverSummedIntoAnyTotal(unittest.TestCase):
             "    )\n"
         )
 
-        read, sums = _cash_event_attributes_inside_sums(control)
+        sites = _cash_event_fields_reaching_money(control)
 
-        self.assertEqual(sums, 1)
-        self.assertIn("conversion_cost_account_currency", read)
-        self.assertNotEqual(read, set(_SUMMABLE_CASH_EVENT_FIELDS))
+        self.assertEqual(sites.calls, 1)
+        self.assertIn("conversion_cost_account_currency", sites.read)
+        self.assertNotEqual(sites.read, set(_SUMMABLE_CASH_EVENT_FIELDS))
+
+    def test_the_walk_goes_red_when_a_pair_outside_a_call_reads_it(self) -> None:
+        """The control for the widened half, and why the widening was needed.
+
+        Measured 2026-10-22: with the walk scoped to the arguments of a
+        summing call, this exact mutation applied to ``_Accumulator.assign``
+        left the reported fields unchanged at ``{account_currency}`` and the
+        test GREEN, while every fill's money then carried the FX disclosure
+        added in -- about 0.25% of notional per leg, double counted. No live
+        failure, because ``TradeRow`` has no disclosure field today; the point
+        is that the guard claimed a reach it did not have.
+        """
+        sites = _cash_event_fields_reaching_money(_PAIR_OUTSIDE_A_CALL)
+
+        self.assertEqual(sites.calls, 0)
+        self.assertEqual(sites.pairs, 1)
+        self.assertIn("conversion_cost_account_currency", sites.read)
+
+    def test_a_pair_that_is_not_money_is_not_read_as_money(self) -> None:
+        """The negative control, against the false positive of the widening.
+
+        ``uic`` and ``instrument_symbol`` are both ``CashEvent`` field names,
+        so a rule keyed on "a two-element tuple of booking fields" would go
+        red on an honest grouping key. The rule is keyed on the pair's
+        published SHAPE instead: a currency in the second slot.
+        """
+        sites = _cash_event_fields_reaching_money(_PAIR_THAT_IS_NOT_MONEY)
+
+        self.assertEqual(sites.pairs, 0)
+        self.assertEqual(sites.read, frozenset())
 
 
 class TheSumIsNeverPointedAtTheInstrumentCurrency(unittest.TestCase):
@@ -539,7 +655,7 @@ class TheSumIsNeverPointedAtTheInstrumentCurrency(unittest.TestCase):
         """``amount`` and ``currency`` are the INSTRUMENT's (memo section 4)."""
         for module in (money, buckets, episodes):
             with self.subTest(module=module.__name__):
-                read, _ = _cash_event_attributes_inside_sums(inspect.getsource(module))
+                read = _cash_event_fields_reaching_money(inspect.getsource(module)).read
                 self.assertNotIn("amount", read)
                 self.assertNotIn("currency", read)
                 self.assertNotIn("conversion_rate", read)
