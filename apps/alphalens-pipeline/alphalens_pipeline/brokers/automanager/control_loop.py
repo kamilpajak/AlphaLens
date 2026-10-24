@@ -294,6 +294,10 @@ class LoopDeps:
     # KILL already present alerts once (the operator sees it) while a clean no-KILL
     # startup stays silent.
     kill_state: dict[str, bool] = field(default_factory=dict)
+    # Previous token-chain liveness, for the edge-triggered page below — the
+    # kill_state pattern, same reason: the condition HOLDS for hours and the
+    # page is about the transition, not the state.
+    chain_state: dict[str, bool] = field(default_factory=dict)
     # Streaming early-wake handles (design memo saxo_streaming_design_2026_07_24.md),
     # ALL None unless ALPHALENS_BROKER_STREAMING_ENABLED=1 AND the broker is Saxo
     # (SIM rail) AND the provider is OAuth AND the reader actually started. When
@@ -506,10 +510,7 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
     _alert_kill_transition(deps, kill)
     chain = deps.ensure_alive()
     alive = bool(getattr(chain, "alive", False))
-    if not alive:
-        deps.alert(
-            f"session-keeper: chain dead — {getattr(chain, 'reason', None)}; placement halted"
-        )
+    _alert_chain_transition(deps, alive, getattr(chain, "reason", None))
 
     if sweep_orphans:
         _run_orphan_sweep(deps, report)
@@ -602,6 +603,37 @@ def _alert_kill_transition(deps: LoopDeps, kill: bool) -> None:
         else:
             deps.alert("KILL cleared — placement resumed")
     deps.kill_state["active"] = kill
+
+
+def _alert_chain_transition(deps: LoopDeps, alive: bool, reason: str | None) -> None:
+    """Edge-triggered token-chain page — the ``_alert_kill_transition`` shape, for
+    the same reason and after the same lesson.
+
+    On 2026-10-23 the LIVE market-data refresh chain died at 20:13 and this site,
+    which paged unconditionally while ``alive`` was False, sent 531 pages in 7.5
+    hours — about 79 an hour, one per tick. The four throttled sites beside it
+    produced 15 each over the same window, which is what a 30-minute throttle
+    looks like. A dead chain is not a per-tick event: it HOLDS until a human
+    re-runs the auth bootstrap.
+
+    Throttling it would still repeat every interval and would still say nothing
+    when the chain came back. Edge-triggering says each thing once. The PERSISTENT
+    signal already exists and is not this page: ``AlphalensJobFailed`` and
+    ``AlphalensJobStale`` on ``job="saxo-marketdata-refresh"`` both fired during
+    that incident and stayed firing, so the operator keeps a standing indication
+    without a standing Telegram stream.
+
+    Guaranteed-send ``deps.alert``, not ``alert_throttled``: edges are rare and
+    each transition must deliver. A missing key reads as "was alive", so a daemon
+    that STARTS with a dead chain pages once — the mirror of kill_state's "a
+    missing key == was False"."""
+    previous = deps.chain_state.get("alive", True)
+    if alive != previous:
+        if alive:
+            deps.alert("session-keeper: chain restored — placement resumed")
+        else:
+            deps.alert(f"session-keeper: chain dead — {reason}; placement halted")
+    deps.chain_state["alive"] = alive
 
 
 def _orphan_alert_key(orphan: Orphan) -> str:

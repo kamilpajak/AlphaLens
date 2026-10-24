@@ -235,7 +235,12 @@ BASELINE: dict[str, int] = {
     # rather than either branch's own number. Counted with ``wc -l`` on the
     # merged file, not added up from the two diffs.
     #
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7945,
+    # Raised from 7945 for the edge-triggered token-chain page. The 2026-10-23
+    # incident sent 531 pages from that one site in 7.5 hours; the lines are
+    # the holder, the emitter and the docstring that records why the fix is an
+    # EDGE and not a throttle -- the persistent signal is the Prometheus pair,
+    # and a throttle would still say nothing when the chain came back.
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 7977,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3302,

@@ -428,6 +428,60 @@ class TestChainDeadHaltsPlacementAndAlerts(IsolatedHomeTestCase):
                 f"expected a chain-dead placement-halted alert, got {alerts}",
             )
 
+    def _chain_pages(self, alerts: list) -> list:
+        return [a for a in alerts if "chain dead" in a or "chain restored" in a]
+
+    def test_a_held_dead_chain_pages_ONCE_not_on_every_tick(self) -> None:
+        """2026-10-23 incident: the LIVE market-data refresh chain died at 20:13 and
+        this site paged on EVERY tick — 531 pages in 7.5 hours, about 79 an hour,
+        while the four throttled sites beside it produced 15 each. The persistent
+        signal for a dead chain is the Prometheus pair that fired and stayed firing
+        (`AlphalensJobFailed` + `AlphalensJobStale` on saxo-marketdata-refresh), so
+        the operator page only has to carry the EDGE."""
+        with TemporaryDirectory() as d:
+            alerts: list = []
+            deps = self._dead_chain_deps(d, [], alerts, _pick("KO", "2026-07-20"))
+
+            for _ in range(5):
+                cl.run_once(deps)
+
+            pages = self._chain_pages(alerts)
+            self.assertEqual(len(pages), 1, f"one page for one transition, got {pages}")
+            self.assertIn("session token expired", pages[0])
+            self.assertIn("placement halted", pages[0])
+
+    def test_the_chain_coming_back_pages_once(self) -> None:
+        """The other edge, which today pages NOTHING: nothing tells the operator the
+        chain recovered, so a silent telephone is ambiguous between "still dead" and
+        "fixed". One page per direction, the `_alert_kill_transition` shape."""
+        with TemporaryDirectory() as d:
+            alerts: list = []
+            state = {"alive": False}
+
+            def chain():
+                return type("C", (), {"alive": state["alive"], "reason": "session token expired"})()
+
+            base = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=[],
+                alerts=alerts,
+                picks=[],
+            )
+            deps = cl.LoopDeps(**{**base.__dict__, "ensure_alive": chain})
+
+            cl.run_once(deps)  # dead  -> one page
+            cl.run_once(deps)  # still dead -> silent
+            state["alive"] = True
+            cl.run_once(deps)  # back  -> one page
+            cl.run_once(deps)  # still alive -> silent
+
+            pages = self._chain_pages(alerts)
+            self.assertEqual(len(pages), 2, f"one page per direction, got {pages}")
+            self.assertIn("chain dead", pages[0])
+            self.assertIn("chain restored", pages[1])
+
     def test_chain_alive_places_pick_and_emits_no_chain_dead_alert(self) -> None:
         # Positive control: with the chain ALIVE the SAME pick IS placed and no
         # chain-dead alert fires — proving the halt + alert above are gated on the
