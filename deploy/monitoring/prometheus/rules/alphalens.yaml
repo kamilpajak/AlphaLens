@@ -1711,6 +1711,36 @@ groups:
           summary: "broker-manager heartbeat metric missing"
           description: "No heartbeat gauge for broker-manager. The daemon has not ticked since metrics were enabled, or the textfile collector / node_exporter scrape is broken. Clears after the first tick."
 
+      # The OAuth token-chain liveness gauge (control_loop.chain_alive_metric).
+      # The operator page for a dead chain is EDGE-triggered — one Telegram
+      # message per transition, after a dead chain sent 531 pages in 7.5h on
+      # 2026-10-23 — so this rule is the STANDING indication. The
+      # saxo-marketdata-refresh job rules do not cover it: they watch that
+      # timer's success clock and resolve as soon as a human re-runs the
+      # bootstrap, while the LIVE daemon's token provider LATCHES dead and keeps
+      # refusing to place until it is restarted.
+      #
+      # Gated on a FRESH heartbeat, like AlphalensBrokerStreamBreakerOpen: the
+      # textfile keeps serving its last sample after the daemon stops, so an
+      # ungated rule would page forever on a stopped daemon and duplicate
+      # HeartbeatStale. No absent() twin on purpose — this series only appears
+      # after the daemon runs the code that emits it (ADR 0016 D5 precedent: an
+      # absent() rule pages the instant the rules file reloads), and `== 0`
+      # stays quiet while the series does not exist.
+      - alert: AlphalensBrokerChainDead
+        expr: >-
+          alphalens_broker_manager_chain_alive{job="broker-manager-sim"} == 0
+          and (time() - alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-sim"}) < 300
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: broker-manager
+        annotations:
+          summary: "SIM broker-manager OAuth token chain is dead — placement halted"
+          description: "The SIM auto-manager's session keeper reports the OAuth token chain unusable, so the placement drain is gated off while the loop keeps ticking. Re-run `alphalens broker auth` and restart alphalens-broker-manager.service. The Telegram page for this fires once per transition, not per tick, so this alert is the standing indication."
+
+
       # --- SIM order/position stream breaker (rearm design memo §4.6) -------
       # Telegram gets EDGES (the daemon's episode latch pages one OPEN and one
       # delivery-confirmed CLOSE); Prometheus owns every LEVEL below. Every
@@ -1883,6 +1913,36 @@ groups:
         annotations:
           summary: "LIVE broker-manager heartbeat metric missing"
           description: "No heartbeat gauge for the LIVE auto-manager (REAL MONEY). The daemon has not ticked since metrics were enabled, or the textfile collector / node_exporter scrape is broken. Clears after the first tick."
+
+      # The OAuth token-chain liveness gauge (control_loop.chain_alive_metric).
+      # The operator page for a dead chain is EDGE-triggered — one Telegram
+      # message per transition, after a dead chain sent 531 pages in 7.5h on
+      # 2026-10-23 — so this rule is the STANDING indication. The
+      # saxo-marketdata-refresh job rules do not cover it: they watch that
+      # timer's success clock and resolve as soon as a human re-runs the
+      # bootstrap, while the LIVE daemon's token provider LATCHES dead and keeps
+      # refusing to place until it is restarted.
+      #
+      # Gated on a FRESH heartbeat, like AlphalensBrokerStreamBreakerOpen: the
+      # textfile keeps serving its last sample after the daemon stops, so an
+      # ungated rule would page forever on a stopped daemon and duplicate
+      # HeartbeatStale. No absent() twin on purpose — this series only appears
+      # after the daemon runs the code that emits it (ADR 0016 D5 precedent: an
+      # absent() rule pages the instant the rules file reloads), and `== 0`
+      # stays quiet while the series does not exist.
+      - alert: AlphalensBrokerChainDeadLive
+        expr: >-
+          alphalens_broker_manager_chain_alive{job="broker-manager-live"} == 0
+          and (time() - alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-live"}) < 300
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: broker-manager-live
+        annotations:
+          summary: "LIVE broker-manager OAuth token chain is dead — placement halted (REAL MONEY)"
+          description: "The LIVE auto-manager's session keeper reports the OAuth token chain unusable. The daemon keeps ticking but places nothing, cannot trail a stop and cannot amend one; stops already resting at Saxo still protect open positions. Re-running `alphalens broker marketdata-auth` is NOT enough on its own: the LIVE token provider latches dead, so the daemon also needs `systemctl --user restart alphalens-broker-manager-live.service`. Until that restart this gauge stays 0 while the saxo-marketdata-refresh job alerts resolve — that divergence is exactly what this rule exists to show."
+
 
       - alert: AlphalensLivePriceStreamReaderDown
         # Same anti-false-positive gate as the SIM version: an idle reader

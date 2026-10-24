@@ -188,3 +188,62 @@ tests:
       - eval_time: 21m
         alertname: AlphalensTextfileInvalidSample
         exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # AlphalensBrokerChainDeadLive
+  # ---------------------------------------------------------------------
+
+  # A dead LIVE token chain while the daemon keeps ticking: pending at 2m,
+  # firing at 6m (for: 5m). The heartbeat series advances 60s per minute so
+  # `time() - last_tick` stays 0 — the freshness gate is satisfied.
+  - interval: 1m
+    input_series:
+      - series: 'alphalens_broker_manager_chain_alive{job="broker-manager-live"}'
+        values: '0x20'
+      - series: 'alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-live"}'
+        values: '0+60x20'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: AlphalensBrokerChainDeadLive
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: AlphalensBrokerChainDeadLive
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              unit: broker-manager-live
+              job: broker-manager-live
+            exp_annotations:
+              summary: "LIVE broker-manager OAuth token chain is dead — placement halted (REAL MONEY)"
+              description: "The LIVE auto-manager's session keeper reports the OAuth token chain unusable. The daemon keeps ticking but places nothing, cannot trail a stop and cannot amend one; stops already resting at Saxo still protect open positions. Re-running `alphalens broker marketdata-auth` is NOT enough on its own: the LIVE token provider latches dead, so the daemon also needs `systemctl --user restart alphalens-broker-manager-live.service`. Until that restart this gauge stays 0 while the saxo-marketdata-refresh job alerts resolve — that divergence is exactly what this rule exists to show."
+
+  # The freshness gate: the SAME dead chain with a heartbeat frozen at 0 is a
+  # STOPPED daemon, which HeartbeatStale already pages. Without the gate the
+  # textfile's last sample would keep this rule firing forever.
+  - interval: 1m
+    input_series:
+      - series: 'alphalens_broker_manager_chain_alive{job="broker-manager-live"}'
+        values: '0x20'
+      - series: 'alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-live"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: AlphalensBrokerChainDeadLive
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: AlphalensBrokerChainDeadLive
+        exp_alerts: []
+
+  # Positive control: a LIVE chain reporting alive never fires, so the rule is
+  # gated on the gauge's value and not vacuously true whenever it exists.
+  - interval: 1m
+    input_series:
+      - series: 'alphalens_broker_manager_chain_alive{job="broker-manager-live"}'
+        values: '1x20'
+      - series: 'alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-live"}'
+        values: '0+60x20'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: AlphalensBrokerChainDeadLive
+        exp_alerts: []

@@ -149,6 +149,7 @@ AmendStopPlacer = Callable[[int, str, str, str, float, float, str], PlacedOrder]
 # must never share a job label.
 _HEARTBEAT_METRIC_NAME = "alphalens_broker_manager_last_tick_timestamp_seconds"
 _KILL_ACTIVE_METRIC_NAME = "alphalens_broker_manager_kill_active"
+_CHAIN_ALIVE_METRIC_NAME = "alphalens_broker_manager_chain_alive"
 
 
 def heartbeat_metric(job: str) -> str:
@@ -164,6 +165,24 @@ def kill_active_metric(job: str) -> str:
     call: that write atomically OVERWRITES the whole per-instance textfile, so a
     separate call to this domain would clobber the heartbeat gauge and vice-versa."""
     return f'{_KILL_ACTIVE_METRIC_NAME}{{job="{job}"}}'
+
+
+def chain_alive_metric(job: str) -> str:
+    """The OAuth token-chain liveness gauge (level, 0/1): 1 while ``ensure_alive``
+    reports the chain usable, 0 once it does not. CO-EMITTED with
+    ``heartbeat_metric`` in the SAME ``emit_domain_metrics(job, {...})`` call, for
+    the reason ``kill_active_metric`` states — that write atomically OVERWRITES the
+    whole per-instance textfile.
+
+    It exists because the operator page for a dead chain is EDGE-triggered (one page
+    per transition, see ``_alert_chain_transition``), so nothing repeats while the
+    chain stays dead, and because no OTHER series covers the gap. The
+    ``saxo-marketdata-refresh`` job rules watch the keep-alive TIMER's success clock:
+    they resolve as soon as a human re-runs the bootstrap. On LIVE the daemon does
+    NOT recover with them — ``LiveOrderTokenProvider`` latches dead and needs a
+    restart — so without this gauge every monitored surface reads green while
+    placement is halted indefinitely. ``AlphalensBrokerChainDead`` alerts on it."""
+    return f'{_CHAIN_ALIVE_METRIC_NAME}{{job="{job}"}}'
 
 
 # The stream gauge writes to its OWN domain textfile, NOT the heartbeat's domain
@@ -294,6 +313,17 @@ class LoopDeps:
     # KILL already present alerts once (the operator sees it) while a clean no-KILL
     # startup stays silent.
     kill_state: dict[str, bool] = field(default_factory=dict)
+    # Previous token-chain liveness, for the edge-triggered page below — the
+    # kill_state pattern, same reason: the condition HOLDS for hours and the
+    # page is about the transition, not the state.
+    # BOTH holders only deliver "once per transition" when the LoopDeps itself lives
+    # as long as the daemon, which is true of build_default_deps + run_daemon (one
+    # deps, reused every tick). A transport that rebuilds deps PER CYCLE restarts
+    # both holders empty each time, so a held condition pages once per cycle again —
+    # InProcessManagerService.run_cycle does exactly that, which is harmless only
+    # because its sole caller today is the acceptance harness. A production caller on
+    # that transport must hoist these holders out of its per-cycle factory first.
+    chain_state: dict[str, bool] = field(default_factory=dict)
     # Streaming early-wake handles (design memo saxo_streaming_design_2026_07_24.md),
     # ALL None unless ALPHALENS_BROKER_STREAMING_ENABLED=1 AND the broker is Saxo
     # (SIM rail) AND the provider is OAuth AND the reader actually started. When
@@ -409,7 +439,7 @@ def _always() -> bool:
     return True
 
 
-def _default_emit_heartbeat(kill: bool = False) -> None:
+def _default_emit_heartbeat(kill: bool = False, chain_alive: bool = True) -> None:
     """Write the per-tick Prometheus heartbeat + KILL-active gauges. A Type=simple
     daemon rarely triggers ExecStopPost, so the emit-job-metrics last_success clock is
     the wrong health signal — the heartbeat gauge (watched by
@@ -417,7 +447,11 @@ def _default_emit_heartbeat(kill: bool = False) -> None:
     when the KILL file is present, 0 when absent) so an emergency stop is visible to
     Prometheus. BOTH gauges MUST go in ONE emit call: the write atomically overwrites
     the whole per-instance textfile, so a separate call would clobber the other
-    gauge. The job label (``state_paths.metrics_job()``) is resolved HERE, at call
+    gauge. The chain-alive gauge joins them for the same reason (see
+    ``chain_alive_metric``): the dead-chain page is edge-triggered, so this level
+    series is the only standing indication that the daemon cannot place. It defaults
+    to True so a caller that does not pass it never publishes a FALSE outage.
+    The job label (``state_paths.metrics_job()``) is resolved HERE, at call
     time, not at import — so the textfile domain and the ``{job=...}`` label always
     reflect the CURRENT ``$ALPHALENS_BROKER_ENVIRONMENT`` rather than a value frozen
     at process start (ADR 0016 D5). Best-effort: a textfile-dir hiccup must never
@@ -428,7 +462,11 @@ def _default_emit_heartbeat(kill: bool = False) -> None:
     try:
         emit_domain_metrics(
             job,
-            {heartbeat_metric(job): int(time.time()), kill_active_metric(job): int(kill)},
+            {
+                heartbeat_metric(job): int(time.time()),
+                kill_active_metric(job): int(kill),
+                chain_alive_metric(job): int(chain_alive),
+            },
         )
     except OSError:
         logger.warning("broker-manager heartbeat emit failed", exc_info=True)
@@ -506,10 +544,7 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
     _alert_kill_transition(deps, kill)
     chain = deps.ensure_alive()
     alive = bool(getattr(chain, "alive", False))
-    if not alive:
-        deps.alert(
-            f"session-keeper: chain dead — {getattr(chain, 'reason', None)}; placement halted"
-        )
+    _alert_chain_transition(deps, alive, getattr(chain, "reason", None))
 
     if sweep_orphans:
         _run_orphan_sweep(deps, report)
@@ -602,6 +637,49 @@ def _alert_kill_transition(deps: LoopDeps, kill: bool) -> None:
         else:
             deps.alert("KILL cleared — placement resumed")
     deps.kill_state["active"] = kill
+
+
+def _alert_chain_transition(deps: LoopDeps, alive: bool, reason: str | None) -> None:
+    """Edge-triggered token-chain page — the ``_alert_kill_transition`` shape, for
+    the same reason and after the same lesson.
+
+    On 2026-10-23 the LIVE market-data refresh chain died at 20:13 and this site,
+    which paged unconditionally while ``alive`` was False, sent 531 pages in 7.5
+    hours — about 79 an hour, one per tick. The four throttled sites beside it
+    produced 15 each over the same window, which is what a 30-minute throttle
+    looks like. A dead chain is not a per-tick event: it HOLDS until a human
+    re-runs the auth bootstrap.
+
+    Throttling it would still repeat every interval and would still say nothing
+    when the chain came back. Edge-triggering says each thing once, and the STANDING
+    indication moves to Prometheus: ``chain_alive_metric`` co-emits 0/1 with the
+    heartbeat every tick and ``AlphalensBrokerChainDead`` alerts on it.
+
+    That gauge is NOT optional bookkeeping, and the refresh-unit rules do not stand
+    in for it. ``AlphalensJobFailed`` / ``AlphalensJobStale`` on
+    ``job="saxo-marketdata-refresh"`` both fired during the incident, but they watch
+    the keep-alive TIMER's success clock: they RESOLVE as soon as a human re-runs the
+    bootstrap. On LIVE the daemon does not recover with them —
+    ``LiveOrderTokenProvider`` latches dead (``_chain_lost`` sets ``_dead`` and every
+    later ``get_access_token`` raises without reading the store) — so the restore edge
+    below is unreachable on LIVE until a restart, which is why the dead page's own
+    text says to restart the daemon. SIM's provider does not latch, so there the
+    restore edge does fire.
+
+    Guaranteed-send ``deps.alert``, not ``alert_throttled``: edges are rare and
+    each transition must deliver. A missing key reads as "was alive", so a daemon
+    that STARTS with a dead chain pages once — the mirror of kill_state's "a
+    missing key == was False"."""
+    previous = deps.chain_state.get("alive", True)
+    if alive != previous:
+        if alive:
+            # NOT "placement resumed": the drain is enabled on ``not kill and
+            # alive``, so a chain recovering under a held KILL would make that a
+            # false claim. A restored chain only stops being a reason to halt.
+            deps.alert("session-keeper: chain restored — the chain no longer blocks placement")
+        else:
+            deps.alert(f"session-keeper: chain dead — {reason}; placement halted")
+    deps.chain_state["alive"] = alive
 
 
 def _orphan_alert_key(orphan: Orphan) -> str:
@@ -4123,7 +4201,7 @@ def run_daemon(
     poll_seconds: float,
     sleep_fn: Callable[[float], None] = time.sleep,
     is_running: Callable[[], bool] = _always,
-    heartbeat_fn: Callable[[bool], None] = _default_emit_heartbeat,
+    heartbeat_fn: Callable[[bool, bool], None] = _default_emit_heartbeat,
     wake_event: threading.Event | None = None,
     on_tick: Callable[[], None] | None = None,
     monotonic: Callable[[], float] = time.monotonic,
@@ -4181,7 +4259,11 @@ def run_daemon(
         pass_end = monotonic() if wake_event is not None else 0.0
         # Task 13: writes the Prometheus heartbeat gauge + the KILL-active gauge
         # (co-emitted so an emergency stop is visible to Prometheus, not just journald).
-        heartbeat_fn(_kill_active(deps))
+        # The chain gauge rides along and reads the verdict run_once ALREADY took this
+        # tick (deps.chain_state), never a second ensure_alive() call: on LIVE the
+        # provider latches dead, so a re-read could disagree with the halt the loop
+        # just applied — and on SIM it would cost a second token touch per tick.
+        heartbeat_fn(_kill_active(deps), deps.chain_state.get("alive", True))
         # #1172: and this instance's view of the shared price reader. A no-op on
         # the in-process path. Separate emit because it is a separate job — one
         # emit call writes one whole per-job textfile.
@@ -7938,6 +8020,7 @@ __all__ = [
     "LoopDeps",
     "TickReport",
     "build_default_deps",
+    "chain_alive_metric",
     "heartbeat_metric",
     "kill_active_metric",
     "run_daemon",

@@ -428,6 +428,98 @@ class TestChainDeadHaltsPlacementAndAlerts(IsolatedHomeTestCase):
                 f"expected a chain-dead placement-halted alert, got {alerts}",
             )
 
+    def _chain_pages(self, alerts: list) -> list:
+        return [a for a in alerts if "chain dead" in a or "chain restored" in a]
+
+    def test_a_held_dead_chain_pages_ONCE_not_on_every_tick(self) -> None:
+        """2026-10-23 incident: the LIVE market-data refresh chain died at 20:13 and
+        this site paged on EVERY tick — 531 pages in 7.5 hours, about 79 an hour,
+        while the four throttled sites beside it produced 15 each. The standing
+        indication for a dead chain is the `chain_alive` gauge co-emitted with the
+        heartbeat every tick (see TestChainAliveMetric), so the operator page only
+        has to carry the EDGE. NOT the saxo-marketdata-refresh job rules: those watch
+        the keep-alive timer's success clock and resolve on re-auth, while a latched
+        LIVE provider leaves the daemon halted."""
+        with TemporaryDirectory() as d:
+            alerts: list = []
+            deps = self._dead_chain_deps(d, [], alerts, _pick("KO", "2026-07-20"))
+
+            for _ in range(5):
+                cl.run_once(deps)
+
+            pages = self._chain_pages(alerts)
+            self.assertEqual(len(pages), 1, f"one page for one transition, got {pages}")
+            self.assertIn("session token expired", pages[0])
+            self.assertIn("placement halted", pages[0])
+
+    def test_the_chain_coming_back_pages_once(self) -> None:
+        """The other edge, which today pages NOTHING: nothing tells the operator the
+        chain recovered, so a silent telephone is ambiguous between "still dead" and
+        "fixed". One page per direction, the `_alert_kill_transition` shape."""
+        with TemporaryDirectory() as d:
+            alerts: list = []
+            state = {"alive": False}
+
+            def chain():
+                return type("C", (), {"alive": state["alive"], "reason": "session token expired"})()
+
+            base = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=[],
+                alerts=alerts,
+                picks=[],
+            )
+            deps = cl.LoopDeps(**{**base.__dict__, "ensure_alive": chain})
+
+            cl.run_once(deps)  # dead  -> one page
+            cl.run_once(deps)  # still dead -> silent
+            state["alive"] = True
+            cl.run_once(deps)  # back  -> one page
+            cl.run_once(deps)  # still alive -> silent
+
+            pages = self._chain_pages(alerts)
+            self.assertEqual(len(pages), 2, f"one page per direction, got {pages}")
+            self.assertIn("chain dead", pages[0])
+            self.assertIn("chain restored", pages[1])
+
+    def test_a_restored_chain_does_not_claim_placement_resumed_under_kill(self) -> None:
+        """The page must not assert a conjunction it cannot see. The drain is enabled
+        on ``not kill and alive``, so a chain recovering while the KILL file is held
+        leaves placement halted — "placement resumed" would be false. The dead-edge
+        text has no such problem: a dead chain ALONE does halt placement."""
+        with TemporaryDirectory() as d:
+            alerts: list = []
+            kill_file = Path(d) / "KILL"
+            kill_file.write_text("held")
+            state = {"alive": False}
+
+            def chain():
+                return type("C", (), {"alive": state["alive"], "reason": "refresh DEAD"})()
+
+            base = _deps(
+                _StubBroker(),
+                kill_file=kill_file,
+                verdicts=[],
+                place_calls=[],
+                alerts=alerts,
+                picks=[],
+            )
+            deps = cl.LoopDeps(**{**base.__dict__, "ensure_alive": chain})
+
+            cl.run_once(deps)
+            state["alive"] = True
+            cl.run_once(deps)
+
+            restored = [a for a in alerts if "chain restored" in a]
+            self.assertEqual(len(restored), 1, f"one restore page, got {alerts}")
+            self.assertNotIn(
+                "placement resumed",
+                restored[0],
+                "KILL is held, so placement did NOT resume — the page must not say it did",
+            )
+
     def test_chain_alive_places_pick_and_emits_no_chain_dead_alert(self) -> None:
         # Positive control: with the chain ALIVE the SAME pick IS placed and no
         # chain-dead alert fires — proving the halt + alert above are gated on the
@@ -4490,9 +4582,34 @@ class TestKillActiveObservability(IsolatedHomeTestCase):
                 once=True,
                 poll_seconds=45,
                 sleep_fn=lambda s: None,
-                heartbeat_fn=beats.append,
+                heartbeat_fn=lambda kill, _chain=True: beats.append(kill),
             )
             self.assertEqual(beats, [True], "GLOBAL-only KILL must still light the heartbeat gauge")
+
+    def test_run_daemon_feeds_the_loops_own_chain_verdict_to_the_heartbeat(self) -> None:
+        """The gauge must carry the SAME chain verdict run_once gated placement on,
+        never a second ensure_alive() read taken after the tick: two reads of a
+        LATCHING provider can disagree, and the gauge would then contradict the halt
+        it is there to make visible."""
+        with TemporaryDirectory() as d:
+            dead = type("C", (), {"alive": False, "reason": "refresh DEAD"})()
+            base = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=[],
+                alerts=[],
+            )
+            deps = cl.LoopDeps(**{**base.__dict__, "ensure_alive": lambda: dead})
+            beats: list[tuple[bool, bool]] = []
+            cl.run_daemon(
+                deps,
+                once=True,
+                poll_seconds=45,
+                sleep_fn=lambda s: None,
+                heartbeat_fn=lambda kill, chain_alive: beats.append((kill, chain_alive)),
+            )
+            self.assertEqual(beats, [(False, False)], "the dead chain must reach the gauge")
 
 
 class TestCrashRecovery(IsolatedHomeTestCase):
@@ -4535,7 +4652,7 @@ class TestRunDaemonOnce(IsolatedHomeTestCase):
                 once=True,
                 poll_seconds=45,
                 sleep_fn=lambda s: slept.append(s),  # noqa: PLW0108
-                heartbeat_fn=lambda _kill: beats.append(1),
+                heartbeat_fn=lambda *_: beats.append(1),
             )
             self.assertEqual(len(sweeps), 1)
             self.assertEqual(slept, [])
@@ -8575,7 +8692,7 @@ class TestRunDaemonNeverNaked(IsolatedHomeTestCase):
             once=False,
             poll_seconds=45.0,
             is_running=_stop_after(3),
-            heartbeat_fn=lambda _kill: None,
+            heartbeat_fn=lambda *_: None,
             wake_event=event,  # type: ignore[arg-type]
             monotonic=clock,
         )
@@ -8607,7 +8724,7 @@ class TestRunDaemonNeverNaked(IsolatedHomeTestCase):
             once=False,
             poll_seconds=45.0,
             is_running=_stop_after(2),
-            heartbeat_fn=lambda _kill: None,
+            heartbeat_fn=lambda *_: None,
             wake_event=event,  # type: ignore[arg-type]
             monotonic=clock,
         )
@@ -8629,7 +8746,7 @@ class TestRunDaemonNeverNaked(IsolatedHomeTestCase):
             once=False,
             poll_seconds=45.0,
             is_running=_stop_after(2),
-            heartbeat_fn=lambda _kill: None,
+            heartbeat_fn=lambda *_: None,
             sleep_fn=slept.append,
             wake_event=None,
             monotonic=_forbidden_monotonic,
@@ -8705,7 +8822,7 @@ class TestRunDaemonWakesOnAnEntryFill(IsolatedHomeTestCase):
             once=False,
             poll_seconds=45.0,
             is_running=_stop_after(ticks),
-            heartbeat_fn=lambda _kill: None,
+            heartbeat_fn=lambda *_: None,
             sleep_fn=_sleep,
             wake_event=None,
             monotonic=clock,
@@ -8728,7 +8845,7 @@ class TestRunDaemonWakesOnAnEntryFill(IsolatedHomeTestCase):
             once=False,
             poll_seconds=45.0,
             is_running=_stop_after(2),
-            heartbeat_fn=lambda _kill: None,
+            heartbeat_fn=lambda *_: None,
             sleep_fn=slept.append,
             wake_event=None,
             monotonic=_forbidden_monotonic,
@@ -8913,7 +9030,7 @@ class TestRunDaemonAbsoluteDeadline(IsolatedHomeTestCase):
             once=False,
             poll_seconds=45.0,
             is_running=_stop_after(5),
-            heartbeat_fn=lambda _kill: None,
+            heartbeat_fn=lambda *_: None,
             wake_event=event,  # type: ignore[arg-type]
             monotonic=clock,
         )
@@ -8935,7 +9052,7 @@ class TestRunDaemonAbsoluteDeadline(IsolatedHomeTestCase):
             once=False,
             poll_seconds=45.0,
             is_running=_stop_after(2),
-            heartbeat_fn=lambda _kill: None,
+            heartbeat_fn=lambda *_: None,
             wake_event=event,  # type: ignore[arg-type]
             monotonic=clock,
         )
@@ -8957,7 +9074,7 @@ class TestRunDaemonGuards(IsolatedHomeTestCase):
                     once=False,
                     poll_seconds=bad,
                     is_running=_stop_after(1),
-                    heartbeat_fn=lambda _kill: None,
+                    heartbeat_fn=lambda *_: None,
                     wake_event=event,  # type: ignore[arg-type]
                     monotonic=clock,
                 )
@@ -8973,7 +9090,7 @@ class TestRunDaemonGuards(IsolatedHomeTestCase):
             once=True,
             poll_seconds=45.0,
             is_running=_stop_after(1),
-            heartbeat_fn=lambda _kill: None,
+            heartbeat_fn=lambda *_: None,
             sleep_fn=lambda s: None,
             wake_event=None,
         )
@@ -9038,7 +9155,7 @@ class TestWokenPassRecomputesState(IsolatedHomeTestCase):
                 once=False,
                 poll_seconds=45.0,
                 is_running=_stop_after(2),
-                heartbeat_fn=lambda _kill: None,
+                heartbeat_fn=lambda *_: None,
                 wake_event=event,  # type: ignore[arg-type]
                 monotonic=clock,
             )
@@ -9081,7 +9198,7 @@ class TestStreamRestBudget(IsolatedHomeTestCase):
                     once=False,
                     poll_seconds=45.0,
                     is_running=_stop_after(6),
-                    heartbeat_fn=lambda _kill: None,
+                    heartbeat_fn=lambda *_: None,
                     wake_event=event,  # type: ignore[arg-type]
                     monotonic=clock,
                 )
@@ -9292,7 +9409,7 @@ class TestBlockingOnTickDoesNotExtendGap(IsolatedHomeTestCase):
             once=False,
             poll_seconds=45.0,
             is_running=_stop_after(3),
-            heartbeat_fn=lambda _kill: None,
+            heartbeat_fn=lambda *_: None,
             on_tick=_blocking_tick,
             wake_event=event,  # type: ignore[arg-type]
             monotonic=clock,
@@ -9917,6 +10034,57 @@ class TestKillActiveMetric(IsolatedHomeTestCase):
         self.assertIn(
             cl.heartbeat_metric(cap["job"]), cap["metrics"], "heartbeat co-emitted, not clobbered"
         )
+
+
+class TestChainAliveMetric(IsolatedHomeTestCase):
+    """The chain-alive gauge (level 0/1) MUST co-emit with the per-tick heartbeat and
+    the KILL gauge in ONE emit_domain_metrics(job, {...}) call — a second call to the
+    same domain atomically OVERWRITES the others.
+
+    Why a level gauge beside the edge page: on LIVE the token provider LATCHES dead
+    (``LiveOrderTokenProvider._chain_lost`` sets ``_dead``, and every later
+    ``get_access_token`` raises without reading the store), so ``ensure_alive`` can
+    never report alive again in that process. The operator can re-run the auth
+    bootstrap, watch ``AlphalensJobFailed`` / ``AlphalensJobStale`` on
+    ``saxo-marketdata-refresh`` resolve, and still be left with a daemon that places
+    nothing: those rules watch the refresh TIMER's success clock, not this daemon's
+    ability to use the chain. With the page edge-triggered, this gauge is the only
+    surface that disagrees with that green picture."""
+
+    def _emitted(self, *, kill: bool, chain_alive: bool) -> dict[str, Any]:
+        captured: dict[str, Any] = {}
+
+        def _spy(job: str, metrics: Any) -> None:
+            captured["job"] = job
+            captured["metrics"] = dict(metrics)
+
+        with mock.patch("alphalens_pipeline.observability.textfile.emit_domain_metrics", _spy):
+            cl._default_emit_heartbeat(kill, chain_alive)
+        return captured
+
+    def test_dead_chain_co_emits_chain_alive_0_beside_heartbeat_and_kill(self) -> None:
+        cap = self._emitted(kill=False, chain_alive=False)
+        # Default $ALPHALENS_BROKER_ENVIRONMENT is "sim" (ADR 0016 D1/D5).
+        self.assertEqual(cap["job"], "broker-manager-sim")
+        self.assertEqual(cap["metrics"][cl.chain_alive_metric(cap["job"])], 0)
+        self.assertIn(cl.heartbeat_metric(cap["job"]), cap["metrics"], "heartbeat not clobbered")
+        self.assertIn(cl.kill_active_metric(cap["job"]), cap["metrics"], "KILL gauge not clobbered")
+
+    def test_live_chain_co_emits_chain_alive_1(self) -> None:
+        cap = self._emitted(kill=False, chain_alive=True)
+        self.assertEqual(cap["metrics"][cl.chain_alive_metric(cap["job"])], 1)
+
+    def test_omitting_the_argument_reads_as_alive_not_as_a_dead_chain(self) -> None:
+        """A caller that predates the second parameter must not publish a FALSE dead
+        chain — that would page the operator about an outage that is not happening."""
+        captured: dict[str, Any] = {}
+
+        def _spy(job: str, metrics: Any) -> None:
+            captured["metrics"] = dict(metrics)
+
+        with mock.patch("alphalens_pipeline.observability.textfile.emit_domain_metrics", _spy):
+            cl._default_emit_heartbeat()
+        self.assertEqual(captured["metrics"][cl.chain_alive_metric("broker-manager-sim")], 1)
 
 
 class TestKillEdgeAlert(IsolatedHomeTestCase):
