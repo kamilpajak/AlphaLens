@@ -92,9 +92,11 @@ _CASHBOOK_ENV_OPTION = typer.Option(
     None,
     "--env",
     help="Broker instance to read and store under: 'sim' or 'live' (ADR 0016). "
-    "Default: $ALPHALENS_BROKER_ENVIRONMENT, else sim. 'live' additionally composes "
-    "the rails + EnvironmentFile of the installed LIVE unit, so the command works in "
-    "a plain shell. A sweep stores only under 'live'.",
+    "Default: $ALPHALENS_BROKER_ENVIRONMENT, else sim. 'live' also composes the "
+    "installed LIVE unit's environment, so either command works in a plain shell: "
+    "required by 'sync', best-effort for 'totals', which holds no broker. The cash "
+    "book exists only under 'live' — a sweep stores nothing else, and a total "
+    "refuses anything else rather than sum an empty store.",
 )
 
 _SINCE_OPTION = typer.Option(
