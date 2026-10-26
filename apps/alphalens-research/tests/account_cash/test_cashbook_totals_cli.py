@@ -155,6 +155,7 @@ _UNCLASSIFIED_LABEL = _MONEY_LINES[3][1]
 _RESIDUAL_LABEL = _MONEY_LINES[4][1]
 _SUBTOTAL_LABEL = _MONEY_LINES[5][1]
 _DEPOSITS_LABEL = _MONEY_LINES[6][1]
+_CASH_BOOK_SUM_LABEL = _MONEY_LINES[7][1]
 
 #: The labels of the fact rows -- the ones that carry ``name value`` pairs
 #: rather than one money cell. They share one column width.
@@ -288,6 +289,23 @@ def _assert_prose_carries_every_leaf(case: unittest.TestCase, payload: dict, hum
             case.assertIn(f" {_human_token(value)} ", bounded)
 
 
+def _money_cell_ends(run, lines: list[str]) -> set[int]:
+    """Where each money cell ENDS, which is what a right-aligned column means.
+
+    The cell is located by the token the BODY publishes (``value_rendered``),
+    searched past the label, so a note repeating the same amount cannot be
+    mistaken for the cell. ``run`` is the bound ``totals`` helper, used to read
+    the same window's JSON body.
+    """
+    payload = _strict_json(run("--format", "json").stdout)
+    ends = set()
+    for key, label in _MONEY_LINES:
+        rendered = payload[key]["value_rendered"]
+        line = lines[_line_index(lines, label)]
+        ends.add(line.index(rendered, len(label)) + len(rendered))
+    return ends
+
+
 def _line_index(lines: list[str], label: str) -> int:
     """Where the line carrying ``label`` sits, so ORDER can be asserted."""
     for index, line in enumerate(lines):
@@ -326,13 +344,14 @@ class _CashbookTotalsCase(IsolatedHomeTestCase):
         since: str = _SWEPT_SINCE,
         until: str = _SWEPT_UNTIL,
         now: dt.datetime = _SWEPT_AT,
+        events: tuple[Any, ...] = tuple(BOOKINGS),
     ) -> None:
         """Store the whole capture under one sweep, through the real sweep path."""
         read = AccountCashRead(
-            events=tuple(BOOKINGS),
+            events=tuple(events),
             trades=tuple(TRADES),
             balance=BALANCE,
-            events_window=ReadWindow(since, until, len(BOOKINGS)),
+            events_window=ReadWindow(since, until, len(events)),
             trades_window=ReadWindow(since, until, len(TRADES)),
             skipped_reason=None,
         )
@@ -564,7 +583,7 @@ class TheProseCarriesEveryFactTheJsonBodyPublishes(_CashbookTotalsCase):
 
         human = self.totals().stdout
 
-        self._assert_prose_carries_every_leaf(payload, human)
+        _assert_prose_carries_every_leaf(self, payload, human)
 
     def test_the_prose_carries_the_number_the_record_holds(self) -> None:
         """**Mutation it catches:** a renderer that computes a line of its own.
@@ -614,9 +633,6 @@ class TheProseCarriesEveryFactTheJsonBodyPublishes(_CashbookTotalsCase):
         }
 
         self.assertEqual(len(starts), 1, human)
-
-    def _assert_prose_carries_every_leaf(self, payload: dict, human: str) -> None:
-        _assert_prose_carries_every_leaf(self, payload, human)
 
 
 class TheProseCarriesAGapAndASecondBalanceCheckToo(_CashbookTotalsCase):
@@ -747,21 +763,59 @@ class TheFiveLoadBearingPropertiesOfTheRender(_CashbookTotalsCase):
     def test_the_money_column_is_one_right_aligned_column(self) -> None:
         """Every money cell ENDS at one offset, which is what a right-aligned
         column means. **Mutation it catches:** a width literal drifting from
-        the widest published label or the widest rendered amount.
-
-        The cell is located by the token the BODY publishes
-        (``value_rendered``), searched past the label so a note repeating the
-        same amount cannot be mistaken for it.
+        the widest published label. The width of the AMOUNT column cannot be
+        refuted here, where every amount is 12 characters or fewer -- that is
+        ``ALineWithNoNumberPrintsItsReasonAndKeepsTheColumn``'s job, and it is
+        why the two cases both exist.
         """
+        self.assertEqual(len(_money_cell_ends(self.totals, self.lines)), 1, self.human)
+
+
+class ALineWithNoNumberPrintsItsReasonAndKeepsTheColumn(_CashbookTotalsCase):
+    """One booking row restated into ``EUR`` -- a vendor change or a bug.
+
+    The report's documented degradation path: the lines that would have added
+    two units refuse BY NAME rather than picking one or raising, and the
+    command has to render that. A zero standing in for "unknown" is the same
+    defect as a number beside a threshold in another unit, with no unit at all.
+
+    This is also the ONLY shape in which a published money line renders longer
+    than a number -- ``currency_mixed`` is 14 characters against
+    ``20738.68 PLN``'s 12 -- so it is what gives the money column's test its
+    power: a width literal that happens to fit the seeded capture overflows
+    here.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.seed(events=(replace(BOOKINGS[0], account_currency="EUR"), *BOOKINGS[1:]))
+        self.human = self.totals().stdout
+        self.lines = [line for line in self.human.splitlines() if line.strip()]
+
+    def test_the_premise_is_a_store_holding_two_account_currencies(self) -> None:
+        """Positive control: without the second currency every line below is a
+        number and the class says nothing the others do not."""
         payload = _strict_json(self.totals("--format", "json").stdout)
 
-        ends = set()
-        for key, label in _MONEY_LINES:
-            rendered = payload[key]["value_rendered"]
-            line = self.lines[_line_index(self.lines, label)]
-            ends.add(line.index(rendered, len(label)) + len(rendered))
+        self.assertIsNone(payload["basis"]["currency"])
+        self.assertEqual(payload["cash_book_sum_acct"]["null_reason"], "currency_mixed")
 
-        self.assertEqual(len(ends), 1, self.human)
+    def test_the_line_prints_the_reason_and_never_a_zero(self) -> None:
+        line = self.lines[_line_index(self.lines, _CASH_BOOK_SUM_LABEL)]
+
+        self.assertIn("currency_mixed", line)
+        self.assertNotIn("0.00", line)
+
+    def test_the_money_column_still_ends_at_one_offset(self) -> None:
+        """**Mutation it catches:** a money-column width written as a literal.
+        12 fits every amount on the seeded capture, so only a longer cell can
+        tell a literal from the derived width."""
+        self.assertEqual(len(_money_cell_ends(self.totals, self.lines)), 1, self.human)
+
+    def test_every_leaf_of_the_body_appears_in_the_prose(self) -> None:
+        payload = _strict_json(self.totals("--format", "json").stdout)
+
+        _assert_prose_carries_every_leaf(self, payload, self.human)
 
 
 class AWindowTheStoreCannotAnswerIsAFailureAndNotASmallerNumber(_CashbookTotalsCase):
