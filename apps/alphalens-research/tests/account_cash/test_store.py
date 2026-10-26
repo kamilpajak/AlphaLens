@@ -1157,12 +1157,17 @@ class TheSweepWindowIsParsedInExactlyOnePlace(unittest.TestCase):
         """
         from alphalens_pipeline.account_cash import balance_check, report
 
-        for module in (report, balance_check):
+        # The "reaches it" half is spelled per module, not as a bare
+        # ``"sweep_window" in source``: ``balance_check`` declares
+        # ``NULL_SWEEP_WINDOW_NOT_FOUND = "sweep_window_not_found"``, so that
+        # substring is present there whether or not the helper is ever called.
+        reaches_it = {report: "store.sweep_window", balance_check: "sweep_window(record)"}
+        for module, call in reaches_it.items():
             with self.subTest(module=module.__name__):
                 source = inspect.getsource(module)
                 self.assertNotIn("def _window_of", source)
                 self.assertNotIn("fromisoformat(record.", source)
-                self.assertIn("sweep_window", source)
+                self.assertIn(call, source)
 
 
 if __name__ == "__main__":
