@@ -119,6 +119,30 @@ BASELINE: dict[str, int] = {
     # of someone else's explanation, which is how a ratchet gets gamed.
     "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3168,
     "apps/alphalens-pipeline/alphalens_cli/commands/thematic.py": 1708,
+    # First entry, from 940, for the eight review findings on #1689's P4-b.
+    # Asked for rather than taken, and it is asked for ONCE: the file should be
+    # split, and this records that it was not split here.
+    #
+    # What the 162 lines bought: a fourth row-partition term and its counter
+    # (an unparseable date was counted as no date at all), a second count beside
+    # the open cost basis (a held position under a `window_clipped` or
+    # `imbalanced` flag left the line reading as flat), two partitions rewritten
+    # from tautologies into checks that can refute, and the docstring
+    # corrections that say so -- the module docstring had claimed four checked
+    # partitions while two could not produce a disproving observation, and
+    # `_agree` named one of those two as the control behind its own relaxation.
+    # 129 of the 162 are docstring or comment; the file holds 410 lines of code
+    # against 422 of docstring.
+    #
+    # Why no split in this PR, measured rather than asserted. The seam the
+    # review asked about -- `Coverage`, `coverage_of`, `history_begins` and
+    # `UNDETECTED_PARTIAL_ENTRY` -- is 93 lines, which lands the file at ~1009
+    # and still over `CEILING`. Getting under it needs that seam PLUS one more
+    # (the identities, 116 lines, or the published record shapes, 150), and a
+    # two-seam module split riding along at the end of a review-fix PR is how a
+    # published money number moves without anyone reviewing the move. The split
+    # is its own PR; this entry is what keeps it visible until then.
+    "apps/alphalens-pipeline/alphalens_pipeline/account_cash/report.py": 1102,
     # Raised again, by 8, to say that the raise page's ticker fallback is
     # unreachable by construction. It sits beside the stop-PLACED page's
     # fallback, which looks identical and IS reachable and tested, so without
