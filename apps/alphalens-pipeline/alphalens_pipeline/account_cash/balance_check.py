@@ -154,6 +154,19 @@ class BalanceCheck:
         }
 
 
+def _account_currency(at: BalanceAt) -> str | None:
+    """The account's currency, as the balances body states it.
+
+    Read through a named function rather than inline in an :func:`acct_sum`
+    keyword, for the same reason :func:`_cash_as_acct` binds it to a local:
+    the FX guard in ``tests/account_cash/test_money.py`` walks the arguments
+    of every summing call and reports each ``CashEvent`` field name it finds,
+    so ``currency=latest.snapshot.currency`` would be reported as a booking
+    row's INSTRUMENT currency -- read off a record that has no such field.
+    """
+    return at.snapshot.currency
+
+
 def _cash_as_acct(at: BalanceAt) -> AcctAmount:
     """The account's own cash balance as an account amount.
 
@@ -170,7 +183,7 @@ def _cash_as_acct(at: BalanceAt) -> AcctAmount:
     An absent ``CashBalance`` nulls it with ``account_amount_not_reported``,
     which is what makes the whole check ``not_checkable`` rather than ``0.0``.
     """
-    account_currency = at.snapshot.currency
+    account_currency = _account_currency(at)
     return acct_sum([(at.snapshot.cash_balance, account_currency)], rows=1)
 
 
@@ -234,7 +247,7 @@ def cumulative_check(
     expected = acct_sum(
         [(event.amount_account_currency, event.account_currency) for event in events],
         rows=len(events),
-        currency=latest.snapshot.currency,
+        currency=_account_currency(latest),
     )
     observed = _cash_as_acct(latest)
     difference = acct_difference(expected, observed)
@@ -305,7 +318,7 @@ def incremental_check(
     expected = acct_sum(
         [(event.amount_account_currency, event.account_currency) for event in settled],
         rows=len(settled),
-        currency=later.snapshot.currency,
+        currency=_account_currency(later),
     )
     observed = acct_difference(_cash_as_acct(later), _cash_as_acct(earlier))
     difference = acct_difference(expected, observed)
