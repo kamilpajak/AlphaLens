@@ -342,15 +342,28 @@ _NOT_STATED = "none"
 #: sit BELOW the subtotal because 24 000 PLN of funding is the easiest number
 #: in this repo to misread as profit, and the cost basis of what is still open
 #: is its own line because it is not realized money.
+#: The lines that ADD UP, in the order they add up in. Four terms, the rule,
+#: the subtotal, the deposits, the rule, the sum -- so a reader who totals the
+#: block above each rule gets the number the rule carries.
 _TOTALS_MONEY_LINES: tuple[tuple[str, str], ...] = (
     ("net_closed_acct", "net on closed episodes"),
-    ("cost_basis_open_acct", "cost basis of open episodes"),
     ("income_acct", "dividends and withholding tax"),
     ("unclassified_acct", "unclassified cash events"),
     ("residual_acct", "residual not explained above"),
     ("subtotal_acct", "trading and income subtotal"),
     ("deposits_acct", "deposits and withdrawals"),
     ("cash_book_sum_acct", "cash book sum"),
+)
+
+#: Money the report states but does not ADD, printed below the sum and outside
+#: both rules. The open cost basis answers as of the store's watermark while
+#: every line above answers as of the window, so it is not a term of either
+#: derived line -- and while it sat among the terms, a reader who totalled the
+#: block was wrong by exactly its value (measured: the four terms give
+#: -7827.16 at the 2026-09-12 cut, the five gave -11422.02, and the rule says
+#: -7827.16).
+_TOTALS_STATED_LINES: tuple[tuple[str, str], ...] = (
+    ("cost_basis_open_acct", "cost basis of open episodes"),
 )
 
 #: What each money line's row count COUNTS, and what the number is not. The
@@ -405,23 +418,35 @@ def _money_note(field: str, body: dict[str, Any]) -> str:
 
 
 def _render_totals_money(body: dict[str, Any]) -> None:
-    """The eight lines, one right-aligned money column, two rules.
+    """Seven lines that add up, then the one the report states but does not add.
 
     Both widths are DERIVED -- from the widest published label and the widest
-    rendered amount -- so a renamed line or a null value (which renders as its
-    reason, and a reason is longer than a number) moves the column instead of
-    overflowing a literal.
+    rendered amount, over BOTH blocks so the two share one column -- so a
+    renamed line or a null value (which renders as its reason, and a reason is
+    longer than a number) moves the column instead of overflowing a literal.
+
+    The split is the point: everything above a rule totals to the number that
+    rule carries. The open cost basis does not belong to either total, so it
+    goes below the sum rather than among the terms.
     """
-    label_width = max(len(label) for _field, label in _TOTALS_MONEY_LINES)
-    money_width = max(len(body[field]["value_rendered"]) for field, _label in _TOTALS_MONEY_LINES)
+    every = _TOTALS_MONEY_LINES + _TOTALS_STATED_LINES
+    label_width = max(len(label) for _field, label in every)
+    money_width = max(len(body[field]["value_rendered"]) for field, _label in every)
     rule = label_width + 1 + money_width
+
+    def emit(field: str, label: str) -> None:
+        amount = body[field]["value_rendered"]
+        typer.echo(f"{label:<{label_width}} {amount:>{money_width}}  {_money_note(field, body)}")
+
     for field, label in _TOTALS_MONEY_LINES:
         if field == "subtotal_acct":
             typer.echo("-" * rule)
         if field == "cash_book_sum_acct":
             typer.echo("=" * rule)
-        amount = body[field]["value_rendered"]
-        typer.echo(f"{label:<{label_width}} {amount:>{money_width}}  {_money_note(field, body)}")
+        emit(field, label)
+    for field, label in _TOTALS_STATED_LINES:
+        typer.echo("")
+        emit(field, label)
 
 
 def _render_totals_basis(basis: dict[str, Any]) -> None:

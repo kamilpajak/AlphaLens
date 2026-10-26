@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from alphalens_cli.commands import cashbook
 from alphalens_pipeline.account_cash import money, report, sweep
 from alphalens_pipeline.brokers.account_cash import AccountCashRead
 from alphalens_pipeline.brokers.fill_history import ReadWindow
@@ -145,30 +146,28 @@ _NONE = "none"
 #: the tests that ask which side of the seam a published number came from.
 _ABSURD_PLN = -123456.78
 
-#: The labels of the eight published money lines, in render order, keyed by
-#: the body field each one renders.
-_MONEY_LINES: tuple[tuple[str, str], ...] = (
-    ("net_closed_acct", "net on closed episodes"),
-    ("cost_basis_open_acct", "cost basis of open episodes"),
-    ("income_acct", "dividends and withholding tax"),
-    ("unclassified_acct", "unclassified cash events"),
-    ("residual_acct", "residual not explained above"),
-    ("subtotal_acct", "trading and income subtotal"),
-    ("deposits_acct", "deposits and withdrawals"),
-    ("cash_book_sum_acct", "cash book sum"),
-)
+#: The published money lines, in render order, keyed by the body field each
+#: one renders -- READ OFF THE RENDERER rather than copied. A second copy here
+#: would be a second source of truth: a line reordered or moved between the
+#: two blocks would leave the copies disagreeing while every test still passed,
+#: which is how the open cost basis came to sit among terms it is not one of.
+_ADDED_LINES: tuple[tuple[str, str], ...] = cashbook._TOTALS_MONEY_LINES
+_STATED_LINES: tuple[tuple[str, str], ...] = cashbook._TOTALS_STATED_LINES
+_MONEY_LINES: tuple[tuple[str, str], ...] = _ADDED_LINES + _STATED_LINES
 _MONEY_LABELS = tuple(label for _key, label in _MONEY_LINES)
 _MONEY_LABEL_BY_FIELD = dict(_MONEY_LINES)
-_NET_LABEL = _MONEY_LINES[0][1]
-_COST_BASIS_LABEL = _MONEY_LINES[1][1]
-_UNCLASSIFIED_LABEL = _MONEY_LINES[3][1]
-_RESIDUAL_LABEL = _MONEY_LINES[4][1]
-#: The one DERIVED money line: the five lines above it add up to it, which is
-#: what makes it the line a CLI could recompute instead of rendering.
-_SUBTOTAL_LINE = _MONEY_LINES[5]
-_SUBTOTAL_LABEL = _SUBTOTAL_LINE[1]
-_DEPOSITS_LABEL = _MONEY_LINES[6][1]
-_CASH_BOOK_SUM_LABEL = _MONEY_LINES[7][1]
+_LABEL_OF = _MONEY_LABEL_BY_FIELD.__getitem__
+_NET_LABEL = _LABEL_OF("net_closed_acct")
+_COST_BASIS_LABEL = _LABEL_OF("cost_basis_open_acct")
+_UNCLASSIFIED_LABEL = _LABEL_OF("unclassified_acct")
+_RESIDUAL_LABEL = _LABEL_OF("residual_acct")
+#: The two DERIVED money lines: the block above each one adds up to it, which
+#: is what makes them the lines a CLI could recompute instead of rendering.
+_SUBTOTAL_LABEL = _LABEL_OF("subtotal_acct")
+_SUBTOTAL_LINE = ("subtotal_acct", _SUBTOTAL_LABEL)
+_DEPOSITS_LABEL = _LABEL_OF("deposits_acct")
+_CASH_BOOK_SUM_LABEL = _LABEL_OF("cash_book_sum_acct")
+
 
 #: The labels of the fact rows -- the ones that carry ``name value`` pairs
 #: rather than one money cell. They share one column width.
@@ -438,6 +437,30 @@ def _money_cell_ends(run, lines: list[str]) -> set[int]:
         line = lines[_line_index(lines, label)]
         ends.add(line.index(rendered, len(label)) + len(rendered))
     return ends
+
+
+def _is_money_line(line: str) -> bool:
+    """Whether a rendered line is one of the money lines, by its label alone.
+
+    Membership of a ruled block is decided from the RENDER, so a line moved
+    into or out of a block changes what the arithmetic check sums.
+    """
+    return any(line.startswith(label) for label in _MONEY_LABELS)
+
+
+def _money_in(line: str) -> float:
+    """The number a money line renders, read back off the prose.
+
+    Read from the render and not from the body on purpose: this is what the
+    reader adds up, so a body that totals correctly while the render puts a
+    line in the wrong block must still fail.
+    """
+    label = next(one for one in _MONEY_LABELS if line.startswith(one))
+    amount = line[len(label) :].lstrip().split(" ", 1)[0]
+    try:
+        return float(amount)
+    except ValueError as exc:  # a null renders as its reason, which cannot be added
+        raise AssertionError(f"{label!r} renders {amount!r}, which is not a number") from exc
 
 
 def _line_index(lines: list[str], label: str) -> int:
@@ -945,6 +968,69 @@ class TheFiveLoadBearingPropertiesOfTheRender(_CashbookTotalsCase):
 
         self.assertIn("-7928.96 PLN", line)
         self.assertNotIn("-3594.86", line)
+
+    def test_the_block_above_each_rule_adds_up_to_the_number_the_rule_carries(self) -> None:
+        """The property a reader actually performs, and the one that was absent.
+
+        A rule invites addition: everything above it is claimed to total to the
+        line below it. While the open cost basis sat among the four terms, the
+        five lines above the first rule came to -11422.02 at the 2026-09-12 cut
+        while the rule carried -7827.16 -- wrong by exactly the basis, which is
+        as-of the store's watermark and not a term of a window-scoped sum.
+        Every other render test passed through that, because each one asks
+        about one line.
+
+        **Which lines the block holds is read off the RENDER, never from a list
+        here.** A first version of this test summed a tuple of field names and
+        so could not see a fifth line appear above the rule: it kept adding the
+        four it already believed in and stayed green under exactly the defect
+        it was written for.
+
+        Run at the cut rather than the full span: the open basis is -3594.86 at
+        both, but at the full span the residual carries that same number, so a
+        renderer that put the basis back among the terms would be off by a
+        value the block also legitimately contains."""
+        lines = [
+            line for line in self.totals(until="2026-09-12").stdout.splitlines() if line.strip()
+        ]
+        rules = [index for index, line in enumerate(lines) if set(line) in ({"-"}, {"="})]
+        self.assertEqual(
+            len(rules), 2, f"expected two rules, found {len(rules)}:\n" + "\n".join(lines)
+        )
+
+        start = 0
+        for rule in rules:
+            carried = lines[rule + 1]
+            label = next(one for one in _MONEY_LABELS if carried.startswith(one))
+            with self.subTest(rule=label):
+                above = [line for line in lines[start:rule] if _is_money_line(line)]
+                self.assertTrue(above, "a rule with nothing above it totals nothing")
+                total = sum(_money_in(line) for line in above)
+                self.assertAlmostEqual(
+                    total,
+                    _money_in(carried),
+                    places=2,
+                    msg=f"the {len(above)} line(s) above the rule do not add up to {label!r}",
+                )
+            start = rule + 1
+
+    def test_no_line_the_report_states_but_does_not_add_sits_above_a_rule(self) -> None:
+        """The structural half of the test above, so the two cannot drift.
+
+        The arithmetic check would also pass if a stated line were moved above
+        a rule and silently added into the total. This one says where the
+        stated lines may appear: below the last rule, which is the sum.
+
+        The floor is not decoration: without it, emptying
+        ``_TOTALS_STATED_LINES`` makes the loop body run zero times and the
+        test pass on a render that moved the line back among the terms -- the
+        true-and-empty shape."""
+        self.assertTrue(_STATED_LINES, "the report states at least one line it does not add")
+        sum_at = _line_index(self.lines, _CASH_BOOK_SUM_LABEL)
+
+        for field, label in _STATED_LINES:
+            with self.subTest(stated=field):
+                self.assertGreater(_line_index(self.lines, label), sum_at)
 
     def test_the_balance_line_says_it_agrees_and_that_it_cannot_see_a_restatement(self) -> None:
         """**Mutation it catches:** shipping the cumulative check without its
