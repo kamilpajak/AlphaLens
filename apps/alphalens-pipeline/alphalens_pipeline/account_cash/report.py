@@ -49,6 +49,13 @@ beside a broken identity, which is the one thing they exist to prevent. The
 episode partition -- summed + excluded == episodes -- is held by construction
 instead, because :func:`_exclusions_of` stamps each episode exactly once.
 
+The bucket identity is arithmetic, so it needs a number on both sides: when
+neither side has one -- no account currency stated anywhere, or two of them --
+it is unevaluable rather than broken, and the report publishes the named
+absence on that line instead of a total (see :func:`_agree`). A lost row is
+still caught there by the fourth partition, which compares COUNTS and reads no
+amount at all.
+
 The one relation NOT checked here is ``subtotal + deposits ==
 cash_book_sum_acct``: the residual is DEFINED as the cash book sum minus the
 five named lines, so that equation is algebraically guaranteed and asserting
@@ -540,8 +547,18 @@ def _account_currency(events: Sequence[CashEvent], latest: store.BalanceAt | Non
     no booking rows in it still names the account's currency -- which is what
     :func:`~.buckets.classify_buckets` says is the caller's job, since it can
     only read what it was handed. The balance snapshot is the fallback for an
-    empty store, and the two disagreeing answers ``None``, which makes every
-    sum refuse with ``currency_mixed`` on its own rather than picking one.
+    empty store.
+
+    **Two disagreeing rows answer ``None``, and so does no row at all.** The
+    consequence is that no unit is substituted anywhere, so each line refuses
+    on its own terms rather than borrowing one: ``currency_mixed`` where the
+    disagreeing rows actually meet, ``account_amount_not_reported`` or
+    ``currency_not_stated`` where a unit-less operand reaches a sum, and a
+    unit-less ``0.00`` where there is nothing to add. A line whose own rows
+    are all in one currency still states it and still carries a number -- a
+    second currency on one booking row says nothing about the trades rows --
+    which is why this is not a report-wide refusal. Measured 2026-10-26 on the
+    real capture with one row restated to ``EUR``.
     """
     stated = {event.account_currency for event in events if event.account_currency is not None}
     if len(stated) == 1:
@@ -583,13 +600,32 @@ def _resting_on(amount: AcctAmount, rows: int) -> AcctAmount:
 def _agree(left: AcctAmount, right: AcctAmount) -> bool:
     """True when two money records say the same thing.
 
-    Compared on the null reason and the VALUE, not on the currency: an empty
-    bucket publishes a unit-less zero by design (``acct_sum`` has nothing to
-    read a currency from), and a currency disagreement already refuses on its
-    own with ``currency_mixed`` on both sides.
+    Compared on the VALUE, not on the currency: an empty bucket publishes a
+    unit-less zero by design (``acct_sum`` has nothing to read a currency
+    from), and a currency disagreement already refuses on its own with
+    ``currency_mixed`` on both sides.
+
+    **A null on BOTH sides agrees, whatever the two reasons are.** There is no
+    arithmetic to check when neither side carries a number, and the report
+    then publishes the named absence on that line rather than a total -- so
+    there is no figure for this identity to have protected. Requiring the same
+    REASON was the stricter form and it refused two real inputs: a store with
+    no stated account currency at all (the per-bucket sum nulls with
+    ``account_amount_not_reported`` while the rows' own total is a plain
+    ``0.00``), and a store holding two account currencies (``currency_mixed``
+    on the rows against ``account_amount_not_reported`` on the buckets, which
+    is the degradation path :func:`_account_currency` documents). Both ended
+    in an ``AssertionError`` on the money path.
+    A null on exactly ONE side still refuses, because that asymmetry IS a
+    signal: drop the one row whose amount the vendor did not report and the
+    bucket side becomes a number while the rows' total stays a null.
+
+    What keeps a lost row caught while both sides are nulls is the fourth
+    partition, ``bucket row count``: it compares COUNTS and reads no amount at
+    all.
     """
     if (left.null_reason is not None) or (right.null_reason is not None):
-        return left.null_reason == right.null_reason
+        return (left.null_reason is not None) and (right.null_reason is not None)
     assert left.value is not None and right.value is not None  # the dataclass invariant
     return abs(left.value - right.value) <= _IDENTITY_EPSILON_ACCT
 
@@ -620,10 +656,24 @@ def _check_identities(
         rows=bucket_fold.rows,
         currency=currency,
     )
+    # The rows' own total goes through the SAME summer and the SAME unit
+    # substitution as the buckets it must agree with. Comparing the raw
+    # ``all_rows`` against a re-summed bucket side made the identity's two
+    # sides two different computations, which is this repo's own named defect
+    # (#1227): with no account currency anywhere the bucket side nulled and
+    # ``all_rows`` was a plain ``0.00``, and the identity refused a store it
+    # should have answered for. The value is untouched by the substitution --
+    # only a unit-less number is given a unit -- so a doctored ``all_rows``
+    # still raises.
+    all_rows = acct_sum(
+        _as_pairs([bucket_fold.all_rows], currency=currency),
+        rows=bucket_fold.rows,
+        currency=currency,
+    )
     _hold(
         "bucket",
-        _agree(summed_buckets, bucket_fold.all_rows),
-        f"buckets {summed_buckets.rendered} against rows {bucket_fold.all_rows.rendered}",
+        _agree(summed_buckets, all_rows),
+        f"buckets {summed_buckets.rendered} against rows {all_rows.rendered}",
     )
     _hold(
         "fill coverage",

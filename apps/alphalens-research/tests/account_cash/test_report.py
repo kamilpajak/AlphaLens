@@ -30,13 +30,14 @@ from alphalens_pipeline.account_cash import (
     balance_check,
     buckets,
     episodes,
+    money,
     paths,
     report,
     sweep,
 )
 from alphalens_pipeline.account_cash.codec import SweepRecord
 from alphalens_pipeline.account_cash.money import BALANCE_TOLERANCE_ACCT
-from alphalens_pipeline.brokers.account_cash import AccountCashRead
+from alphalens_pipeline.brokers.account_cash import AccountCashRead, BalanceSnapshot
 from alphalens_pipeline.brokers.fill_history import ReadWindow
 
 from tests.account_cash.cashbook_fixture import (
@@ -659,6 +660,33 @@ class TheIdentitiesAreCheckedAndNotDescribed(IsolatedHomeTestCase):
 
         self._with_all_rows_shifted(1e-10)
 
+    def test_a_null_on_only_one_side_of_the_bucket_identity_still_refuses(self) -> None:
+        """The bound on the relaxation that lets two nulls agree.
+
+        A null on BOTH sides is unevaluable and holds, because no total is
+        published on that line either. A null on exactly ONE side is a signal
+        and must still raise: drop the one row whose amount the vendor did not
+        report and the per-bucket side becomes a number while the rows' own
+        total stays a named absence.
+
+        **Mutation it catches:** relaxing ``_agree`` all the way to "a null
+        anywhere holds", which would let that dropped row through.
+        """
+        real = buckets.classify_buckets
+
+        def doctored(rows: object) -> buckets.BucketFold:
+            fold = real(rows)  # type: ignore[arg-type]
+            absent = money.acct_null(
+                money.NULL_ACCT_AMOUNT_NOT_REPORTED, "PLN", rows=fold.all_rows.rows
+            )
+            return replace(fold, all_rows=absent)
+
+        with mock.patch.object(buckets, "classify_buckets", doctored):
+            with self.assertRaises(report.CashBookIdentityError) as ctx:
+                report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=_SWEPT_UNTIL)
+
+        self.assertIn("bucket", str(ctx.exception))
+
     def test_a_broken_coverage_partition_refuses_too(self) -> None:
         """The second positive control: one identity raising does not show
         that the other one is wired at all."""
@@ -968,6 +996,140 @@ class ThereIsNoOpenEpisodeAtAll(IsolatedHomeTestCase):
             with self.subTest(line=name):
                 self.assertIsNone(line.null_reason)
                 self.assertEqual(line.currency, "PLN")
+
+
+#: A balance body the vendor answered without ``Currency``. Every other field
+#: is present, so this is not a skipped read -- it is a body whose unit nobody
+#: stated, which is the one input that leaves the report with no currency to
+#: name anywhere.
+NO_CURRENCY_BALANCE = BalanceSnapshot.from_vendor_body(
+    {"CashBalance": 0.0, "CalculationReliability": "Ok"},
+    asof=_SWEPT_AT,
+)
+
+
+class AStoreThatNamesNoAccountCurrencyStillAnswers(IsolatedHomeTestCase):
+    """Zero booking rows and a balance body with no ``Currency``.
+
+    Reachable on LIVE with ``rows_in_store == 0``: a first sweep over a quiet
+    window, or a new account, whose balances body omits the field. Then
+    ``_account_currency`` finds no unit anywhere, ``_as_pairs`` substitutes
+    ``None``, and the per-bucket sum nulls with
+    ``account_amount_not_reported`` while the rows' own total is a plain
+    ``0.00``.
+
+    **What it did before:** the two sides of the bucket identity were compared
+    across a null and a number, and ``build_totals`` raised
+    ``CashBookIdentityError`` -- an ``AssertionError`` on the money path
+    instead of a published zero or a named refusal. The same shape was fixed
+    for an empty WINDOW in 73cd4f5a; the empty STORE survived it.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        _seed(
+            read=_read(
+                events=(),
+                trades=(),
+                balance=NO_CURRENCY_BALANCE,
+                events_window=ReadWindow(_SWEPT_SINCE.isoformat(), _SWEPT_UNTIL.isoformat(), 0),
+                trades_window=ReadWindow(_SWEPT_SINCE.isoformat(), _SWEPT_UNTIL.isoformat(), 0),
+            )
+        )
+        self.totals = report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=_SWEPT_UNTIL)
+
+    def test_the_premise_is_that_no_row_and_no_body_states_a_currency(self) -> None:
+        self.assertIsNone(NO_CURRENCY_BALANCE.currency)
+        self.assertEqual(self.totals.basis.rows_in_store, 0)
+        self.assertIsNone(self.totals.basis.currency)
+
+    def test_it_publishes_a_record_rather_than_raising_on_its_own_identity(self) -> None:
+        """The headline. A partition that cannot hold over the input it was
+        handed is a defect in the partition."""
+        self.assertEqual(self.totals.basis.rows_read, 0)
+        self.assertEqual(self.totals.basis.episodes, 0)
+
+    def test_no_line_states_a_currency_nobody_reported(self) -> None:
+        """The other half, and the reason this is not just "do not crash": a
+        figure wearing a unit no row stated is memo section 5(d)'s own named
+        defect. Every line is a named absence or a unit-less zero."""
+        for name, line in sorted(self.totals.lines().items()):
+            with self.subTest(line=name):
+                self.assertIsNone(line.currency)
+                if line.null_reason is None:
+                    self.assertEqual(line.value, 0.0)
+
+    def test_the_whole_record_still_renders_as_one_strict_json_value(self) -> None:
+        body = json.loads(json.dumps(self.totals.to_jsonable(), allow_nan=False, sort_keys=True))
+
+        self.assertIsNone(body["basis"]["currency"])
+        self.assertEqual(body["env"], _LIVE)
+
+
+class TwoAccountCurrenciesInOneStoreStillAnswer(IsolatedHomeTestCase):
+    """One booking row restated into ``EUR`` -- a vendor anomaly or a bug.
+
+    ``_account_currency``'s docstring says the two disagreeing answer ``None``
+    so that every sum refuses on its own rather than picking one. It did not:
+    the two sides of the bucket identity nulled with DIFFERENT reasons
+    (``account_amount_not_reported`` against ``currency_mixed``) and
+    ``build_totals`` raised. This is the documented degradation path for a
+    vendor anomaly, so it has to end in a published refusal per line.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        _seed(
+            read=_read(
+                events=(replace(BOOKINGS[0], account_currency="EUR"), *BOOKINGS[1:]),
+            )
+        )
+        self.totals = report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=_SWEPT_UNTIL)
+
+    def test_the_premise_is_that_the_store_holds_two_account_currencies(self) -> None:
+        self.assertIsNone(self.totals.basis.currency)
+        self.assertEqual(self.totals.basis.rows_in_store, ALL_ROWS)
+        self.assertEqual(self.totals.basis.rows_read, ALL_ROWS)
+
+    def test_the_lines_that_would_have_added_two_units_refuse_by_name(self) -> None:
+        """No total on those lines, and no traceback either. ``BOOKINGS[0]`` is
+        a ``Cash Amount`` row of +2 000.00, so the deposits bucket is where
+        the two currencies meet, and the three lines computed from it or from
+        every row refuse with a registered reason."""
+        for name in ("deposits_acct", "cash_book_sum_acct", "residual_acct", "subtotal_acct"):
+            with self.subTest(line=name):
+                line = self.totals.lines()[name]
+                self.assertIsNotNone(line.null_reason)
+                self.assertIn(line.null_reason, money.NULL_REASONS)
+
+    def test_the_lines_summed_from_one_currency_keep_answering_in_it(self) -> None:
+        """The other half, and why this is not a report-wide refusal: a second
+        currency on one booking row says nothing about the trades rows, which
+        are PLN on all 41. Those lines state their own unit on the number
+        (memo section 5(d)) even though no single ACCOUNT currency could be
+        resolved for the basis."""
+        for name, value in (
+            ("net_closed_acct", NET_CLOSED_PLN),
+            ("cost_basis_open_acct", COST_BASIS_OPEN_PLN),
+            ("income_acct", INCOME_PLN),
+        ):
+            with self.subTest(line=name):
+                line = self.totals.lines()[name]
+                self.assertEqual(line.currency, "PLN")
+                self.assertEqual(line.value, value)
+
+    def test_the_cash_book_sum_says_the_two_currencies_are_what_stopped_it(self) -> None:
+        """``currency_mixed`` is the informative word on the line summed over
+        the rows themselves: a second currency means a vendor change or a bug,
+        never a convertible total."""
+        self.assertEqual(self.totals.cash_book_sum_acct.null_reason, money.NULL_CURRENCY_MIXED)
+
+    def test_the_balance_check_is_not_checkable_rather_than_wrong(self) -> None:
+        check = next(
+            one for one in self.totals.balance_checks if one.kind == balance_check.CHECK_CUMULATIVE
+        )
+
+        self.assertEqual(check.verdict, balance_check.VERDICT_NOT_CHECKABLE)
 
 
 class TheToleranceIsAGroszInTheAccountCurrency(IsolatedHomeTestCase):
