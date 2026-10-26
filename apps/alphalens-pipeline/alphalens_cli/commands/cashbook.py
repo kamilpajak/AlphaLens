@@ -121,7 +121,9 @@ _TOTALS_SINCE_OPTION = typer.Option(
 _TOTALS_UNTIL_OPTION = typer.Option(
     ...,
     "--until",
-    help="Last booking date the report covers, YYYY-MM-DD (inclusive).",
+    help="Last booking date the report covers, YYYY-MM-DD (inclusive). Later than the "
+    "last swept day is answered, with the shortfall on the coverage line; a window no "
+    "sweep covers a single day of is refused, never answered as zeros.",
 )
 
 _DRY_RUN_OPTION = typer.Option(
@@ -812,14 +814,19 @@ def totals_command(
     other accounts' canned rows, so the store is empty by construction and a
     sum over it would publish 0.00 for an account nobody read),
     `nothing_swept` (no sweep has ever covered any window, so there is no
-    watermark to answer against) and `before_first_sweep` (`--since` is
+    watermark to answer against), `before_first_sweep` (`--since` is
     earlier than the earliest window any sweep asked for; the store holds rows
     whose own entries may predate it, so a smaller number would read as a
-    complete answer).
+    complete answer) and `window_never_swept` (no sweep asked about a single
+    day of this window -- it lies past every asked window, or inside a hole
+    between two of them).
 
     An `--until` beyond the swept range is NOT refused: the store can be asked
     about a day nobody swept and answers that it holds nothing for it, which
-    is honest because the coverage block is published beside every number.
+    is honest because the coverage block is published beside every number. A
+    window with no day in common with any sweep is the case that does refuse:
+    nothing in it was read, so there is nothing for the coverage block to state
+    a shortfall against.
     """
     from alphalens_pipeline.account_cash import report
     from alphalens_pipeline.brokers.automanager import state_paths
@@ -854,7 +861,12 @@ def totals_command(
         raise _fail_with(
             "cashbook_totals_refused",
             str(exc),
-            details={"reason": exc.reason, "env": exc.env},
+            # The record's own `details` ride along: a refusal leaves stdout
+            # EMPTY, so the watermark a recovery needs has to be on the failure
+            # object. `reason` and `env` lead, and nothing in `exc.details`
+            # may rename them -- they are the two keys the published table
+            # names for this code.
+            details={"reason": exc.reason, "env": exc.env, **exc.details},
         ) from exc
 
     body = _envelope(_TOTALS_SCHEMA, resolved_env, **_totals_body(totals))

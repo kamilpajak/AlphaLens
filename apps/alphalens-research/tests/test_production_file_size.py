@@ -170,7 +170,16 @@ BASELINE: dict[str, int] = {
     # prose label said "the lines above" while one of the terms -- the deposits
     # -- is rendered below the line, so the label was wrong by exactly
     # 24 000.00 PLN and no arithmetic test could see it.
-    "apps/alphalens-pipeline/alphalens_pipeline/account_cash/report.py": 1181,
+    #
+    # Raised again, from 1181 to 1252, for the second of those findings: a
+    # window with no day in common with any sweep now refuses
+    # (`window_never_swept`) instead of answering 0.00 over 0 rows beside a
+    # reconciling balance check. 71 lines, 52 of them comment, and the
+    # expensive half to explain is why the overlap is measured against every
+    # ASKED window rather than against `swept_through` -- the watermark stops
+    # at the first contiguous run, so the two readings disagree on a store with
+    # a hole, which is where one of them refuses days the store holds rows for.
+    "apps/alphalens-pipeline/alphalens_pipeline/account_cash/report.py": 1252,
     # Raised again, by 8, to say that the raise page's ticker fallback is
     # unreachable by construction. It sits beside the stop-PLACED page's
     # fallback, which looks identical and IS reachable and tested, so without

@@ -1431,6 +1431,88 @@ class AWindowTheStoreCannotAnswerIsRefused(IsolatedHomeTestCase):
         self.assertEqual(sorted(report.TOTALS_REFUSALS), sorted(set(report.TOTALS_REFUSALS)))
         self.assertIn(report.REFUSED_BEFORE_FIRST_SWEEP, report.TOTALS_REFUSALS)
 
+    def test_a_window_no_sweep_covered_a_day_of_refuses_rather_than_zeros(self) -> None:
+        """The right edge, which had no guard at all: the refusal only ever
+        looked at ``since`` against ``history_begins``.
+
+        **Mutation it catches:** answering a window the store never read. On
+        the real capture a 2026-11-01..2026-11-30 request came back exit 0
+        with "cash book sum 0.00 PLN 0 rows" and "balance cumulative
+        reconciles" -- the "0.00 for an account nobody read" shape the SIM
+        refusal exists to prevent, published as a confident answer with the
+        coverage block the only thing that disagreed with it.
+        """
+        _seed()
+
+        with self.assertRaises(report.CashBookTotalsRefusedError) as ctx:
+            report.build_totals(env=_LIVE, since=dt.date(2026, 11, 1), until=dt.date(2026, 11, 30))
+
+        self.assertEqual(ctx.exception.reason, report.REFUSED_WINDOW_NEVER_SWEPT)
+        self.assertEqual(ctx.exception.env, _LIVE)
+        self.assertEqual(
+            ctx.exception.details,
+            {
+                "history_begins": _SWEPT_SINCE.isoformat(),
+                "swept_through": _SWEPT_UNTIL.isoformat(),
+            },
+        )
+
+    def test_an_until_beyond_the_swept_range_is_still_answered(self) -> None:
+        """The distinction the docstring draws, and the negative control for
+        the test above: a window that OVERLAPS the swept range is answered,
+        however far past it the ``until`` reaches, because the coverage block
+        states the shortfall beside every number.
+
+        **Mutation it catches:** refusing on ``until > swept_through``, which
+        would refuse this window on its last covered day.
+        """
+        _seed()
+
+        totals = report.build_totals(env=_LIVE, since=_SWEPT_UNTIL, until=dt.date(2026, 11, 30))
+
+        self.assertEqual(totals.basis.window_until, "2026-11-30")
+        self.assertEqual(totals.coverage.swept_through, _SWEPT_UNTIL.isoformat())
+
+    def test_overlap_is_against_every_asked_window_and_not_the_watermark(self) -> None:
+        """Two sweeps with a hole: ``swept_through`` stops at the end of the
+        FIRST run, so a window inside the SECOND run is past the watermark and
+        was nonetheless read.
+
+        **Mutation it catches:** comparing ``since`` against
+        ``swept_through``, which refuses days the store holds rows for. The two
+        readings cannot be told apart on a store with one sweep, which is every
+        other test here.
+        """
+        _seed(since=_SWEPT_SINCE, until=GAP_FIRST_UNTIL)
+        _seed(
+            since=GAP_SECOND_SINCE,
+            until=GAP_SECOND_UNTIL,
+            now=_SWEPT_AT + dt.timedelta(days=1),
+        )
+
+        totals = report.build_totals(
+            env=_LIVE, since=dt.date(2026, 9, 2), until=dt.date(2026, 9, 5)
+        )
+
+        self.assertEqual(totals.coverage.swept_through, GAP_FIRST_UNTIL.isoformat())
+        self.assertEqual(totals.basis.window_since, "2026-09-02")
+
+    def test_a_window_wholly_inside_a_gap_is_refused_too(self) -> None:
+        """The other half of the same rule: nobody read those days either, and
+        a hole in the middle of the coverage is no more answerable than one
+        past its end."""
+        _seed(since=_SWEPT_SINCE, until=GAP_FIRST_UNTIL)
+        _seed(
+            since=GAP_SECOND_SINCE,
+            until=GAP_SECOND_UNTIL,
+            now=_SWEPT_AT + dt.timedelta(days=1),
+        )
+
+        with self.assertRaises(report.CashBookTotalsRefusedError) as ctx:
+            report.build_totals(env=_LIVE, since=dt.date(2026, 8, 15), until=dt.date(2026, 8, 20))
+
+        self.assertEqual(ctx.exception.reason, report.REFUSED_WINDOW_NEVER_SWEPT)
+
     def test_the_day_the_history_begins_is_answerable(self) -> None:
         """The negative control: a refusal that refused one day too many would
         satisfy the test above."""

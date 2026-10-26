@@ -142,16 +142,22 @@ so one of them refuses the READ and the other refuses the WRITE.
 
 The same shape once more, for the READ side of that store: one code for the
 mode "this window cannot be answered", with a closed `details.reason` naming
-which rule refused it. All three refuse BEFORE any number is summed, and that
+which rule refused it. All four refuse BEFORE any number is summed, and that
 is the point — a window the store cannot speak for must not come back as a
 smaller total, because a smaller total reads as a complete answer. `details.env`
 names the instance on every one of them.
+
+Two of the four also publish the watermarks they measured the window against,
+and those keys are part of the contract for this code: a refusal leaves stdout
+EMPTY, so a recovery an operator is told to follow has to arrive on the failure
+object itself.
 
 | code | `details.reason` | what refused |
 |---|---|---|
 | `cashbook_totals_refused` | `sim_reports_unusable` | the instance is not LIVE. The store refuses SIM writes over every appender, so a SIM store is empty by construction and a sum over it would publish `0.00` for an account nobody ever read |
 | | `nothing_swept` | no sweep has ever covered any window on this instance, so there is no watermark to compare `--since` against and no row the store can vouch for |
-| | `before_first_sweep` | `--since` is earlier than the earliest window any sweep asked for. The store holds rows whose own episodes may have opened before that day, so the answer would be both smaller and silently incomplete. `alphalens cashbook totals --format json` publishes `coverage.history_begins`, which is the earliest `--since` that is answerable |
+| | `before_first_sweep` | `--since` is earlier than the earliest window any sweep asked for. The store holds rows whose own episodes may have opened before that day, so the answer would be both smaller and silently incomplete. `details.history_begins` is the earliest `--since` that is answerable |
+| | `window_never_swept` | no sweep asked about a single day of this window: it lies past every asked window, or inside a hole between two of them. `--until` beyond the swept range is NOT this case and is answered, because part of the window WAS read and the coverage block states the shortfall; with no day in common there is nothing to state a shortfall against, and the answer would be `0.00` over 0 rows beside a reconciling balance check. `details.history_begins` and `details.swept_through` bound a window that is answerable |
 
 #### The exit declaration, and what it may say
 

@@ -1266,6 +1266,35 @@ class AWindowTheStoreCannotAnswerIsAFailureAndNotASmallerNumber(_CashbookTotalsC
         self.assertEqual(failure["code"], "cashbook_totals_refused")
         self.assertEqual(failure["details"], {"reason": "nothing_swept", "env": _LIVE})
 
+    def test_a_window_past_the_watermark_refuses_rather_than_printing_zeros(self) -> None:
+        """The answer that used to come back for a month nobody read: exit 0,
+        ``cash book sum 0.00 PLN 0 rows``, ``trading and income subtotal
+        0.00`` and ``balance cumulative reconciles``. The coverage block did
+        carry the watermark honestly, two blocks under a headline that said
+        the account was flat.
+        """
+        self.seed()
+
+        result = self.totals("--format", "json", since="2026-11-01", until="2026-11-30")
+
+        self.assertEqual(result.exit_code, _EXIT_FAILED)
+        self.assertEqual(result.stdout, "")
+        failure = _failure_from(result)
+        self.assertEqual(failure["code"], "cashbook_totals_refused")
+        self.assertEqual(failure["details"]["reason"], "window_never_swept")
+        self.assertEqual(failure["details"]["env"], _LIVE)
+
+    def test_a_window_that_overlaps_the_swept_range_is_still_answered(self) -> None:
+        """The negative control: the refusal is about a window NO sweep
+        covered a day of, not about an ``until`` reaching past the watermark --
+        which stays answered, with the shortfall on the coverage line."""
+        self.seed()
+
+        result = self.totals(since=_SWEPT_UNTIL, until="2026-11-30")
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("cash book sum", result.stdout)
+
     def test_a_refusal_renders_as_prose_when_the_caller_asked_for_prose(self) -> None:
         result = self.totals()
 
@@ -1274,8 +1303,8 @@ class AWindowTheStoreCannotAnswerIsAFailureAndNotASmallerNumber(_CashbookTotalsC
         self.assertIn("nothing_swept", result.stderr)
 
     def test_the_published_reasons_are_the_reports_own_vocabulary(self) -> None:
-        """**Mutation it catches:** a fourth reason added to the report and
-        left unpublished, or one of these three renamed on one side only. The
+        """**Mutation it catches:** a fifth reason added to the report and
+        left unpublished, or one of these four renamed on one side only. The
         table in the contract README is checked against this same tuple by
         ``tests/brokers/test_broker_failure_reasons_published.py``; this says
         the vocabulary is closed and spells it out, so neither side can be
@@ -1283,7 +1312,12 @@ class AWindowTheStoreCannotAnswerIsAFailureAndNotASmallerNumber(_CashbookTotalsC
         """
         self.assertEqual(
             report.TOTALS_REFUSALS,
-            ("sim_reports_unusable", "before_first_sweep", "nothing_swept"),
+            (
+                "sim_reports_unusable",
+                "before_first_sweep",
+                "window_never_swept",
+                "nothing_swept",
+            ),
         )
 
 

@@ -133,7 +133,7 @@ class TheReasonTableAndTheCodeAgree(unittest.TestCase):
         published = published_reasons(_TOTALS_SECTION_START)
 
         self.assertEqual(set(published), {"cashbook_totals_refused"})
-        self.assertEqual(len(published["cashbook_totals_refused"]), 3)
+        self.assertEqual(len(published["cashbook_totals_refused"]), 4)
 
     def test_every_totals_reason_is_published_and_nothing_else_is(self) -> None:
         self.assertEqual(
