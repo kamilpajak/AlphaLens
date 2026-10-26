@@ -665,24 +665,32 @@ def _cost_basis_open(found: Sequence[episodes.CashEpisode], currency: str | None
 # --- The answer ----------------------------------------------------------------
 
 
-def _refuse_unanswerable_window(env: str, sweeps: Sequence[SweepRecord], since: dt.date) -> str:
-    """Refuse before any sum, in this order, or return ``history_begins``.
+def _refuse_a_non_live_environment(env: str) -> None:
+    """``sim_reports_unusable``, BEFORE the first read.
 
-    ``env`` first, because the store's READERS do not refuse on SIM -- only
-    the appenders do -- and ``_iter_payloads`` returns silently on a missing
-    path, so on SIM a naive sum answers ``0.0`` for an account whose report
-    endpoints serve other accounts' rows. Then "nothing swept", because a
-    store with no sweep record cannot say what window it covers. Then the
-    window itself.
+    The store's READERS do not refuse on SIM -- only the appenders do -- and
+    ``_iter_payloads`` returns silently on a missing path, so a sum over a SIM
+    store answers ``0.0`` for an account whose report endpoints serve OTHER
+    accounts' rows. Refused ahead of every read rather than merely ahead of
+    every sum, so the order in the code says the same thing this docstring
+    does: nothing about SIM is read at all.
     """
     if paths.validate_environment(env) != paths.ENV_LIVE:
         raise CashBookTotalsRefusedError(REFUSED_SIM_REPORTS_UNUSABLE, env)
+
+
+def _refuse_an_unanswerable_window(env: str, sweeps: Sequence[SweepRecord], since: dt.date) -> None:
+    """``nothing_swept``, then ``before_first_sweep``. Both before any sum.
+
+    "Nothing swept" comes first because a store with no sweep record cannot
+    say what window it covers, so there is no watermark to compare ``since``
+    against.
+    """
     begins = history_begins(sweeps)
     if begins is None:
         raise CashBookTotalsRefusedError(REFUSED_NOTHING_SWEPT, env)
     if since < dt.date.fromisoformat(begins):
         raise CashBookTotalsRefusedError(REFUSED_BEFORE_FIRST_SWEEP, env)
-    return begins
 
 
 def build_totals(*, env: str, since: dt.date, until: dt.date) -> CashBookTotals:
@@ -706,9 +714,9 @@ def build_totals(*, env: str, since: dt.date, until: dt.date) -> CashBookTotals:
     """
     if since > until:
         raise ValueError(f"a cash-book window must not end before it starts ({since} .. {until})")
-    paths.validate_environment(env)
+    _refuse_a_non_live_environment(env)
     sweeps = store.read_sweeps(env=env)
-    _refuse_unanswerable_window(env, sweeps, since)
+    _refuse_an_unanswerable_window(env, sweeps, since)
 
     coverage = coverage_of(sweeps)
     events_fold = store.read_cash_events(env=env)
