@@ -601,24 +601,58 @@ class AWindowTheStoreCannotAnswerIsRefused(IsolatedHomeTestCase):
         self.assertIn("prod", str(ctx.exception))
 
 
+#: Measured: the capture's trade rows with the three still-open instruments
+#: removed. The BOOKING rows are untouched, so their share legs and fees are
+#: still in the cash book with no episode to account for them -- which is
+#: exactly what the residual line is for.
+FLAT_RESIDUAL_PLN = -3594.86
+FLAT_SUBTOTAL_PLN = -3261.32
+
+
 class ThereIsNoOpenEpisodeAtAll(IsolatedHomeTestCase):
-    def test_the_cost_basis_line_is_a_named_absence_and_never_a_zero(self) -> None:
-        """``never_opened`` is the reason ``money.py`` declares for exactly
-        this line. A ``0.00`` here reads as "nothing at risk", which is the
-        same sentence as "no position was ever opened" and a different fact.
-        """
-        closed_only = tuple(row for row in TRADES if row.instrument_symbol != "RHI:xnys")
+    """An account that is flat is the ORDINARY state between positions, not an
+    edge case, so every line below it has to stay readable."""
+
+    def setUp(self) -> None:
+        super().setUp()
         closed_only = tuple(
-            row for row in closed_only if row.instrument_symbol not in {"TNGX:xnas", "NESR:xnas"}
+            row
+            for row in TRADES
+            if row.instrument_symbol not in {"RHI:xnys", "TNGX:xnas", "NESR:xnas"}
         )
         _seed(read=_read(trades=closed_only))
+        self.totals = report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=_SWEPT_UNTIL)
 
-        totals = report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=_SWEPT_UNTIL)
+    def test_the_cost_basis_line_is_a_zero_with_a_row_count_of_zero(self) -> None:
+        """Memo section 5(a)'s own pattern, the one ``unclassified`` follows:
+        the line is printed even at zero, and the row count beside the 0.00 is
+        what says no episode is open -- so a non-zero one later reads as a
+        CHANGED number rather than as a new row appearing.
 
-        self.assertIsNone(totals.cost_basis_open_acct.value)
-        self.assertEqual(totals.cost_basis_open_acct.null_reason, "never_opened")
-        self.assertEqual(totals.cost_basis_open_acct.rows, 0)
-        self.assertEqual(totals.basis.exclusions[episodes.STATE_OPEN], 0)
+        **Mutation it catches:** publishing ``money.NULL_NEVER_OPENED`` here.
+        A named absence is the more informative WORD, and it nulls the two
+        lines below through the all-or-nothing rule, which makes a whole
+        report unreadable in the ordinary case where nothing is at risk.
+        Measured before the fix: ``residual: never_opened`` and
+        ``subtotal: account_amount_not_reported``.
+        """
+        self.assertEqual(self.totals.cost_basis_open_acct.value, 0.0)
+        self.assertIsNone(self.totals.cost_basis_open_acct.null_reason)
+        self.assertEqual(self.totals.cost_basis_open_acct.rows, 0)
+        self.assertEqual(self.totals.cost_basis_open_acct.currency, "PLN")
+        self.assertEqual(self.totals.basis.exclusions[episodes.STATE_OPEN], 0)
+
+    def test_the_lines_below_it_still_carry_numbers(self) -> None:
+        """The reason the line above is a zero. Both literals are measured:
+        the booking rows still hold the share legs and fees of the three
+        positions whose trade rows are gone, so the residual is exactly the
+        -3 594.86 no episode accounts for."""
+        self.assertEqual(self.totals.residual_acct.value, FLAT_RESIDUAL_PLN)
+        self.assertEqual(self.totals.subtotal_acct.value, FLAT_SUBTOTAL_PLN)
+        for name, line in sorted(self.totals.lines().items()):
+            with self.subTest(line=name):
+                self.assertIsNone(line.null_reason)
+                self.assertEqual(line.currency, "PLN")
 
 
 class TheToleranceIsAGroszInTheAccountCurrency(IsolatedHomeTestCase):

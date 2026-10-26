@@ -79,10 +79,8 @@ from alphalens_pipeline.account_cash import balance_check, buckets, episodes, pa
 from alphalens_pipeline.account_cash.codec import SweepRecord
 from alphalens_pipeline.account_cash.money import (
     BALANCE_TOLERANCE_ACCT,
-    NULL_NEVER_OPENED,
     AcctAmount,
     acct_difference,
-    acct_null,
     acct_sum,
 )
 from alphalens_pipeline.brokers.account_cash import CashEvent
@@ -633,20 +631,30 @@ def _exclusions_of(
 
 
 def _cost_basis_open(found: Sequence[episodes.CashEpisode], currency: str | None) -> AcctAmount:
-    """The FULL cost of every open episode, or a named absence.
+    """The FULL cost of every open episode, at zero when none is open.
 
     Not window-clipped (amendment W1): the cost of a position that is still
     open is as-of the last day the store can speak for, and a clipped one
     answers -466.98 of the -3 594.86 actually at risk on the real capture at
     ``until=2026-09-12``.
 
-    With no open episode the line is ``never_opened``, never ``0.00``: a zero
-    reads as "nothing at risk", which is the same sentence and a different
-    fact.
+    **With no open episode this is ``0.00`` over 0 episodes, and NOT
+    ``money.NULL_NEVER_OPENED``**, although that constant names this exact
+    line. The reason is measured: a named absence propagates through the
+    all-or-nothing rule into the residual and the subtotal, so an account that
+    is FLAT -- the ordinary state between positions -- published
+    ``residual: never_opened`` and ``subtotal: account_amount_not_reported``
+    and a report nobody could read. The row count carries the fact instead,
+    which is memo section 5(a)'s own pattern for ``unclassified``: the line is
+    printed at zero, and ``0.00 / 0 episodes`` says no position is open while
+    leaving a non-zero one later readable as a changed number.
+
+    The all-or-nothing rule is untouched by this, because it is about an
+    amount the VENDOR did not report. Zero open episodes is not an unreported
+    number; it is a measured empty set, and ``acct_sum`` over an empty
+    sequence is the zero this returns.
     """
     still_open = [episode for episode in found if episode.state == episodes.STATE_OPEN]
-    if not still_open:
-        return acct_null(NULL_NEVER_OPENED, currency, rows=0)
     return acct_sum(
         _as_pairs([episode.cost_basis_acct for episode in still_open]),
         rows=len(still_open),
