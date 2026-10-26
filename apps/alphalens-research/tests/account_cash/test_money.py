@@ -610,6 +610,18 @@ class TheFxDisclosureIsNeverSummedIntoAnyTotal(unittest.TestCase):
     ``(amount, currency)`` pair, wherever it is built. The second half is what
     reaches ``episodes.py``, which builds its pairs in the accumulator and in
     the unassigned helper and sums them later from an attribute.
+
+    **The per-module floor is a reach check, not a coverage measure**, and
+    ``report.py`` is the case that shows the difference. Measured 2026-10-26:
+    ``buckets`` reads ``{account_currency, amount_account_currency}``,
+    ``episodes`` and ``balance_check`` read theirs, and ``report`` reads
+    NOTHING with ``calls=6, pairs=0`` -- it sums already-published
+    :class:`AcctAmount` totals, and ``_as_pairs`` puts a bare name in the
+    second slot, which the pair detector does not recognise as a money pair.
+    So ``report.py`` satisfies ``calls + pairs >= 1`` on its call count alone.
+    What shows the guard really reaches it is the injected positive control
+    below, not the floor; a ``pairs >= 1`` floor would not hold for this
+    module at all.
     """
 
     def test_the_fx_disclosure_is_never_summed_into_any_total(self) -> None:
