@@ -179,7 +179,13 @@ BASELINE: dict[str, int] = {
     # ASKED window rather than against `swept_through` -- the watermark stops
     # at the first contiguous run, so the two readings disagree on a store with
     # a hole, which is where one of them refuses days the store holds rows for.
-    "apps/alphalens-pipeline/alphalens_pipeline/account_cash/report.py": 1252,
+    #
+    # Raised again, by 7 to 1259, for the third: the `before_first_sweep`
+    # refusal carries the earliest answerable `--since`. All 7 are comment bar
+    # the two-line raise -- the published recovery told an operator to read
+    # `coverage.history_begins` off a report that refuses, so the note says why
+    # the watermark cannot be anywhere but on the refusal.
+    "apps/alphalens-pipeline/alphalens_pipeline/account_cash/report.py": 1259,
     # Raised again, by 8, to say that the raise page's ticker fallback is
     # unreachable by construction. It sits beside the stop-PLACED page's
     # fallback, which looks identical and IS reachable and tested, so without

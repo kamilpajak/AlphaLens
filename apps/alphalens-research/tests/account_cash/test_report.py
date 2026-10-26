@@ -1431,6 +1431,24 @@ class AWindowTheStoreCannotAnswerIsRefused(IsolatedHomeTestCase):
         self.assertEqual(sorted(report.TOTALS_REFUSALS), sorted(set(report.TOTALS_REFUSALS)))
         self.assertIn(report.REFUSED_BEFORE_FIRST_SWEEP, report.TOTALS_REFUSALS)
 
+    def test_the_refusal_carries_the_earliest_answerable_since(self) -> None:
+        """The watermark rides on the refusal, because nothing else can carry it.
+
+        The published recovery is "ask for the earliest `--since` that is
+        answerable", and a refusal leaves stdout EMPTY -- so running the report
+        to read ``coverage.history_begins`` reproduces this same refusal. The
+        store's own sweeps journal was the only place left to read it from.
+
+        **Mutation it catches:** a refusal that names the rule and not the way
+        out.
+        """
+        _seed()
+
+        with self.assertRaises(report.CashBookTotalsRefusedError) as ctx:
+            report.build_totals(env=_LIVE, since=dt.date(2026, 7, 31), until=_SWEPT_UNTIL)
+
+        self.assertEqual(ctx.exception.details, {"history_begins": _SWEPT_SINCE.isoformat()})
+
     def test_a_window_no_sweep_covered_a_day_of_refuses_rather_than_zeros(self) -> None:
         """The right edge, which had no guard at all: the refusal only ever
         looked at ``since`` against ``history_begins``.

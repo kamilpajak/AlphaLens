@@ -1036,7 +1036,14 @@ def _refuse_an_unanswerable_window(
     if coverage.history_begins is None:
         raise CashBookTotalsRefusedError(REFUSED_NOTHING_SWEPT, env)
     if since < dt.date.fromisoformat(coverage.history_begins):
-        raise CashBookTotalsRefusedError(REFUSED_BEFORE_FIRST_SWEEP, env)
+        # The earliest answerable `--since`, ON the refusal. The published
+        # recovery is to ask for that day, and a refusal publishes nothing on
+        # stdout -- so reading it off `coverage.history_begins` means running
+        # the report, which answers with this same refusal. The only other
+        # source is the sweeps journal, read by hand.
+        raise CashBookTotalsRefusedError(
+            REFUSED_BEFORE_FIRST_SWEEP, env, {"history_begins": coverage.history_begins}
+        )
     if not _overlaps_an_asked_window(sweeps, since=since, until=until):
         raise CashBookTotalsRefusedError(
             REFUSED_WINDOW_NEVER_SWEPT,

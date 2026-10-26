@@ -64,6 +64,23 @@ _CASHBOOK_SOURCE = (
     / "cashbook.py"
 ).resolve()
 
+#: The published failure contract, whose `cashbook_totals_refused` reason table
+#: tells an operator how to recover from each refusal. One definition beside the
+#: source above, for the same reason.
+_CONTRACT_README = (
+    Path(__file__).resolve().parents[2] / ".." / "alphalens-broker-contract" / "README.md"
+).resolve()
+
+#: The heading of that table's own section. The reasons for the OTHER cash-book
+#: code sit under a heading of their own, so a slice from here to the next
+#: ``####`` can only ever hold these.
+_TOTALS_REASON_SECTION = "#### `cashbook_totals_refused` publishes a `reason` too"
+
+#: The two `details` keys EVERY refusal of this code carries, named in that
+#: section's preamble rather than in any row. The per-row check below is about
+#: the keys a row has to name for itself.
+_REFUSAL_KEYS_EVERY_ROW_CARRIES = frozenset({"reason", "env"})
+
 _EXIT_FAILED = 1
 _EXIT_USAGE = 2
 
@@ -219,6 +236,39 @@ def _failure_from(result) -> dict:
         f"the failure object must be the LAST stderr line, got {lines[-1]!r}"
     )
     return objects[0]
+
+
+def _totals_reason_rows() -> dict[str, str]:
+    """Each published ``cashbook_totals_refused`` reason, with its own row text.
+
+    Sliced from this code's own ``####`` heading to the next one, the way
+    ``tests/brokers/test_broker_failure_reasons_published.py`` slices it: the
+    other cash-book code's reasons sit under a heading of their own, so one
+    slice can never hold two vocabularies.
+    """
+    text = _CONTRACT_README.read_text(encoding="utf-8")
+    section = text[text.index(_TOTALS_REASON_SECTION) :]
+    section = section[: section.index("\n####", len(_TOTALS_REASON_SECTION))]
+    rows: dict[str, str] = {}
+    for line in section.splitlines():
+        cells = [cell.strip() for cell in line.split("|")]
+        if len(cells) < 4:
+            continue
+        # The header's own second cell is `details.reason` and the separator's
+        # is `---`; neither is an identifier, and a reason is.
+        reason = cells[2].strip("`")
+        if reason.isidentifier():
+            rows[reason] = cells[3]
+    return rows
+
+
+def _named_details_keys(row: str) -> set[str]:
+    """The ``details.<key>`` names one published row promises, as bare keys."""
+    found = set()
+    for token in row.replace("`", " ").replace(",", " ").split():
+        if token.startswith("details."):
+            found.add(token.removeprefix("details.").strip("."))
+    return found
 
 
 def _leaves(value: Any, prefix: str = "") -> list[tuple[str, Any]]:
@@ -1255,7 +1305,14 @@ class AWindowTheStoreCannotAnswerIsAFailureAndNotASmallerNumber(_CashbookTotalsC
         self.assertEqual(result.stdout, "")
         failure = _failure_from(result)
         self.assertEqual(failure["code"], "cashbook_totals_refused")
-        self.assertEqual(failure["details"], {"reason": "before_first_sweep", "env": _LIVE})
+        self.assertEqual(
+            failure["details"],
+            # The watermark rides along, because the recovery the published
+            # table names is to ask for that day and a refusal leaves stdout
+            # empty. `ThePublishedRecoveryIsOneTheCallerCanFollow` is where
+            # that key is pinned against the table.
+            {"reason": "before_first_sweep", "env": _LIVE, "history_begins": _SWEPT_SINCE},
+        )
 
     def test_an_unswept_store_refuses_nothing_swept(self) -> None:
         result = self.totals("--format", "json")
@@ -1319,6 +1376,88 @@ class AWindowTheStoreCannotAnswerIsAFailureAndNotASmallerNumber(_CashbookTotalsC
                 "nothing_swept",
             ),
         )
+
+
+class ThePublishedRecoveryIsOneTheCallerCanFollow(_CashbookTotalsCase):
+    """Each refusal's README row, against the object the command really publishes.
+
+    The ``before_first_sweep`` row used to tell an operator that ``alphalens
+    cashbook totals --format json`` publishes ``coverage.history_begins``, "the
+    earliest ``--since`` that is answerable". On a refusal stdout is EMPTY and
+    ``details`` carried only ``reason`` and ``env``, so following that sentence
+    reproduced the same refusal and the watermark was reachable only by
+    hand-reading ``sweeps.jsonl``. A recovery that cannot be run is worse than
+    none: it reads as a way out.
+
+    It is not a ``suggestions`` argv because the registry holds those PER CODE
+    (``_SUGGESTIONS_BY_CODE``, so a code promising a way out does not depend on
+    each emitter remembering one) and they are therefore static -- they cannot
+    name this store's own date. The watermark is a fact about the refusal, so it
+    rides in ``details``.
+
+    Pinned BOTH ways, per reason: the keys beyond ``reason`` and ``env`` that
+    the published object carries are exactly the ``details.<key>`` names its row
+    promises. A key the table does not mention and a row promising a key the
+    code never sends are each red.
+    """
+
+    def details_of(self, *extra: str, **window: str) -> dict:
+        result = self.totals("--format", "json", *extra, **window)
+
+        self.assertEqual(result.exit_code, _EXIT_FAILED)
+        self.assertEqual(result.stdout, "")
+        failure = _failure_from(result)
+        self.assertEqual(failure["code"], "cashbook_totals_refused")
+        return failure["details"]
+
+    def assert_row_names_the_keys(self, reason: str, details: dict) -> None:
+        self.assertEqual(details["reason"], reason)
+        self.assertEqual(
+            set(details) - _REFUSAL_KEYS_EVERY_ROW_CARRIES,
+            _named_details_keys(_totals_reason_rows()[reason]),
+        )
+
+    def test_the_parse_found_every_published_reason(self) -> None:
+        """Positive control: a slice that matched nothing, or a header row read
+        as a reason, would make every comparison below vacuous."""
+        self.assertEqual(set(_totals_reason_rows()), set(report.TOTALS_REFUSALS))
+
+    def test_the_parse_can_see_a_named_details_key(self) -> None:
+        """The second positive control: a key parse that always answered the
+        empty set would agree with a refusal that publishes nothing extra."""
+        rows = _totals_reason_rows()
+
+        self.assertEqual(_named_details_keys(rows["before_first_sweep"]), {"history_begins"})
+        self.assertEqual(_named_details_keys(rows["sim_reports_unusable"]), set())
+
+    def test_a_since_before_the_first_sweep_publishes_the_earliest_answerable_one(self) -> None:
+        self.seed()
+
+        details = self.details_of(since="2026-07-01")
+
+        self.assertEqual(details["history_begins"], _SWEPT_SINCE)
+        self.assert_row_names_the_keys("before_first_sweep", details)
+
+    def test_a_window_outside_the_swept_range_publishes_both_watermarks(self) -> None:
+        self.seed()
+
+        details = self.details_of(since="2026-11-01", until="2026-11-30")
+
+        self.assertEqual(details["history_begins"], _SWEPT_SINCE)
+        self.assertEqual(details["swept_through"], _SWEPT_UNTIL)
+        self.assert_row_names_the_keys("window_never_swept", details)
+
+    def test_a_sim_refusal_promises_no_watermark_and_publishes_none(self) -> None:
+        """The other direction of the same pin, on a reason whose recovery is
+        not a window: there is no answerable window on SIM at all."""
+        self.seed()
+
+        self.assert_row_names_the_keys("sim_reports_unusable", self.details_of(env="sim"))
+
+    def test_an_unswept_store_promises_no_watermark_and_publishes_none(self) -> None:
+        """And on the one reason that HAS no watermark to publish: nothing was
+        ever swept, so there is no date the store could offer."""
+        self.assert_row_names_the_keys("nothing_swept", self.details_of())
 
 
 class TheCommandHoldsNoBroker(unittest.TestCase):
