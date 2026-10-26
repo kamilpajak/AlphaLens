@@ -927,15 +927,24 @@ class TheFiveLoadBearingPropertiesOfTheRender(_CashbookTotalsCase):
         self.assertIn("0 rows", line)
 
     def test_the_residual_is_its_own_named_line(self) -> None:
-        """Measured at the 2026-09-12 cut, where it is -4334.10 PLN: at the
-        full span it is exactly 0.00, so a renderer that dropped the line
-        would be indistinguishable from one that printed it."""
+        """Measured at the 2026-09-12 cut, where it is -7928.96 PLN.
+
+        The cut rather than the full span, for a reason that survived the open
+        cost basis leaving the residual's term list. The full span now reads
+        -3594.86, which is the same number the open-basis line carries -- over
+        the whole store the legs of the positions still held ARE the only
+        window cash the four summed lines leave, so the two coincide there
+        while meaning two different things. A renderer that printed the basis
+        where the residual belongs would therefore pass at the full span. At
+        the cut they are -7928.96 and -3594.86, and only that window can tell
+        the two lines apart."""
         human = self.totals(until="2026-09-12").stdout
         lines = [line for line in human.splitlines() if line.strip()]
 
         line = lines[_line_index(lines, _RESIDUAL_LABEL)]
 
-        self.assertIn("-4334.10 PLN", line)
+        self.assertIn("-7928.96 PLN", line)
+        self.assertNotIn("-3594.86", line)
 
     def test_the_balance_line_says_it_agrees_and_that_it_cannot_see_a_restatement(self) -> None:
         """**Mutation it catches:** shipping the cumulative check without its
