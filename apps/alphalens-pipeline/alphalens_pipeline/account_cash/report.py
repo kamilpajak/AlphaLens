@@ -2,8 +2,9 @@
 
 Memo: ``docs/research/account_cashbook_design_2026_10_05.md`` sections 4, 5
 and 6. This is the ONLY module in the package that reads the store, so it is
-the only one that knows ``env``; :mod:`money`, :mod:`buckets` and
-:mod:`episodes` are pure over rows and this composes them.
+the only one that knows ``env``; :mod:`money`, :mod:`buckets`,
+:mod:`episodes` and :mod:`balance_check` are pure over what they are handed,
+and this composes them.
 
 Five rules carry the published numbers, and a change must not break any of
 them.
@@ -38,12 +39,21 @@ closed outside the window. ``residual_acct`` is that difference, computed by
 the same summing function as everything else, and it is zero only by accident
 on a window that happens to contain every episode whole.
 
-**Three identities are checked, not described.** The bucket identity (the
-buckets add back to the rows they were given), the coverage partition
-(assigned + unassigned == the fills read) and the row partition (window +
-outside + undated == the store's rows). A failure raises
-:class:`CashBookIdentityError` rather than publishing a number beside a broken
-identity, which is the one thing the identities exist to prevent.
+**Four partitions are checked, not described.** The bucket identity (the
+buckets add back to the rows they were given), the fill coverage partition
+(assigned + unassigned == the fills read), the row partition (window + outside
++ undated == the store's rows) and the classification count (every row handed
+to the classifier was counted by it). Each raises
+:class:`CashBookIdentityError` on its own rather than publishing a number
+beside a broken identity, which is the one thing they exist to prevent. The
+episode partition -- summed + excluded == episodes -- is held by construction
+instead, because :func:`_exclusions_of` stamps each episode exactly once.
+
+The one relation NOT checked here is ``subtotal + deposits ==
+cash_book_sum_acct``: the residual is DEFINED as the cash book sum minus the
+five named lines, so that equation is algebraically guaranteed and asserting
+it would be noise. ``test_report.py`` pins both sides against literals
+instead, which is what catches the deposits being folded into the subtotal.
 
 **The balance cross-check comes in two versions and the weaker one says so.**
 The cumulative check carries ``detects_restatement: False`` on its face: a
