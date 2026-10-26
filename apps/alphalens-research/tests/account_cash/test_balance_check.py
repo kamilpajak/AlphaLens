@@ -574,6 +574,129 @@ class ACheckThatCannotBeMadeIsNullAndNeverZero(unittest.TestCase):
         self.assertIsNone(check.difference.value)
 
 
+class AVerdictOfNotCheckableAlwaysNamesItsReason(unittest.TestCase):
+    """F6: ``not_checkable`` is reachable two ways, and one of them was mute.
+
+    The three (now four) named absences set ``null_reason`` on the record. The
+    OTHER way in is the arithmetic nulling with every input present -- the
+    account reported no ``CashBalance``, or two currencies reached one sum --
+    and there the verdict said ``not_checkable`` while the record's own
+    ``null_reason`` stayed ``None`` and the reason lived on the nested amount.
+    A renderer branches on the record's field, so it had a verdict it could
+    not explain.
+    """
+
+    def _absent_balance(self) -> BalanceAt:
+        return BalanceAt(sweep_id="s1", snapshot=replace(BALANCE, cash_balance=None))
+
+    def test_an_absent_cash_balance_names_a_reason_on_the_cumulative_record(self) -> None:
+        """**Mutation it catches:** ``null_reason=None`` on this path, which
+        publishes a verdict with nothing beside it to branch on."""
+        check = balance_check.cumulative_check(
+            BOOKINGS, self._absent_balance(), since="2026-08-01", until="2026-10-03"
+        )
+
+        self.assertEqual(check.verdict, balance_check.VERDICT_NOT_CHECKABLE)
+        self.assertEqual(check.null_reason, balance_check.NULL_DIFFERENCE_NOT_A_NUMBER)
+        self.assertIn(check.null_reason, balance_check.CHECK_NULL_REASONS)
+
+    def test_an_absent_cash_balance_names_a_reason_on_the_incremental_record_too(self) -> None:
+        """Both halves, because each builds its own record: the cumulative one
+        holding and the incremental one staying mute is exactly the asymmetry
+        a machine reader would trip on."""
+        snapshots, sweeps = _p8_pair()
+        muted = (
+            snapshots[0],
+            BalanceAt(
+                sweep_id=snapshots[1].sweep_id,
+                snapshot=replace(snapshots[1].snapshot, cash_balance=None),
+            ),
+        )
+
+        check = balance_check.incremental_check(_p8_events(), snapshots=muted, sweeps=sweeps)
+
+        self.assertEqual(check.verdict, balance_check.VERDICT_NOT_CHECKABLE)
+        self.assertEqual(check.null_reason, balance_check.NULL_DIFFERENCE_NOT_A_NUMBER)
+
+    def test_two_account_currencies_name_the_same_reason(self) -> None:
+        """The other arithmetic route: the cash book's own total refuses with
+        ``currency_mixed``, so there is no difference to compare. The WHY
+        stays on the amount, in the money vocabulary; the record says that its
+        verdict rests on it."""
+        mixed = (replace(BOOKINGS[0], account_currency="EUR"), *BOOKINGS[1:])
+
+        check = balance_check.cumulative_check(
+            mixed,
+            BalanceAt(sweep_id="s1", snapshot=BALANCE),
+            since="2026-08-01",
+            until="2026-10-03",
+        )
+
+        self.assertEqual(check.verdict, balance_check.VERDICT_NOT_CHECKABLE)
+        self.assertEqual(check.null_reason, balance_check.NULL_DIFFERENCE_NOT_A_NUMBER)
+        self.assertEqual(check.expected.null_reason, "currency_mixed")
+
+    def test_a_check_that_was_made_names_no_reason(self) -> None:
+        """The negative control. Without it, hard-coding the reason on every
+        record satisfies every assertion above."""
+        check = balance_check.cumulative_check(
+            BOOKINGS,
+            BalanceAt(sweep_id="s1", snapshot=BALANCE),
+            since="2026-08-01",
+            until="2026-10-03",
+        )
+
+        self.assertEqual(check.verdict, balance_check.VERDICT_RECONCILES)
+        self.assertIsNone(check.null_reason)
+
+    def test_the_verdict_and_the_reason_agree_on_every_shape(self) -> None:
+        """One property over all of them: a record says ``not_checkable``
+        exactly when it names a reason. That is the invariant a renderer may
+        rely on, and neither half of it held before."""
+        snapshots, sweeps = _p8_pair()
+        latest = BalanceAt(sweep_id="s1", snapshot=BALANCE)
+        shapes = {
+            "reconciles": balance_check.cumulative_check(BOOKINGS, latest, since="a", until="b"),
+            "differs": balance_check.cumulative_check(
+                (replace(BOOKINGS[0], amount_account_currency=2000.50), *BOOKINGS[1:]),
+                latest,
+                since="a",
+                until="b",
+            ),
+            "no snapshot": balance_check.cumulative_check(BOOKINGS, None, since="a", until="b"),
+            "absent balance": balance_check.cumulative_check(
+                BOOKINGS, self._absent_balance(), since="a", until="b"
+            ),
+            "one snapshot": balance_check.incremental_check(
+                _p8_events(), snapshots=snapshots[:1], sweeps=sweeps[:1]
+            ),
+            "no sweep window": balance_check.incremental_check(
+                _p8_events(), snapshots=snapshots, sweeps=sweeps[:1]
+            ),
+            "backwards interval": balance_check.incremental_check(
+                _p8_events(),
+                snapshots=snapshots,
+                sweeps=(
+                    _sweep("s1", "2026-10-01", "2026-10-08"),
+                    _sweep("s2", "2026-10-01", "2026-10-08"),
+                ),
+            ),
+            "incremental reconciles": balance_check.incremental_check(
+                _p8_events(), snapshots=snapshots, sweeps=sweeps
+            ),
+        }
+
+        for name, check in sorted(shapes.items()):
+            with self.subTest(shape=name):
+                self.assertEqual(
+                    check.verdict == balance_check.VERDICT_NOT_CHECKABLE,
+                    check.null_reason is not None,
+                    f"{check.verdict} beside null_reason={check.null_reason!r}",
+                )
+                if check.null_reason is not None:
+                    self.assertIn(check.null_reason, balance_check.CHECK_NULL_REASONS)
+
+
 #: Every reason a check can answer ``not_checkable`` with, written out rather
 #: than read back off ``CHECK_NULL_REASONS``: ``_money_null_for`` validates
 #: against that very tuple, so comparing the published set against it is
@@ -583,11 +706,12 @@ CHECK_NULL_VOCABULARY = (
     "one_snapshot_only",
     "sweep_window_not_found",
     "interval_runs_backwards",
+    "difference_not_a_number",
 )
 
 
 class TheVocabularyIsClosed(unittest.TestCase):
-    def test_the_four_check_null_reasons_are_the_published_vocabulary(self) -> None:
+    def test_the_check_null_reasons_are_the_published_vocabulary(self) -> None:
         """**Mutation it catches:** a reason registered in the tuple and never
         published, or published and never registered -- which is what a
         renderer branching on the field would meet as an unknown string."""

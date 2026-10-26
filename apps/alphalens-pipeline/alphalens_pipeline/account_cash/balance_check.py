@@ -43,6 +43,16 @@ a money line whose own stated interval runs backwards.
 :data:`NULL_INTERVAL_RUNS_BACKWARDS` is the fourth named absence, and it
 publishes no bounds at all.
 
+**A verdict of ``not_checkable`` always names its reason on the RECORD.** It is
+reachable two ways: a check that could not be SET UP (the four absences above),
+and one that was set up and whose arithmetic produced no number -- no
+``CashBalance`` reported, or two stated currencies. The second said
+``not_checkable`` with ``null_reason: None`` and left the reason one level down
+on the nested amount, in money.py's vocabulary rather than this one's, so a
+consumer branching on the record met a verdict it could not explain.
+:data:`NULL_DIFFERENCE_NOT_A_NUMBER` is that case, read off the same value the
+verdict is, so the two cannot disagree.
+
 **What this cannot see**, and the memo says so rather than the code pretending
 otherwise: a sweep run inside the window between the settlement batch and the
 report completing sees the whole day's cash movement with none, or only some,
@@ -110,11 +120,27 @@ NULL_SWEEP_WINDOW_NOT_FOUND = "sweep_window_not_found"
 #: :data:`NULL_SWEEP_WINDOW_NOT_FOUND` because it is the same KIND of fact:
 #: the join the check rests on did not produce an interval it may sum.
 NULL_INTERVAL_RUNS_BACKWARDS = "interval_runs_backwards"
+#: Every input was present and the ARITHMETIC produced no number: the account
+#: reported no ``CashBalance``, or two stated currencies reached one sum. The
+#: other four reasons say a check could not be SET UP; this one says it was set
+#: up and has no difference to compare.
+#:
+#: Published on the record rather than left on the nested amount alone. The
+#: verdict is ``not_checkable`` either way, and a consumer branches on the
+#: RECORD -- so without this the record carried a verdict it could not explain
+#: and the reason sat one level down, in a different vocabulary. The WHY stays
+#: there, in money.py's words (``account_amount_not_reported``,
+#: ``currency_mixed``); this says the verdict rests on it.
+#:
+#: Unlike the other four it is NOT published through :func:`_not_checkable`:
+#: the amounts on this path are real computations and must stay on the record.
+NULL_DIFFERENCE_NOT_A_NUMBER = "difference_not_a_number"
 CHECK_NULL_REASONS: tuple[str, ...] = (
     NULL_NO_BALANCE_SNAPSHOT,
     NULL_ONE_SNAPSHOT_ONLY,
     NULL_SWEEP_WINDOW_NOT_FOUND,
     NULL_INTERVAL_RUNS_BACKWARDS,
+    NULL_DIFFERENCE_NOT_A_NUMBER,
 )
 
 __all__ = [
@@ -122,6 +148,7 @@ __all__ = [
     "CHECK_INCREMENTAL",
     "CHECK_KINDS",
     "CHECK_NULL_REASONS",
+    "NULL_DIFFERENCE_NOT_A_NUMBER",
     "NULL_INTERVAL_RUNS_BACKWARDS",
     "NULL_NO_BALANCE_SNAPSHOT",
     "NULL_ONE_SNAPSHOT_ONLY",
@@ -155,6 +182,10 @@ class BalanceCheck:
     difference: AcctAmount
     #: Published, never implied. ``False`` on the cumulative check.
     detects_restatement: bool
+    # ``null_reason`` is set exactly when ``verdict`` is ``not_checkable``: a
+    # consumer branches on this record, so a verdict with no reason beside it
+    # is one it cannot explain, and a reason beside a number is a figure that
+    # is also a refusal.
     #: Booking rows this check summed.
     rows: int
     since: str | None
@@ -217,6 +248,16 @@ def _verdict(difference: AcctAmount) -> str:
     return (
         VERDICT_RECONCILES if abs(difference.value) <= BALANCE_TOLERANCE_ACCT else VERDICT_DIFFERS
     )
+
+
+def _reason_for(difference: AcctAmount) -> str | None:
+    """The CHECK's reason when a set-up check still produced no number.
+
+    Read off the same value :func:`_verdict` reads, so the record's verdict and
+    its reason cannot disagree: a ``not_checkable`` with no reason, and a
+    reason beside a number, are the two states a consumer would misread.
+    """
+    return None if difference.value is not None else NULL_DIFFERENCE_NOT_A_NUMBER
 
 
 def _not_checkable(kind: str, reason: str, *, asof: str | None = None) -> BalanceCheck:
@@ -294,7 +335,7 @@ def cumulative_check(
         since=since,
         until=until,
         asof=latest.snapshot.asof.isoformat(),
-        null_reason=None,
+        null_reason=_reason_for(difference),
     )
 
 
@@ -375,7 +416,7 @@ def incremental_check(
         since=first.isoformat(),
         until=last.isoformat(),
         asof=later.snapshot.asof.isoformat(),
-        null_reason=None,
+        null_reason=_reason_for(difference),
     )
 
 
