@@ -397,6 +397,23 @@ class TheNarrowWindowAtTheCut(IsolatedHomeTestCase):
         self.assertEqual(self.totals.cost_basis_open_asof, _SWEPT_UNTIL.isoformat())
         self.assertNotEqual(self.totals.cost_basis_open_asof, self.totals.basis.window_until)
 
+    def test_the_count_beside_the_line_is_not_window_scoped_either(self) -> None:
+        """The line is never window-clipped, so neither is the count of what it
+        leaves out -- both read the whole episode fold.
+
+        This window excludes SEVEN episodes that closed after the cut, and none
+        of them is holding quantity.
+
+        **Mutation it catches:** dropping the still-holding test and counting
+        every episode whose state is not ``open``. Measured 2026-10-26: that
+        answers 16 -- every CLOSED episode in the fold, because
+        ``closed_outside_window`` is a report-level count and not an episode
+        STATE, so the state test alone does not see the window at all. Sixteen
+        positions reported as missing from a figure that is complete.
+        """
+        self.assertEqual(self.totals.cost_basis_open_excluded, 0)
+        self.assertEqual(self.totals.basis.episodes_excluded, CUT_CLOSED_OUTSIDE + OPEN_EPISODES)
+
     def test_the_residual_is_published_and_is_not_zero_here(self) -> None:
         """Amendment W2. Memo section 4: episodes are summable and their sum
         is NOT the period total; the difference is real money -- here the
