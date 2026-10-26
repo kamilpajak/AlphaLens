@@ -406,6 +406,14 @@ class CashBookTotals:
     #: a position that is still open is as-of the last day the store can speak
     #: for; clipping it to the window's end publishes a fraction of the money
     #: at risk as if it were all of it (amendment W1).
+    #:
+    #: It is ``swept_through`` -- the end of the CONTIGUOUS run -- and not the
+    #: latest sweep's end, even though the basis is summed over every stored
+    #: fill including ones swept after a gap. That is the conservative
+    #: direction and the only defensible one: past a gap the quantity walk may
+    #: have missed an entry, so the position it reports is not known to be the
+    #: position held. Stating the later date would claim the basis is current
+    #: as of a day whose fills the store never read.
     cost_basis_open_asof: str | None
     income_acct: AcctAmount
     unclassified_acct: AcctAmount
