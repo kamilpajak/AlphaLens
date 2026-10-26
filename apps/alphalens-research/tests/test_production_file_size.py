@@ -185,7 +185,12 @@ BASELINE: dict[str, int] = {
     # the two-line raise -- the published recovery told an operator to read
     # `coverage.history_begins` off a report that refuses, so the note says why
     # the watermark cannot be anywhere but on the refusal.
-    "apps/alphalens-pipeline/alphalens_pipeline/account_cash/report.py": 1259,
+    #
+    # Raised again, by 10 to 1269, for the fourth: `CashBookIdentityError` now
+    # carries the NAME of the partition that broke, so the command reporting it
+    # (`cashbook_identity_broken`) does not have to parse the prose to say more
+    # than "something broke". The message itself is unchanged.
+    "apps/alphalens-pipeline/alphalens_pipeline/account_cash/report.py": 1269,
     # Raised again, by 8, to say that the raise page's ticker fallback is
     # unreachable by construction. It sits beside the stop-PLACED page's
     # fallback, which looks identical and IS reachable and tested, so without

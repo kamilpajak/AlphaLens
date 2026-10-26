@@ -28,11 +28,14 @@ for rather than answering a smaller number.
 **The envelope and the failure contract are the broker group's** (#1379,
 #1389), shared through :mod:`alphalens_cli.commands._cli_envelope`: ``--format
 human|json``, exactly one strict JSON value on stdout or none at all, and a
-refusal as one JSON object on stderr with stdout empty. Three codes are this
+refusal as one JSON object on stderr with stdout empty. Five codes are this
 group's own, all CLI-owned (the contract package never learns a CLI concept,
 #1122): ``cashbook_sync_refused`` and ``cashbook_totals_refused``, each with
-its own closed ``details.reason`` vocabulary, and ``cashbook_sweep_busy``,
-which is RETRYABLE because nothing was appended.
+its own closed ``details.reason`` vocabulary; ``cashbook_sweep_busy``, which is
+RETRYABLE because nothing was appended; ``cashbook_store_unreadable``, also
+retryable, for a journal this process cannot read; and
+``cashbook_identity_broken``, which is not, because a store that contradicts
+itself answers the same way on every re-run.
 
 **The order of the body is load-bearing.** ``--format`` is settled first, so
 every refusal after it renders the way the caller asked; the window is parsed
@@ -867,6 +870,35 @@ def totals_command(
             # may rename them -- they are the two keys the published table
             # names for this code.
             details={"reason": exc.reason, "env": exc.env, **exc.details},
+        ) from exc
+    except report.CashBookIdentityError as exc:
+        # NOT `unclassified`. The repo rule is that `unclassified` marks a
+        # refusal nobody has given a code yet and is never a branch condition;
+        # this one is named, is raised deliberately rather than by accident,
+        # and its recovery differs from the one below -- so a client that
+        # branches on the code gets the right answer rather than "a human must
+        # look" for two different humans. Its own code rather than a `reason`
+        # under the one above, because that code means "this WINDOW cannot be
+        # answered"; no window can be answered while the store contradicts
+        # itself.
+        raise _fail_with(
+            "cashbook_identity_broken", str(exc), details={"identity": exc.identity}
+        ) from exc
+    except OSError as exc:
+        # A journal or the store root this process cannot read. Separate from
+        # the identity above because `retryable` is a property of the CODE and
+        # the two differ in it: this one answers once the cause clears, and
+        # this command writes nothing either way, which is what `retryable`
+        # means here ("safe to re-run WITHOUT reconciling first").
+        #
+        # Caught at the command and not inside the record: the store's readers
+        # are pure over paths, and a reader that swallowed an unreadable
+        # journal would answer a SMALLER number -- the one thing the whole
+        # refusal surface exists to prevent.
+        raise _fail_with(
+            "cashbook_store_unreadable",
+            f"could not read the account cash book: {exc}",
+            details={"journal": _failed_file(exc)},
         ) from exc
 
     body = _envelope(_TOTALS_SCHEMA, resolved_env, **_totals_body(totals))

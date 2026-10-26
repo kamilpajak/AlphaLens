@@ -41,7 +41,7 @@ from typing import Any
 from unittest import mock
 
 from alphalens_cli.commands import cashbook
-from alphalens_pipeline.account_cash import money, report, sweep
+from alphalens_pipeline.account_cash import buckets, money, paths, report, sweep
 from alphalens_pipeline.brokers.account_cash import AccountCashRead
 from alphalens_pipeline.brokers.fill_history import ReadWindow
 from typer.testing import CliRunner
@@ -83,6 +83,10 @@ _REFUSAL_KEYS_EVERY_ROW_CARRIES = frozenset({"reason", "env"})
 
 _EXIT_FAILED = 1
 _EXIT_USAGE = 2
+#: What the shared emitter answers for a RETRYABLE code. Named here because one
+#: cash-book failure is retryable -- a journal this process cannot read now is
+#: readable once the cause clears, and this command writes nothing either way.
+_EXIT_TRANSIENT = 7
 
 _LIVE = "live"
 #: The window the one seeded sweep ASKED for -- the whole capture.
@@ -1376,6 +1380,100 @@ class AWindowTheStoreCannotAnswerIsAFailureAndNotASmallerNumber(_CashbookTotalsC
                 "nothing_swept",
             ),
         )
+
+
+class AStoreLevelFailureIsARefusalAndNotATraceback(_CashbookTotalsCase):
+    """The two things the record raises that are not refusals of the WINDOW.
+
+    ``build_totals`` raises :class:`CashBookIdentityError` on a published
+    partition that does not hold -- deliberately, because a number beside a
+    broken identity is read as the number -- and the journal reads raise
+    ``OSError`` on a store root or a journal this process cannot read. Only
+    ``CashBookTotalsRefusedError`` was handled, so either one escaped the
+    command: with ``--format json`` the caller got a Python traceback and NO
+    object with a code, which is the one thing "exactly one stderr line is a
+    JSON object, and it is the last line" forbids.
+
+    Both get a CODE rather than ``unclassified``. The repo rule is that
+    ``unclassified`` marks a refusal not yet given a code and is never a branch
+    condition -- and these two are known, named, and reached by different
+    recoveries: an unreadable journal is fixed outside the process and the same
+    command then answers, while a broken identity answers the same way for
+    ever and needs somebody to look at the store. That is exactly the
+    distinction a code exists to carry, and it is why ONE code for both would
+    not do either: `retryable` is a property of the code, and these two differ
+    in it.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.seed()
+
+    def break_the_bucket_identity(self):
+        """``all_rows`` moved away from the buckets it must agree with.
+
+        The observable shape of a row the classification lost, and the same
+        doctoring ``test_report.py`` uses -- so the real ``build_totals``
+        raises on its own rather than being replaced by a mock that raises.
+        """
+        real = buckets.classify_buckets
+
+        def doctored(rows: object) -> buckets.BucketFold:
+            fold = real(rows)  # type: ignore[arg-type]
+            return replace(fold, all_rows=replace(fold.all_rows, value=1.0))
+
+        return mock.patch.object(buckets, "classify_buckets", doctored)
+
+    def make_a_journal_unreadable(self) -> Path:
+        path = paths.cash_events_path(_LIVE)
+        path.chmod(0o000)
+        self.addCleanup(path.chmod, 0o600)
+        return path
+
+    def test_a_broken_identity_is_one_json_object_on_stderr(self) -> None:
+        with self.break_the_bucket_identity():
+            result = self.totals("--format", "json")
+
+        self.assertEqual(result.stdout, "")
+        failure = _failure_from(result)
+        self.assertEqual(failure["code"], "cashbook_identity_broken")
+        self.assertEqual(failure["details"], {"identity": "bucket"})
+        self.assertFalse(failure["retryable"])
+        self.assertEqual(result.exit_code, _EXIT_FAILED)
+
+    def test_a_broken_identity_renders_as_prose_when_asked_for_prose(self) -> None:
+        """And no total is published either way, which is what the identity is
+        for: stdout is EMPTY, and the prose names the partition and both sides
+        of the comparison that failed.
+
+        The two sides belong in the message: they are the diagnostic, and a
+        refusal that said only "an identity broke" would send an operator to
+        read four partitions by hand.
+        """
+        with self.break_the_bucket_identity():
+            result = self.totals()
+
+        self.assertEqual(result.stdout, "")
+        self.assertIn("the bucket identity does not hold", result.stderr)
+        self.assertIn("no total is published", result.stderr)
+
+    def test_an_unreadable_journal_is_one_json_object_on_stderr(self) -> None:
+        path = self.make_a_journal_unreadable()
+
+        result = self.totals("--format", "json")
+
+        self.assertEqual(result.stdout, "")
+        failure = _failure_from(result)
+        self.assertEqual(failure["code"], "cashbook_store_unreadable")
+        self.assertEqual(failure["details"], {"journal": str(path)})
+        self.assertTrue(failure["retryable"])
+        self.assertEqual(result.exit_code, _EXIT_TRANSIENT)
+
+    def test_the_premise_is_that_both_shapes_really_reach_the_command(self) -> None:
+        """Positive control: with the store readable and the identity holding,
+        this same window answers -- so each test above measures its own cause
+        and not a store that was broken all along."""
+        self.assertEqual(self.totals().exit_code, 0)
 
 
 class ThePublishedRecoveryIsOneTheCallerCanFollow(_CashbookTotalsCase):

@@ -282,7 +282,20 @@ class CashBookIdentityError(AssertionError):
     Publishing a total beside a broken identity is the one outcome the three
     identities exist to prevent -- the reader would see a number and a
     footnote, and would read the number.
+
+    ``identity`` names WHICH of them, as a field rather than only inside the
+    message: a caller that has to report this -- the CLI does, as
+    ``cashbook_identity_broken`` -- would otherwise have to parse the prose to
+    say anything more than "something broke".
     """
+
+    def __init__(self, identity: str, detail: str) -> None:
+        super().__init__(
+            f"the {identity} identity does not hold ({detail}); no total is published, "
+            f"because a number beside a broken identity is read as the number"
+        )
+        self.identity = identity
+        self.detail = detail
 
 
 def _as_pairs(
@@ -783,10 +796,7 @@ def _agree(left: AcctAmount, right: AcctAmount) -> bool:
 
 def _hold(name: str, held: bool, detail: str) -> None:
     if not held:
-        raise CashBookIdentityError(
-            f"the {name} identity does not hold ({detail}); no total is published, "
-            f"because a number beside a broken identity is read as the number"
-        )
+        raise CashBookIdentityError(name, detail)
 
 
 def _check_identities(
