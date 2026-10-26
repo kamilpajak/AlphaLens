@@ -149,11 +149,15 @@ _MONEY_LINES: tuple[tuple[str, str], ...] = (
     ("cash_book_sum_acct", "cash book sum"),
 )
 _MONEY_LABELS = tuple(label for _key, label in _MONEY_LINES)
+_MONEY_LABEL_BY_FIELD = dict(_MONEY_LINES)
 _NET_LABEL = _MONEY_LINES[0][1]
 _COST_BASIS_LABEL = _MONEY_LINES[1][1]
 _UNCLASSIFIED_LABEL = _MONEY_LINES[3][1]
 _RESIDUAL_LABEL = _MONEY_LINES[4][1]
-_SUBTOTAL_LABEL = _MONEY_LINES[5][1]
+#: The one DERIVED money line: the five lines above it add up to it, which is
+#: what makes it the line a CLI could recompute instead of rendering.
+_SUBTOTAL_LINE = _MONEY_LINES[5]
+_SUBTOTAL_LABEL = _SUBTOTAL_LINE[1]
 _DEPOSITS_LABEL = _MONEY_LINES[6][1]
 _CASH_BOOK_SUM_LABEL = _MONEY_LINES[7][1]
 
@@ -263,6 +267,21 @@ def _human_token(value: Any) -> str:
     return str(value)
 
 
+def _collapsed_lines(human: str) -> list[str]:
+    """The prose, one whitespace-collapsed line per rendered line.
+
+    A TRAILING COMMA is dropped from every token. The cost-basis note reads
+    ``as of 2026-10-03, 0 more held``, and a date with a comma behind it is the
+    same published fact as the date; without this the whole note would read as
+    carrying no date at all.
+    """
+    collapsed = []
+    for line in human.splitlines():
+        if line.strip():
+            collapsed.append(" ".join(token.rstrip(",") for token in line.split()))
+    return collapsed
+
+
 def _label_block(human: str, label: str) -> str:
     """Every prose line whose first field is ``label``, whitespace collapsed.
 
@@ -270,23 +289,129 @@ def _label_block(human: str, label: str) -> str:
     zeros: ``cash_events 0`` is in two mappings at once, so a check against
     the full text cannot tell which label printed it.
     """
-    lines = [" ".join(line.split()) for line in human.splitlines() if line.strip()]
-    return " | ".join(line for line in lines if line.split()[0] == label)
+    return " | ".join(line for line in _collapsed_lines(human) if line.split()[0] == label)
+
+
+#: The block key for the one line that is not selected by a label: the header,
+#: which is where the WINDOW the whole report answers for is stated.
+_HEADER_BLOCK = "header"
+
+#: The four small mappings the basis publishes, each under its own prose label.
+_MAPPING_LABELS = ("exclusions", "fills_unassigned", "restated", "malformed")
+
+#: The three amounts every balance check publishes, each on its own prose line.
+_BALANCE_AMOUNTS = ("expected", "observed", "difference")
+
+#: The two basis fields the HEADER carries rather than a ``basis`` line: the
+#: window the report answers for.
+_HEADER_BASIS_FIELDS = ("window_since", "window_until")
+
+#: Balance-check fields the renderer prints WITHOUT their own name beside them.
+_BALANCE_POSITIONAL = ("kind", "verdict", "since", "until")
+
+#: The two loose top-level scalars that belong to the cost-basis money LINE:
+#: that line's as-of and its held-but-excluded count. On any other line they
+#: would read as facts about a different number.
+_COST_BASIS_SCALARS = ("cost_basis_open_asof", "cost_basis_open_excluded")
+
+#: How many prose lines one leaf's block may span. Measured: 1 for a money
+#: line, a bucket line, one balance amount, the header and each mapping; 4 for
+#: the basis; 3 for the coverage; 5 for one balance check. A bound rather than
+#: the number, and far under the ~30 lines of the whole report, because a block
+#: that widened to the whole output is exactly the hole this replaced.
+_BLOCK_LINE_CEILING = 5
+
+
+def _prose_block(human: str, block: str) -> str:
+    """The prose lines one published leaf must appear on, joined by ``|``.
+
+    NARROW by construction. The whole-output search this replaced could not see
+    a dropped fact whose rendered token duplicated any other leaf's, and on
+    this body duplicates are the normal case: ``0`` is printed about twenty
+    times, ``none`` by three different renderers, ``104`` by three basis
+    counters, and both window dates have a twin on the coverage line. Measured
+    on the committed renderer: eight published facts could be deleted from the
+    prose with every test green.
+    """
+    lines = _collapsed_lines(human)
+    kind, _, rest = block.partition(":")
+    if kind == _HEADER_BLOCK:
+        return lines[0]
+    if kind == "money":
+        return lines[_line_index(lines, rest)]
+    if kind in ("bucket", "balance"):
+        want = [kind, *rest.split(":")]
+        return " | ".join(line for line in lines if line.split()[: len(want)] == want)
+    return _label_block(human, block)
+
+
+def _requirement(path: str, payload: dict) -> tuple[str, str | None]:
+    """Which block must carry one leaf, and the NAME the renderer prints by it.
+
+    A ``name`` turns the check into a PAIR (``malformed_windows 0``) rather
+    than a token search, which is what gives it power over a body whose counts
+    are nearly all zeros. ``None`` means the renderer prints the value as a
+    bare cell -- a money amount, a bucket's own fields, a balance check's kind
+    and dates, and the two window dates in the header.
+
+    An unknown path RAISES rather than being skipped: a field added to the body
+    is then red here until somebody says which line is supposed to carry it,
+    which is the property the old whole-output search gave up.
+    """
+    parts = path.split(".")
+    head = parts[0]
+    if head == "env":
+        return _HEADER_BLOCK, None
+    if head == "basis":
+        if parts[1] in _HEADER_BASIS_FIELDS:
+            return _HEADER_BLOCK, None
+        if parts[1] in _MAPPING_LABELS:
+            return parts[1], parts[2]
+        return "basis", parts[1]
+    if head == "coverage":
+        # A gap's own dates and a `cannot_detect` entry are printed as bare
+        # cells; the EMPTY list is printed under its own name, which is the
+        # fact a shorter list would otherwise read as fuller coverage.
+        if parts[1] in ("gaps", "cannot_detect"):
+            return "coverage", parts[1] if len(parts) == 2 else None
+        return "coverage", parts[1]
+    if head in _COST_BASIS_SCALARS:
+        return f"money:{_COST_BASIS_LABEL}", None
+    if head == "buckets":
+        return f"bucket:{payload['buckets'][int(parts[1])]['name']}", None
+    if head == "balance_checks":
+        kind = payload["balance_checks"][int(parts[1])]["kind"]
+        if parts[2] in _BALANCE_AMOUNTS:
+            return f"balance:{kind}:{parts[2]}", None
+        if parts[2] in _BALANCE_POSITIONAL:
+            return f"balance:{kind}", None
+        return f"balance:{kind}", parts[2]
+    if head in _MONEY_LABEL_BY_FIELD:
+        return f"money:{_MONEY_LABEL_BY_FIELD[head]}", None
+    raise AssertionError(
+        f"no prose rule for the published leaf {path!r}: say which line of the report "
+        f"is supposed to carry it, in `_requirement`"
+    )
 
 
 def _assert_prose_carries_every_leaf(case: unittest.TestCase, payload: dict, human: str) -> None:
-    """Every leaf's token, whole and space-bounded, in the collapsed prose.
+    """Every leaf's token, whole and space-bounded, on the LINE that owes it.
 
     Space-bounded rather than a plain substring: ``0`` is inside ``104`` and
     ``no`` is inside ``none``, so a substring check passes whatever the
-    renderer drops.
+    renderer drops. Per BLOCK rather than over the whole output, and as a
+    ``name value`` pair wherever the renderer prints the name, because a token
+    that duplicates another leaf's is not covered by a search over everything.
     """
-    bounded = f" {' '.join(human.split())} "
     for path, value in _leaves(payload):
         if path in _HUMAN_EXEMPT_KEYS:
             continue
-        with case.subTest(field=path):
-            case.assertIn(f" {_human_token(value)} ", bounded)
+        block, name = _requirement(path, payload)
+        rendered = _prose_block(human, block)
+        token = _human_token(value)
+        wanted = token if name is None else f"{name} {token}"
+        with case.subTest(field=path, block=block):
+            case.assertIn(f" {wanted} ", f" {rendered} ", f"{path} is not on the {block} line(s)")
 
 
 def _money_cell_ends(run, lines: list[str]) -> set[int]:
@@ -438,9 +563,23 @@ class TheCommandRendersTheRecordAndComputesNothing(_CashbookTotalsCase):
     number here disagrees with the seeded store and with every identity over
     it, so a command that recomputed anything would print the store's figure
     and go red.
+
+    One of the three doctored lines is DERIVED, and that one is the point.
+    ``net_closed_acct`` and ``cash_book_sum_acct`` are leaves of the
+    dependency graph as the CLI sees it -- the lines a recomputation would
+    take as INPUTS. A CLI that re-summed ``subtotal_acct`` from the five lines
+    above it would be invisible against those two, and invisible against the
+    real store as well: on CPython 3.12+ ``sum()`` is Neumaier-compensated and
+    reproduces ``report.py``'s Decimal answer to the cent on this capture, so
+    the guard would have rested on a float rounding accident. ``ABSURD_SUBTOTAL``
+    is a value the five doctored lines above it do NOT add up to, which is
+    what makes the re-summing refutable rather than lucky.
     """
 
     ABSURD = -123456.78
+    #: Not the sum of the five lines above the subtotal once they are doctored
+    #: (that sum is -127047.59), so a re-summed subtotal cannot land here.
+    ABSURD_SUBTOTAL = -99999.99
 
     def setUp(self) -> None:
         super().setUp()
@@ -449,6 +588,7 @@ class TheCommandRendersTheRecordAndComputesNothing(_CashbookTotalsCase):
         self.doctored = replace(
             real,
             net_closed_acct=replace(real.net_closed_acct, value=self.ABSURD),
+            subtotal_acct=replace(real.subtotal_acct, value=self.ABSURD_SUBTOTAL),
             cash_book_sum_acct=replace(real.cash_book_sum_acct, value=self.ABSURD),
         )
 
@@ -456,11 +596,33 @@ class TheCommandRendersTheRecordAndComputesNothing(_CashbookTotalsCase):
         with mock.patch.object(report, "build_totals", return_value=self.doctored):
             return self.totals(*extra)
 
+    def test_the_premise_is_a_subtotal_the_lines_above_it_do_not_add_up_to(self) -> None:
+        """Positive control on the arithmetic the class rests on: if the five
+        doctored lines happened to sum to ``ABSURD_SUBTOTAL``, the two
+        assertions below would pass under a CLI that re-sums them."""
+        above = [field for field, _label in _MONEY_LINES[: _MONEY_LINES.index(_SUBTOTAL_LINE)]]
+        body = self.doctored.to_jsonable()
+
+        self.assertNotAlmostEqual(
+            sum(body[field]["value"] for field in above), self.ABSURD_SUBTOTAL, places=2
+        )
+
     def test_the_json_body_carries_the_records_number(self) -> None:
         payload = _strict_json(self.totals_of_the_doctored_record("--format", "json").stdout)
 
         self.assertEqual(payload["net_closed_acct"]["value"], self.ABSURD)
+        self.assertEqual(payload["subtotal_acct"]["value"], self.ABSURD_SUBTOTAL)
         self.assertEqual(payload["cash_book_sum_acct"]["value"], self.ABSURD)
+
+    def test_the_prose_carries_the_derived_lines_number_too(self) -> None:
+        """The other half of the same seam: a recomputation inside the human
+        renderer rather than inside the body."""
+        human = self.totals_of_the_doctored_record().stdout
+        lines = [line for line in human.splitlines() if line.strip()]
+
+        subtotal = lines[_line_index(lines, _SUBTOTAL_LABEL)]
+
+        self.assertIn(f"{self.ABSURD_SUBTOTAL:.2f} PLN", subtotal)
 
 
 class EveryPublishedMoneyValueCarriesItsBasis(_CashbookTotalsCase):
@@ -553,6 +715,16 @@ class TheProseCarriesEveryFactTheJsonBodyPublishes(_CashbookTotalsCase):
     ``coverage.gaps`` are lists, and a dict-only walk hands each of them to
     the prose check as one Python list repr, which no renderer would ever
     print).
+
+    Each leaf is checked against the LINE that owes it, and as a ``name value``
+    pair wherever the renderer prints the name. A search over the whole output
+    cannot see a dropped fact whose token duplicates another leaf's, and on
+    this body that is the normal case: eight published facts -- the window the
+    report answers for, ``coverage.history_begins``,
+    ``coverage.malformed_windows``, the ``gaps none`` line,
+    ``cost_basis_open_excluded``, ``rows_in_store``, ``rows_classified`` and
+    the word for every null -- could each be deleted from the prose with every
+    test green.
     """
 
     def setUp(self) -> None:
@@ -584,6 +756,30 @@ class TheProseCarriesEveryFactTheJsonBodyPublishes(_CashbookTotalsCase):
         human = self.totals().stdout
 
         _assert_prose_carries_every_leaf(self, payload, human)
+
+    def test_every_leaf_is_checked_against_a_narrow_block_of_its_own(self) -> None:
+        """Positive control on the BLOCKS, not on the walk.
+
+        The check above is only as strong as the lines it looks at, and the
+        failure it replaced was a search over the whole output: a block that
+        widened back to everything would keep every assertion green while
+        covering nothing. So each leaf's block must be non-empty and at most
+        ``_BLOCK_LINE_CEILING`` lines of the ~30 the report prints.
+        """
+        payload = _strict_json(self.totals("--format", "json").stdout)
+
+        human = self.totals().stdout
+        printed = len(_collapsed_lines(human))
+
+        self.assertGreater(printed, 2 * _BLOCK_LINE_CEILING, human)
+        for path, _value in _leaves(payload):
+            if path in _HUMAN_EXEMPT_KEYS:
+                continue
+            block, _name = _requirement(path, payload)
+            rendered = _prose_block(human, block)
+            with self.subTest(field=path, block=block):
+                self.assertNotEqual(rendered, "", f"{block} selects no line")
+                self.assertLessEqual(rendered.count(" | ") + 1, _BLOCK_LINE_CEILING, rendered)
 
     def test_the_prose_carries_the_number_the_record_holds(self) -> None:
         """**Mutation it catches:** a renderer that computes a line of its own.
