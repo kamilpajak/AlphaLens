@@ -116,6 +116,59 @@ _MONEY_LEAF_KEYS = {"value", "currency", "rows", "null_reason", "value_rendered"
 #: would satisfy every per-leaf assertion below without it.
 _MONEY_LEAF_FLOOR = 10
 
+#: How many leaves the whole body carries at least. Measured at 100 on the
+#: seeded capture; a floor rather than the number, because a field added to the
+#: body must not make a parity test red for the wrong reason.
+_LEAF_FLOOR = 90
+
+#: The one published key the prose does not carry. ``schema`` is the machine
+#: contract's own identity, not a fact about this window, and an operator
+#: cannot act on it. Named rather than silently skipped, so a second exemption
+#: is a line somebody writes down.
+_HUMAN_EXEMPT_KEYS = ("schema",)
+
+#: The word for a published null and for an empty list. ``null`` and ``[]``
+#: are what the JSON body says; a human renderer printing JSON literals is a
+#: serialiser wearing a renderer's name.
+_NONE = "none"
+
+#: A value the seeded store cannot produce and no identity over it allows, for
+#: the tests that ask which side of the seam a published number came from.
+_ABSURD_PLN = -123456.78
+
+#: The labels of the eight published money lines, in render order, keyed by
+#: the body field each one renders.
+_MONEY_LINES: tuple[tuple[str, str], ...] = (
+    ("net_closed_acct", "net on closed episodes"),
+    ("cost_basis_open_acct", "cost basis of open episodes"),
+    ("income_acct", "dividends and withholding tax"),
+    ("unclassified_acct", "unclassified cash events"),
+    ("residual_acct", "residual not explained above"),
+    ("subtotal_acct", "trading and income subtotal"),
+    ("deposits_acct", "deposits and withdrawals"),
+    ("cash_book_sum_acct", "cash book sum"),
+)
+_MONEY_LABELS = tuple(label for _key, label in _MONEY_LINES)
+_NET_LABEL = _MONEY_LINES[0][1]
+_COST_BASIS_LABEL = _MONEY_LINES[1][1]
+_UNCLASSIFIED_LABEL = _MONEY_LINES[3][1]
+_RESIDUAL_LABEL = _MONEY_LINES[4][1]
+_SUBTOTAL_LABEL = _MONEY_LINES[5][1]
+_DEPOSITS_LABEL = _MONEY_LINES[6][1]
+
+#: The labels of the fact rows -- the ones that carry ``name value`` pairs
+#: rather than one money cell. They share one column width.
+_FACT_LABELS = (
+    "basis",
+    "exclusions",
+    "fills_unassigned",
+    "restated",
+    "malformed",
+    "coverage",
+    "bucket",
+    "balance",
+)
+
 
 def _reject_json_constant(token: str) -> None:
     """``json.loads`` accepts NaN / Infinity; a strict reader does not."""
@@ -154,6 +207,95 @@ def _failure_from(result) -> dict:
     return objects[0]
 
 
+def _leaves(value: Any, prefix: str = "") -> list[tuple[str, Any]]:
+    """Every LEAF of the published body, as ``(dotted path, value)``.
+
+    Three rules the sync command's version does not need:
+
+    * **lists are recursed into**, with the index as a path segment.
+      ``buckets``, ``balance_checks`` and ``coverage.gaps`` are lists, and a
+      dict-only walk hands each one to the prose check as a single leaf whose
+      token is a Python list repr -- a token no renderer prints, so the whole
+      list half of the body would read as covered and be unchecked;
+    * **an EMPTY list is a leaf of its own.** ``gaps: []`` is the common case
+      and it is a fact ("no hole in the coverage"), so the renderer owes a
+      word for it;
+    * **one money value is ONE fact plus its row count.** ``value_rendered``
+      carries the number WITH its currency, or the null reason when there is
+      no number, so ``value``, ``currency`` and ``null_reason`` are that same
+      fact in parts; requiring each separately would demand the prose print
+      the bare float, which is exactly what memo section 5(d) forbids.
+    """
+    if isinstance(value, dict):
+        if set(value) == _MONEY_LEAF_KEYS:
+            return [
+                (f"{prefix}value_rendered", value["value_rendered"]),
+                (f"{prefix}rows", value["rows"]),
+            ]
+        found: list[tuple[str, Any]] = []
+        for key, child in value.items():
+            found.extend(_leaves(child, f"{prefix}{key}."))
+        return found
+    if isinstance(value, list):
+        if not value:
+            return [(prefix.rstrip("."), value)]
+        nested: list[tuple[str, Any]] = []
+        for index, child in enumerate(value):
+            nested.extend(_leaves(child, f"{prefix}{index}."))
+        return nested
+    return [(prefix.rstrip("."), value)]
+
+
+def _human_token(value: Any) -> str:
+    """How one published leaf has to read in the prose.
+
+    ``yes`` / ``no`` rather than ``true`` / ``false``: the JSON body is what a
+    machine branches on, and a human renderer printing JSON literals is the
+    tell of a renderer that is really a serialiser. A null and an empty list
+    share one word, because they say the same thing to an operator -- there is
+    nothing here -- and two words for one fact is how a reader learns to skim.
+    """
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if value is None or value == []:
+        return _NONE
+    return str(value)
+
+
+def _label_block(human: str, label: str) -> str:
+    """Every prose line whose first field is ``label``, whitespace collapsed.
+
+    Per label rather than over the whole output, because the counts are mostly
+    zeros: ``cash_events 0`` is in two mappings at once, so a check against
+    the full text cannot tell which label printed it.
+    """
+    lines = [" ".join(line.split()) for line in human.splitlines() if line.strip()]
+    return " | ".join(line for line in lines if line.split()[0] == label)
+
+
+def _assert_prose_carries_every_leaf(case: unittest.TestCase, payload: dict, human: str) -> None:
+    """Every leaf's token, whole and space-bounded, in the collapsed prose.
+
+    Space-bounded rather than a plain substring: ``0`` is inside ``104`` and
+    ``no`` is inside ``none``, so a substring check passes whatever the
+    renderer drops.
+    """
+    bounded = f" {' '.join(human.split())} "
+    for path, value in _leaves(payload):
+        if path in _HUMAN_EXEMPT_KEYS:
+            continue
+        with case.subTest(field=path):
+            case.assertIn(f" {_human_token(value)} ", bounded)
+
+
+def _line_index(lines: list[str], label: str) -> int:
+    """Where the line carrying ``label`` sits, so ORDER can be asserted."""
+    for index, line in enumerate(lines):
+        if line.startswith(label):
+            return index
+    raise AssertionError(f"no line starts with {label!r}:\n" + "\n".join(lines))
+
+
 def _money_leaves(value: Any, prefix: str = "") -> list[tuple[str, dict]]:
     """Every published money value, as ``(dotted path, the object)``."""
     found: list[tuple[str, dict]] = []
@@ -178,7 +320,13 @@ class _CashbookTotalsCase(IsolatedHomeTestCase):
         env_patcher.start()
         self.addCleanup(env_patcher.stop)
 
-    def seed(self, *, since: str = _SWEPT_SINCE, until: str = _SWEPT_UNTIL) -> None:
+    def seed(
+        self,
+        *,
+        since: str = _SWEPT_SINCE,
+        until: str = _SWEPT_UNTIL,
+        now: dt.datetime = _SWEPT_AT,
+    ) -> None:
         """Store the whole capture under one sweep, through the real sweep path."""
         read = AccountCashRead(
             events=tuple(BOOKINGS),
@@ -194,7 +342,7 @@ class _CashbookTotalsCase(IsolatedHomeTestCase):
             since=dt.date.fromisoformat(since),
             until=dt.date.fromisoformat(until),
         )
-        sweep.apply_sweep(plan, now=_SWEPT_AT)
+        sweep.apply_sweep(plan, now=now)
 
     def invoke(self, argv: list[str]):
         """Run one cashbook command with the unit-composition seams faked."""
@@ -206,10 +354,14 @@ class _CashbookTotalsCase(IsolatedHomeTestCase):
         ):
             return self.runner.invoke(cashbook_app, argv)
 
-    def totals(self, *extra: str, env: str = _LIVE, since: str = _SWEPT_SINCE):
-        return self.invoke(
-            ["totals", "--since", since, "--until", _SWEPT_UNTIL, "--env", env, *extra]
-        )
+    def totals(
+        self,
+        *extra: str,
+        env: str = _LIVE,
+        since: str = _SWEPT_SINCE,
+        until: str = _SWEPT_UNTIL,
+    ):
+        return self.invoke(["totals", "--since", since, "--until", until, "--env", env, *extra])
 
     def record(self, *, since: str = _SWEPT_SINCE, until: str = _SWEPT_UNTIL):
         """The record the command must render, built by the same function."""
@@ -371,6 +523,245 @@ class AUsageRefusalRendersTheWayTheCallerAsked(_CashbookTotalsCase):
         self.assertEqual(result.exit_code, _EXIT_USAGE)
         self.assertEqual(result.stdout, "")
         self.assertEqual(_failure_from(result)["code"], "usage")
+
+
+class TheProseCarriesEveryFactTheJsonBodyPublishes(_CashbookTotalsCase):
+    """The repo CLI doctrine: one internal result rendered two ways.
+
+    Driven by the PAYLOAD, over every leaf of it, so the next field added to
+    the body is covered without anybody listing it here. The walk recurses
+    into LISTS as well as dicts (``buckets``, ``balance_checks`` and
+    ``coverage.gaps`` are lists, and a dict-only walk hands each of them to
+    the prose check as one Python list repr, which no renderer would ever
+    print).
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.seed()
+
+    def test_the_walk_found_the_whole_body(self) -> None:
+        """Positive control with a FLOOR: a walk that stopped at the first
+        container would make every parity assertion below cover a handful of
+        scalars while reading as full coverage."""
+        payload = _strict_json(self.totals("--format", "json").stdout)
+
+        leaves = _leaves(payload)
+
+        self.assertGreaterEqual(len(leaves), _LEAF_FLOOR)
+        # The null half of the body really is here: one snapshot cannot answer
+        # the incremental check, so its three amounts render as their reason.
+        # Stated rather than assumed, because the class below says this run is
+        # what covers that half.
+        self.assertIn(
+            ("balance_checks.1.difference.value_rendered", "account_amount_not_reported"),
+            leaves,
+        )
+        self.assertIn(("coverage.gaps", []), leaves)
+
+    def test_every_leaf_of_the_body_appears_in_the_prose(self) -> None:
+        payload = _strict_json(self.totals("--format", "json").stdout)
+
+        human = self.totals().stdout
+
+        self._assert_prose_carries_every_leaf(payload, human)
+
+    def test_the_prose_carries_the_number_the_record_holds(self) -> None:
+        """**Mutation it catches:** a renderer that computes a line of its own.
+
+        The record handed in here disagrees with the seeded store and with
+        every identity over it, so a prose line derived from the others would
+        print the store's figure instead.
+        """
+        real = self.record()
+        doctored = replace(real, net_closed_acct=replace(real.net_closed_acct, value=_ABSURD_PLN))
+
+        with mock.patch.object(report, "build_totals", return_value=doctored):
+            human = self.totals().stdout
+
+        self.assertIn(f"{_ABSURD_PLN:.2f} PLN", human)
+
+    def test_every_published_count_appears_under_its_own_label(self) -> None:
+        """The other half, which full coverage alone does not give: the counts
+        are mostly zeros, so a renderer printing one mapping's numbers under
+        another's label would satisfy every leaf check above.
+
+        ``fills_unassigned`` is the body's key and ``unassigned`` is not, so
+        the label is read off the payload rather than written here.
+        """
+        payload = _strict_json(self.totals("--format", "json").stdout)
+
+        human = self.totals().stdout
+
+        for label in ("exclusions", "fills_unassigned", "restated", "malformed"):
+            block = _label_block(human, label)
+            self.assertNotEqual(block, "", f"{label} has no line of its own")
+            for name, value in payload["basis"][label].items():
+                with self.subTest(label=label, entry=name):
+                    self.assertIn(f"{name} {value}", block)
+
+    def test_the_fact_rows_line_up_in_one_column(self) -> None:
+        """Asserted as "every fact row agrees", not against a number, so a new
+        label either fits or turns this red. ``fills_unassigned`` is 16
+        characters; a width copied from the sync body's 15 starts that one row
+        a character late while every other row lines up."""
+        human = self.totals().stdout
+
+        starts = {
+            len(line) - len(line.split(maxsplit=1)[1])
+            for line in human.splitlines()
+            if line.strip() and line.split()[0] in _FACT_LABELS
+        }
+
+        self.assertEqual(len(starts), 1, human)
+
+    def _assert_prose_carries_every_leaf(self, payload: dict, human: str) -> None:
+        _assert_prose_carries_every_leaf(self, payload, human)
+
+
+class TheProseCarriesAGapAndASecondBalanceCheckToo(_CashbookTotalsCase):
+    """The same parity over the body shape where the lists are NOT empty.
+
+    Two sweeps with a 21-day hole between them make ``coverage.gaps`` a real
+    pair, and they give the incremental balance check the second snapshot it
+    needs, so all three of its money values are numbers rather than named
+    nulls. Neither shape appears in the full-span run above, where the gaps
+    list is empty and the incremental check is ``not_checkable`` -- that run
+    covers the NULL half of the body, this one the non-empty-list half.
+
+    Each sweep takes its OWN id: one id folds the two journals onto one
+    record, which moves ``history_begins`` instead of opening a gap.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.seed(since=_SWEPT_SINCE, until="2026-08-10")
+        self.seed(since="2026-09-01", until=_SWEPT_UNTIL, now=_SWEPT_AT + dt.timedelta(hours=1))
+
+    def test_the_window_really_has_a_gap_and_a_second_snapshot(self) -> None:
+        """Positive control: with neither shape present the parity assertion
+        below would be the full-span one again under a second name."""
+        payload = _strict_json(self.totals("--format", "json").stdout)
+
+        self.assertEqual(payload["coverage"]["gaps"], [["2026-08-11", "2026-08-31"]])
+        self.assertIsNotNone(payload["balance_checks"][1]["difference"]["value"])
+
+    def test_every_leaf_of_the_body_appears_in_the_prose(self) -> None:
+        payload = _strict_json(self.totals("--format", "json").stdout)
+
+        human = self.totals().stdout
+
+        _assert_prose_carries_every_leaf(self, payload, human)
+
+
+class TheFiveLoadBearingPropertiesOfTheRender(_CashbookTotalsCase):
+    """Memo section 6's own list, each one as its own assertion.
+
+    These are the properties a correct-looking renderer gets wrong: they are
+    about ORDER, about which line a number sits on, and about a unit -- none
+    of which the parity check above can see, because it only asks whether
+    each fact appears somewhere.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.seed()
+        self.human = self.totals().stdout
+        self.lines = [line for line in self.human.splitlines() if line.strip()]
+
+    def test_the_deposits_sit_below_the_subtotal_and_say_not_p_and_l(self) -> None:
+        """24 000 PLN of funding is the easiest number in this repo to misread
+        as profit. **Mutation it catches:** a renderer ordering by the body's
+        own key order, which puts the deposits above the subtotal."""
+        subtotal = _line_index(self.lines, _SUBTOTAL_LABEL)
+        deposits = _line_index(self.lines, _DEPOSITS_LABEL)
+
+        self.assertGreater(deposits, subtotal)
+        self.assertIn("not P&L", self.lines[deposits])
+        self.assertIn("24000.00 PLN", self.lines[deposits])
+        self.assertNotIn("24000.00", self.lines[subtotal])
+
+    def test_the_open_episodes_are_a_cost_basis_and_never_in_the_realized_line(self) -> None:
+        """**Mutation it catches:** the cost basis folded into the net, which
+        publishes money that is not realized as money that is."""
+        net = self.lines[_line_index(self.lines, _NET_LABEL)]
+        basis = self.lines[_line_index(self.lines, _COST_BASIS_LABEL)]
+
+        self.assertIn("329.49 PLN", net)
+        self.assertIn("after commission and exchange fee", net)
+        self.assertNotIn("3594.86", net)
+        self.assertIn("-3594.86 PLN", basis)
+        self.assertIn("not realized", basis)
+        # Its own as-of, which is NOT the window's end: the cost of a position
+        # that is still open is as-of the last day the store can speak for.
+        self.assertIn("as of 2026-10-03", basis)
+
+    def test_the_unclassified_line_prints_at_zero(self) -> None:
+        """Memo section 5(a): printed even at zero, so a type nobody has seen
+        reads as a CHANGED number rather than as a row appearing in a list the
+        reader has stopped scanning."""
+        line = self.lines[_line_index(self.lines, _UNCLASSIFIED_LABEL)]
+
+        self.assertIn("0.00 PLN", line)
+        self.assertIn("0 rows", line)
+
+    def test_the_residual_is_its_own_named_line(self) -> None:
+        """Measured at the 2026-09-12 cut, where it is -4334.10 PLN: at the
+        full span it is exactly 0.00, so a renderer that dropped the line
+        would be indistinguishable from one that printed it."""
+        human = self.totals(until="2026-09-12").stdout
+        lines = [line for line in human.splitlines() if line.strip()]
+
+        line = lines[_line_index(lines, _RESIDUAL_LABEL)]
+
+        self.assertIn("-4334.10 PLN", line)
+
+    def test_the_balance_line_says_it_agrees_and_that_it_cannot_see_a_restatement(self) -> None:
+        """**Mutation it catches:** shipping the cumulative check without its
+        ``detects_restatement`` flag, which makes "reconciles" read as proof
+        the history is intact. Memo section 5(c) makes that sentence
+        load-bearing.
+
+        Both checks, in one assertion each, because copying the flag from one
+        to the other is the mutation that makes the two indistinguishable: the
+        cumulative check is store-wide against the latest balance and cannot
+        see a correction to an old row, and the incremental one exists to.
+        """
+        block = _label_block(self.human, "balance")
+
+        self.assertIn("cumulative reconciles detects_restatement no", block)
+        self.assertIn("incremental not_checkable detects_restatement yes", block)
+        self.assertIn("null_reason one_snapshot_only", block)
+
+    def test_the_currency_is_on_every_number_and_not_only_in_a_header(self) -> None:
+        """Memo section 6's mock puts PLN in the header and leaves the numbers
+        bare; that is the half of it which disagrees with the memo's own
+        section 5(d) and with the house renderer. A number beside a threshold
+        in a different unit reads as a comfortable pass.
+        """
+        for label in _MONEY_LABELS:
+            with self.subTest(line=label):
+                cell = self.lines[_line_index(self.lines, label)][len(label) :].lstrip()
+                self.assertRegex(cell, r"^-?\d+\.\d{2} PLN\b")
+
+    def test_the_money_column_is_one_right_aligned_column(self) -> None:
+        """Every money cell ENDS at one offset, which is what a right-aligned
+        column means. **Mutation it catches:** a width literal drifting from
+        the widest published label or the widest rendered amount.
+
+        The cell is located by the token the BODY publishes
+        (``value_rendered``), searched past the label so a note repeating the
+        same amount cannot be mistaken for it.
+        """
+        payload = _strict_json(self.totals("--format", "json").stdout)
+
+        ends = set()
+        for key, label in _MONEY_LINES:
+            rendered = payload[key]["value_rendered"]
+            line = self.lines[_line_index(self.lines, label)]
+            ends.add(line.index(rendered, len(label)) + len(rendered))
+
+        self.assertEqual(len(ends), 1, self.human)
 
 
 class AWindowTheStoreCannotAnswerIsAFailureAndNotASmallerNumber(_CashbookTotalsCase):

@@ -306,10 +306,218 @@ def _render_sync_human(body: dict[str, Any]) -> None:
         _row("journals", f"{name:<12} {path}")
 
 
+#: Width of the TOTALS fact rows' label column: the widest label that body
+#: publishes. Its own constant rather than ``_LABEL_WIDTH``, which is the
+#: widest label of the SYNC body -- one character narrower, so sharing it
+#: would start the ``fills_unassigned`` row a character late while every other
+#: row lined up.
+_TOTALS_LABEL_WIDTH = len("fills_unassigned")
+
+#: The word for a published null and for an empty list. ``null`` and ``[]``
+#: are what the JSON body says, and a human renderer printing JSON literals is
+#: a serialiser wearing a renderer's name. ONE word for both, because they say
+#: the same thing to an operator -- there is nothing here.
+_NOT_STATED = "none"
+
+#: The eight published money lines, in memo section 6's render order, as
+#: ``(body field, label)``. The ORDER is load-bearing twice over: the deposits
+#: sit BELOW the subtotal because 24 000 PLN of funding is the easiest number
+#: in this repo to misread as profit, and the cost basis of what is still open
+#: is its own line because it is not realized money.
+_TOTALS_MONEY_LINES: tuple[tuple[str, str], ...] = (
+    ("net_closed_acct", "net on closed episodes"),
+    ("cost_basis_open_acct", "cost basis of open episodes"),
+    ("income_acct", "dividends and withholding tax"),
+    ("unclassified_acct", "unclassified cash events"),
+    ("residual_acct", "residual not explained above"),
+    ("subtotal_acct", "trading and income subtotal"),
+    ("deposits_acct", "deposits and withdrawals"),
+    ("cash_book_sum_acct", "cash book sum"),
+)
+
+#: What each money line's row count COUNTS, and what the number is not. The
+#: counts are in two spaces -- episodes for the first two lines, booking rows
+#: for the rest -- and a count in one space printed beside a number in another
+#: is this repo's own named defect.
+_TOTALS_MONEY_NOTES: dict[str, str] = {
+    "net_closed_acct": "episodes, after commission and exchange fee",
+    "cost_basis_open_acct": "episodes, not realized",
+    "income_acct": "rows",
+    "unclassified_acct": "rows",
+    "residual_acct": "rows, cash the lines above do not explain",
+    "subtotal_acct": "rows",
+    "deposits_acct": "rows, not P&L",
+    "cash_book_sum_acct": "rows",
+}
+
+#: The money line whose row count is not the whole story: it carries its own
+#: as-of (the cost of a position still open is as-of the last day the store can
+#: speak for, not the window's end) and the count of spans still holding shares
+#: that the amount leaves out.
+_COST_BASIS_FIELD = "cost_basis_open_acct"
+
+
+def _stated(value: Any) -> str:
+    """One published scalar, with a word for the absent case."""
+    return _NOT_STATED if value is None else str(value)
+
+
+def _joined(values: list[str]) -> str:
+    """A published list of words, with a word for the empty case.
+
+    Two spaces between them rather than a comma, so each word stays bounded by
+    whitespace: a reader looking for one of them finds it whole.
+    """
+    return "  ".join(values) if values else _NOT_STATED
+
+
+def _fact(label: str, rest: str) -> None:
+    typer.echo(f"{label:<{_TOTALS_LABEL_WIDTH}} {rest}")
+
+
+def _money_note(field: str, body: dict[str, Any]) -> str:
+    """The row count one money line rests on, and what it is not."""
+    note = f"{body[field]['rows']} {_TOTALS_MONEY_NOTES[field]}"
+    if field != _COST_BASIS_FIELD:
+        return note
+    return (
+        f"{note}, as of {_stated(body['cost_basis_open_asof'])}, "
+        f"{body['cost_basis_open_excluded']} more held and not on this line"
+    )
+
+
+def _render_totals_money(body: dict[str, Any]) -> None:
+    """The eight lines, one right-aligned money column, two rules.
+
+    Both widths are DERIVED -- from the widest published label and the widest
+    rendered amount -- so a renamed line or a null value (which renders as its
+    reason, and a reason is longer than a number) moves the column instead of
+    overflowing a literal.
+    """
+    label_width = max(len(label) for _field, label in _TOTALS_MONEY_LINES)
+    money_width = max(len(body[field]["value_rendered"]) for field, _label in _TOTALS_MONEY_LINES)
+    rule = label_width + 1 + money_width
+    for field, label in _TOTALS_MONEY_LINES:
+        if field == "subtotal_acct":
+            typer.echo("-" * rule)
+        if field == "cash_book_sum_acct":
+            typer.echo("=" * rule)
+        amount = body[field]["value_rendered"]
+        typer.echo(f"{label:<{label_width}} {amount:>{money_width}}  {_money_note(field, body)}")
+
+
+def _render_totals_basis(basis: dict[str, Any]) -> None:
+    """What every number above rests on, printed ABOVE them (memo 5(d))."""
+    _fact(
+        "basis",
+        f"currency {_stated(basis['currency'])}  episodes {basis['episodes']}  "
+        f"episodes_summed {basis['episodes_summed']}  "
+        f"episodes_excluded {basis['episodes_excluded']}",
+    )
+    _fact(
+        "basis",
+        f"rows_in_store {basis['rows_in_store']}  rows_read {basis['rows_read']}  "
+        f"rows_classified {basis['rows_classified']}",
+    )
+    _fact(
+        "basis",
+        f"rows_outside_window {basis['rows_outside_window']}  "
+        f"rows_undated {basis['rows_undated']}  "
+        f"rows_date_malformed {basis['rows_date_malformed']}",
+    )
+    _fact("basis", f"fills_read {basis['fills_read']}  fills_assigned {basis['fills_assigned']}")
+    # Each mapping under its OWN label, the body's own key: these are four
+    # mappings of small integers that read alike, so one shared label would let
+    # a reader take one mapping's counts for another's.
+    for label in ("exclusions", "fills_unassigned", "restated", "malformed"):
+        _fact(label, "  ".join(f"{name} {count}" for name, count in basis[label].items()))
+
+
+def _render_totals_buckets(published: list[dict[str, Any]]) -> None:
+    """Every bucket, zero ones included: a type nobody has seen then reads as
+    a CHANGED number rather than as a new row in a list the reader has stopped
+    scanning (memo section 5(a))."""
+    name_width = max(len(bucket["name"]) for bucket in published)
+    money_width = max(len(bucket["total"]["value_rendered"]) for bucket in published)
+    for bucket in published:
+        _fact(
+            "bucket",
+            f"{bucket['name']:<{name_width}} "
+            f"{bucket['total']['value_rendered']:>{money_width}}  "
+            f"{bucket['rows']} rows  {_joined(bucket['bk_amount_types'])}",
+        )
+
+
+def _render_totals_coverage(coverage: dict[str, Any]) -> None:
+    """What the store can speak for, where it cannot, and what it cannot see."""
+    _fact(
+        "coverage",
+        f"history_begins {_stated(coverage['history_begins'])}  "
+        f"swept_through {_stated(coverage['swept_through'])}  "
+        f"sweeps {coverage['sweeps']}  malformed_windows {coverage['malformed_windows']}",
+    )
+    # One line per hole rather than one joined line, and `gaps none` when there
+    # is none: a shorter list reads as fuller coverage.
+    if coverage["gaps"]:
+        for first, last in coverage["gaps"]:
+            _fact("coverage", f"gap {first} .. {last}")
+    else:
+        _fact("coverage", f"gaps {_NOT_STATED}")
+    _fact("coverage", f"cannot_detect {_joined(coverage['cannot_detect'])}")
+
+
+def _render_totals_balance(checks: list[dict[str, Any]]) -> None:
+    """Both cross-checks, each stating its own basis and its own blind spot.
+
+    ``detects_restatement`` sits on the same line as the verdict on purpose:
+    the cumulative check is store-wide against the latest balance and cannot
+    see a correction to an old row, so "reconciles" alone would read as proof
+    the history is intact (memo section 5(c)).
+    """
+    for check in checks:
+        kind = check["kind"]
+        _fact(
+            "balance",
+            f"{kind}  {check['verdict']}  "
+            f"detects_restatement {_YES_NO[check['detects_restatement']]}  "
+            f"null_reason {_stated(check['null_reason'])}",
+        )
+        for name in ("expected", "observed", "difference"):
+            amount = check[name]
+            _fact(
+                "balance",
+                f"{kind}  {name} {amount['value_rendered']} over {amount['rows']} rows",
+            )
+        _fact(
+            "balance",
+            f"{kind}  rows {check['rows']}  {_stated(check['since'])} .. "
+            f"{_stated(check['until'])}  asof {_stated(check['asof'])}",
+        )
+
+
 def _render_totals_human(body: dict[str, Any]) -> None:
-    """The operator's version of the cash book's answer (memo section 6)."""
+    """The operator's version of the cash book's answer (memo section 6).
+
+    EVERY published fact, which is the repo CLI doctrine's own rule -- one
+    internal result rendered two ways, both carrying the same facts. ``schema``
+    is the one key with no prose form: it is the machine contract's identity
+    rather than a fact about this window.
+
+    The currency is ON every number and never once in a header, per memo
+    section 5(d) and the house renderer: a number beside a threshold in a
+    different unit reads as a comfortable pass. It arrives already rendered,
+    as the body's own ``value_rendered``, so the prose and the JSON cannot
+    come apart over how one amount reads.
+    """
     basis = body["basis"]
     typer.echo(f"cashbook totals {body['env']} {basis['window_since']} .. {basis['window_until']}")
+    _render_totals_basis(basis)
+    typer.echo("")
+    _render_totals_money(body)
+    typer.echo("")
+    _render_totals_buckets(body["buckets"])
+    _render_totals_coverage(body["coverage"])
+    _render_totals_balance(body["balance_checks"])
 
 
 @cashbook_app.command("sync")
