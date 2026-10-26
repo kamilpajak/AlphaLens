@@ -197,7 +197,7 @@ def _verdict(difference: AcctAmount) -> str:
 
 def _not_checkable(kind: str, reason: str, *, asof: str | None = None) -> BalanceCheck:
     """A check nobody could make: three named absences and no number."""
-    absent = acct_null(reason_for(reason), None, rows=0)
+    absent = acct_null(_money_null_for(reason), None, rows=0)
     return BalanceCheck(
         kind=kind,
         verdict=VERDICT_NOT_CHECKABLE,
@@ -213,7 +213,7 @@ def _not_checkable(kind: str, reason: str, *, asof: str | None = None) -> Balanc
     )
 
 
-def reason_for(check_null_reason: str) -> str:
+def _money_null_for(check_null_reason: str) -> str:
     """The money vocabulary's reason for a check that could not be made.
 
     :class:`~.money.AcctAmount` validates its ``null_reason`` against its own
