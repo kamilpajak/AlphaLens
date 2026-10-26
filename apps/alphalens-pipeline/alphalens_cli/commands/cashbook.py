@@ -1,38 +1,52 @@
-"""CLI: ``alphalens cashbook`` — the account's own cash book (#1689, memo Phase 3).
+"""CLI: ``alphalens cashbook`` — the account's own cash book (#1689, memo 3-4).
 
     alphalens cashbook sync --since D --until D [--env sim|live] [--dry-run]
         [--format human|json]  — read the account's bookings, trades and
         balance for a window, fold them against the store, and append what is
         new. ``--dry-run`` plans and echoes, and writes nothing.
 
+    alphalens cashbook totals --since D --until D [--env sim|live]
+        [--format human|json]  — what the money did over one window, off the
+        STORE alone. Reads no vendor, writes nothing.
+
 **What this group answers, and what it does not.** ``/edge`` asks whether the
 pipeline SELECTS well, over every candidate of every brief; ``broker trades``
 answers per PICK. Neither answers what the ACCOUNT's own money did, which is
-what this store is for. ``sync`` is the acquisition half only: it publishes
-SWEEP FACTS — the window asked for, the window the vendor served, rows read,
-rows appended, rows already present, restated, malformed — and no money total,
-no bucket and no profit-and-loss number. Those are memo Phase 4, and
-publishing one now inside ``alphalens.cashbook.sync/v1`` would mean changing
-the meaning of a published field inside a major version.
+what this store is for.
+
+**The two commands are the two halves, and each publishes only its own.**
+``sync`` is acquisition: SWEEP FACTS — the window asked for, the window the
+vendor served, rows read, appended, already present, restated, malformed — and
+no money total, no bucket and no profit-and-loss number, because publishing
+one inside ``alphalens.cashbook.sync/v1`` would mean changing the meaning of a
+published field inside a major version. ``totals`` is the answer: one set of
+money lines, each with the basis it rests on, rendered off the record
+:func:`~alphalens_pipeline.account_cash.report.build_totals` returns. It
+computes no money of its own, and it refuses a window the store cannot speak
+for rather than answering a smaller number.
 
 **The envelope and the failure contract are the broker group's** (#1379,
 #1389), shared through :mod:`alphalens_cli.commands._cli_envelope`: ``--format
 human|json``, exactly one strict JSON value on stdout or none at all, and a
-refusal as one JSON object on stderr with stdout empty. Two codes are this
-group's own, both CLI-owned (the contract package never learns a CLI concept,
-#1122): ``cashbook_sync_refused`` with a closed ``details.reason`` vocabulary,
-and ``cashbook_sweep_busy``, which is RETRYABLE because nothing was appended.
+refusal as one JSON object on stderr with stdout empty. Three codes are this
+group's own, all CLI-owned (the contract package never learns a CLI concept,
+#1122): ``cashbook_sync_refused`` and ``cashbook_totals_refused``, each with
+its own closed ``details.reason`` vocabulary, and ``cashbook_sweep_busy``,
+which is RETRYABLE because nothing was appended.
 
 **The order of the body is load-bearing.** ``--format`` is settled first, so
 every refusal after it renders the way the caller asked; the window is parsed
-and bounded before a vendor is touched; and the JSON body is rendered BEFORE
-the append, so a body that cannot be rendered strictly is a refusal rather than
-a failure report for a write that already happened — the
+and bounded before a vendor is touched; and ``sync``'s JSON body is rendered
+BEFORE the append, so a body that cannot be rendered strictly is a refusal
+rather than a failure report for a write that already happened — the
 ``write_outcome_unknown`` shape.
 
-**This command places nothing.** It holds a broker only to READ it, and
+**Neither command places anything, and ``totals`` holds no broker at all.**
+``sync`` holds one only to READ it;
 ``tests/brokers/test_broker_cli_places_nothing.py`` walks this module to keep
-it so.
+it so, and ``tests/account_cash/test_cashbook_totals_cli.py`` pins that
+``totals`` builds none, because a window it cannot answer offline is a window
+it refuses.
 
 Heavy imports stay inside the command body (lazy-CLI doctrine, see
 ``apps/alphalens-pipeline/CLAUDE.md``): the 15-minute edgar-detect timer pays
@@ -65,9 +79,11 @@ _TOTALS_SCHEMA = "alphalens.cashbook.totals/v1"
 cashbook_app = typer.Typer(
     name="cashbook",
     help=(
-        "The account's own cash book — what the money did (#1689). Reads LIVE; "
-        "on SIM the report endpoints answer with canned rows from other accounts, "
-        "so a sweep refuses rather than store fiction."
+        "The account's own cash book — what the money did (#1689). `sync` reads the "
+        "account and stores the window; `totals` answers one window off the store. "
+        "LIVE only: on SIM the report endpoints serve canned rows from other "
+        "accounts, so a sweep refuses rather than store fiction and a total refuses "
+        "rather than sum an empty store."
     ),
     no_args_is_help=True,
 )
