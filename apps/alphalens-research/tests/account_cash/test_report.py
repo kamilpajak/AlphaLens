@@ -47,6 +47,7 @@ from tests.account_cash.cashbook_fixture import (
     TRADES,
     synthetic_clipped_partial,
     synthetic_clipped_sell_only,
+    synthetic_held_but_imbalanced,
 )
 from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
 
@@ -1331,6 +1332,98 @@ class ThereIsNoOpenEpisodeAtAll(IsolatedHomeTestCase):
             with self.subTest(line=name):
                 self.assertIsNone(line.null_reason)
                 self.assertEqual(line.currency, "PLN")
+
+
+class AHeldPositionExcludedFromTheLineIsCountedBesideIt(IsolatedHomeTestCase):
+    """F2: the open cost basis filters on ``open``, and the state is first-hit.
+
+    ``_cost_basis_open`` keeps the episodes whose state is ``open``, while
+    :data:`episodes.EXCLUSION_ORDER` resolves a state by first hit over
+    ``(window_clipped, imbalanced, open)``. So a span that still holds real
+    shares and ALSO carries either flag is stamped with the flag and dropped
+    from the line -- the money at risk disappearing from the very line that
+    exists to state it, with only an exclusion count to hint at it.
+
+    The filter STAYS: this layer refuses to fold an unvouched cost basis into
+    a published figure, which is the same rule that nulls a total over two
+    currencies rather than picking one. A span whose quantity walk is
+    unknowable has no cost basis anyone can vouch for. What changes is that
+    the line carries a SECOND count, so it cannot be read as flat.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        _seed(
+            read=_read(
+                trades=(
+                    *TRADES,
+                    *synthetic_clipped_partial(),
+                    *synthetic_held_but_imbalanced(),
+                    *synthetic_clipped_sell_only(),
+                )
+            )
+        )
+        self.totals = report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=_SWEPT_UNTIL)
+
+    def test_the_premise_is_that_two_excluded_episodes_still_hold_shares(self) -> None:
+        """Stated rather than assumed, because the whole claim is about spans
+        the published state calls something other than ``open``.
+
+        ``window_clipped`` holds 2 shares at -200.00 and ``imbalanced`` holds
+        10 at -1 000.00. The lone sell adds an unassigned fill and NO episode,
+        so it must not be counted here -- the count is about episodes holding
+        quantity, not about fills nobody could place.
+        """
+        basis = self.totals.basis
+
+        self.assertEqual(basis.exclusions[episodes.STATE_WINDOW_CLIPPED], 1)
+        self.assertEqual(basis.exclusions[episodes.STATE_IMBALANCED], 1)
+        self.assertEqual(basis.exclusions[episodes.STATE_OPEN], OPEN_EPISODES)
+        self.assertEqual(basis.episodes, EPISODES + 2)
+
+    def test_the_line_still_states_only_the_cost_it_can_vouch_for(self) -> None:
+        """The filter is kept. **Mutation it catches:** folding the excluded
+        spans in, which would publish -4 794.86 as the cost of the open
+        positions -- a figure resting on a quantity walk that is unknowable
+        for two of its five spans."""
+        self.assertEqual(self.totals.cost_basis_open_acct.value, COST_BASIS_OPEN_PLN)
+        self.assertEqual(self.totals.cost_basis_open_acct.rows, OPEN_EPISODES)
+
+    def test_a_second_count_says_the_line_is_not_the_whole_exposure(self) -> None:
+        """**Mutation it catches:** publishing the line alone, which reads as
+        "nothing else is open" on an account holding 12 shares it does not
+        name."""
+        self.assertEqual(self.totals.cost_basis_open_excluded, 2)
+
+    def test_the_count_reaches_the_wire_form_beside_the_line(self) -> None:
+        body = json.loads(json.dumps(self.totals.to_jsonable(), allow_nan=False, sort_keys=True))
+
+        self.assertEqual(body["cost_basis_open_excluded"], 2)
+        self.assertEqual(body["cost_basis_open_acct"]["value"], COST_BASIS_OPEN_PLN)
+
+
+class NothingHeldOutsideTheLineCountsZero(IsolatedHomeTestCase):
+    """The negative control for the class above, on the real capture.
+
+    Three episodes are excluded there -- all three ``open``, all three ON the
+    line -- so a count hard-wired to ``episodes_excluded`` would satisfy every
+    assertion above and answer 3 here. Its own home, because the store is
+    append-only: re-seeding inside the other class cannot take the synthetic
+    trade rows back out.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        _seed()
+        self.totals = report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=_SWEPT_UNTIL)
+
+    def test_the_premise_is_that_three_episodes_are_excluded_and_all_are_open(self) -> None:
+        self.assertEqual(self.totals.basis.episodes_excluded, OPEN_EPISODES)
+        self.assertEqual(self.totals.basis.exclusions[episodes.STATE_OPEN], OPEN_EPISODES)
+
+    def test_every_held_episode_is_on_the_line_so_the_count_is_zero(self) -> None:
+        self.assertEqual(self.totals.cost_basis_open_acct.rows, OPEN_EPISODES)
+        self.assertEqual(self.totals.cost_basis_open_excluded, 0)
 
 
 #: A balance body the vendor answered without ``Currency``. Every other field

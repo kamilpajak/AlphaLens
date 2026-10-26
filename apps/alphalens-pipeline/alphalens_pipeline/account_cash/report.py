@@ -24,7 +24,12 @@ speak for" and the wrong one to "what does this number rest on".
 FULL cost of every open episode and publishes its own as-of, because the cost
 of a still-open position is as-of now and not as-of the window's end. On the
 real capture at ``until=2026-09-12`` a window-clipped basis would be -466.98
-of the -3594.86 that is actually at risk.
+of the -3594.86 that is actually at risk. It also publishes
+``cost_basis_open_excluded``: ``open`` is a STATE, resolved first-hit, so a
+span still holding shares under a ``window_clipped`` or ``imbalanced`` flag is
+left out of the amount -- rightly, since neither has a vouchable cost basis --
+and the count beside the line is what stops the line reading as the whole
+exposure.
 
 **Episodes are summed when their CLOSED date falls in the window**, and one
 that closed outside it is excluded with its own reason
@@ -100,6 +105,8 @@ import itertools
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
+
+from broker_contract.constants import QTY_PRECISION
 
 from alphalens_pipeline.account_cash import balance_check, buckets, episodes, paths, store
 from alphalens_pipeline.account_cash.codec import SweepRecord
@@ -476,6 +483,12 @@ class CashBookTotals:
     #: position held. Stating the later date would claim the basis is current
     #: as of a day whose fills the store never read.
     cost_basis_open_asof: str | None
+    #: Episodes still HOLDING quantity that the line above leaves out, because
+    #: their state is ``window_clipped`` or ``imbalanced`` rather than
+    #: ``open`` (see :func:`_held_but_not_on_the_line`). Published beside the
+    #: line so a non-zero one cannot be read as "nothing else is open"; the
+    #: line itself stays the cost this layer can vouch for.
+    cost_basis_open_excluded: int
     income_acct: AcctAmount
     unclassified_acct: AcctAmount
     residual_acct: AcctAmount
@@ -513,6 +526,7 @@ class CashBookTotals:
             "basis": self.basis.to_jsonable(),
             "coverage": self.coverage.to_jsonable(),
             "cost_basis_open_asof": self.cost_basis_open_asof,
+            "cost_basis_open_excluded": self.cost_basis_open_excluded,
             "buckets": [bucket.to_jsonable() for bucket in self.buckets],
             "balance_checks": [check.to_jsonable() for check in self.balance_checks],
         }
@@ -803,13 +817,66 @@ def _exclusions_of(
     return tuple(summed), counts
 
 
+def _still_holds_quantity(episode: episodes.CashEpisode) -> bool:
+    """True when this span's quantity walk never came back to flat.
+
+    Read off the published quantities against ``QTY_PRECISION``, the same
+    epsilon :mod:`episodes` uses for its own flat test, because the STATE
+    cannot answer this question: ``EXCLUSION_ORDER`` resolves a state by FIRST
+    hit over ``(window_clipped, imbalanced, open)``, so a span that really does
+    hold shares carries either flag instead of ``open`` whenever one applies.
+    """
+    return abs(episode.opened_qty - episode.closed_qty) > QTY_PRECISION
+
+
+def _held_but_not_on_the_line(found: Sequence[episodes.CashEpisode]) -> int:
+    """Episodes still holding quantity that :func:`_cost_basis_open` drops.
+
+    The second count published beside ``cost_basis_open_acct``, and the reason
+    it exists: the line keeps only the episodes whose state is ``open``, so a
+    span holding real shares under a ``window_clipped`` or ``imbalanced`` flag
+    vanishes from the one line that exists to state the money at risk -- with
+    nothing but an exclusion count by reason, two blocks away, to hint at it.
+    A reader of ``-3 594.86 / 3 episodes`` has no way to tell that account from
+    one holding twelve more shares nobody named.
+
+    **Including them in the LINE would be worse**, which is why this is a
+    count and not a wider filter. A ``window_clipped`` span's entry predates
+    what was swept and an ``imbalanced`` one's quantity walk is unknowable from
+    some row on, so neither has a cost basis anyone can vouch for -- and this
+    layer's rule everywhere else is that an unvouched number is not published:
+    ``acct_sum`` nulls a total over two currencies rather than picking one, and
+    one absent amount nulls the whole total rather than reading as zero.
+    Folding them in would publish a figure whose own derivation says it may be
+    a fraction of the position.
+
+    Counted over EPISODES holding quantity, never over unassigned fills: a
+    close the walk could not place starts no episode at all, so there is no
+    position for it to be holding.
+    """
+    return sum(
+        1
+        for episode in found
+        if _still_holds_quantity(episode) and episode.state != episodes.STATE_OPEN
+    )
+
+
 def _cost_basis_open(found: Sequence[episodes.CashEpisode], currency: str | None) -> AcctAmount:
-    """The FULL cost of every open episode, at zero when none is open.
+    """The FULL cost of every ``open`` episode, at zero when none is open.
 
     Not window-clipped (amendment W1): the cost of a position that is still
     open is as-of the last day the store can speak for, and a clipped one
     answers -466.98 of the -3 594.86 actually at risk on the real capture at
     ``until=2026-09-12``.
+
+    **``open`` is a STATE here, and a held position can carry another one.**
+    ``EXCLUSION_ORDER`` is first-hit, so a span that still holds shares and
+    also carries ``window_clipped`` or ``imbalanced`` is stamped with the flag
+    and left out. The filter is right -- neither has a cost basis anyone can
+    vouch for -- and the containment is
+    :attr:`CashBookTotals.cost_basis_open_excluded`, which counts them beside
+    this line so it cannot be read as the whole exposure. See
+    :func:`_held_but_not_on_the_line`.
 
     **With no open episode this is ``0.00`` over 0 episodes, and NOT
     ``money.NULL_NEVER_OPENED``**, although that constant names this exact
@@ -996,6 +1063,7 @@ def build_totals(*, env: str, since: dt.date, until: dt.date) -> CashBookTotals:
         net_closed_acct=net_closed,
         cost_basis_open_acct=cost_basis_open,
         cost_basis_open_asof=coverage.swept_through,
+        cost_basis_open_excluded=_held_but_not_on_the_line(episode_fold.episodes),
         income_acct=income,
         unclassified_acct=unclassified,
         residual_acct=residual,
