@@ -33,6 +33,7 @@ from alphalens_pipeline.account_cash import (
     money,
     paths,
     report,
+    store,
     sweep,
 )
 from alphalens_pipeline.account_cash.codec import SweepRecord
@@ -743,6 +744,89 @@ class TheIdentitiesAreCheckedAndNotDescribed(IsolatedHomeTestCase):
 
         self.assertIn("bucket", str(ctx.exception))
 
+    def test_a_row_the_FOLD_lost_breaks_the_row_partition(self) -> None:
+        """F3. The row partition's right-hand side comes from a DIFFERENT path
+        than the list its left-hand side splits.
+
+        It used to compare ``inside + outside + undated`` against
+        ``len(events_fold.events)`` -- a partition of one list against that
+        same list's length. A row lost in the READ is missing from both sides
+        at once, so the identity held and the report published a 103-row total
+        for a 104-line journal. It is now compared against the journal's own
+        arithmetic, ``lines - malformed - duplicate_lines``, which is
+        incremented while the file is read.
+
+        Doctored here the way a silent ``continue`` in a fold looks: one
+        record gone from the list, every counter untouched.
+
+        **Mutation it catches:** the tautology. Measured 2026-10-26: green
+        before this change, with no raise and a published total short one row.
+        """
+        real = store.read_cash_events
+
+        def doctored(*, env: str) -> store.CashEventFold:
+            fold = real(env=env)
+            return replace(fold, events=fold.events[1:])
+
+        with mock.patch.object(store, "read_cash_events", doctored):
+            with self.assertRaises(report.CashBookIdentityError) as ctx:
+                report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=_SWEPT_UNTIL)
+
+        self.assertIn("row", str(ctx.exception))
+        self.assertIn(str(ALL_ROWS), str(ctx.exception))
+
+    def test_a_row_the_window_split_drops_breaks_it_too(self) -> None:
+        """The other half of the same partition, and the half that already
+        worked: a row counted in none of the three parts.
+
+        Both halves are asserted because the fix moved only the right-hand
+        side, and a right-hand side that no longer tracks the rows at all
+        would satisfy the test above while losing this one.
+        """
+        real = report._split_by_window
+
+        def doctored(events: object, **kwargs: object) -> object:
+            window = real(events, **kwargs)  # type: ignore[arg-type]
+            return replace(window, outside=window.outside - 1)
+
+        with mock.patch.object(report, "_split_by_window", doctored):
+            with self.assertRaises(report.CashBookIdentityError) as ctx:
+                report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=CUT)
+
+        self.assertIn("row", str(ctx.exception))
+
+    def test_a_row_the_CLASSIFICATION_lost_breaks_the_bucket_row_count(self) -> None:
+        """F4. The fourth partition compares the per-bucket row counts against
+        the fold's own ``rows`` counter.
+
+        It used to compare ``bucket_fold.rows`` against the length of the list
+        ``classify_buckets`` was handed -- which is what ``classify_buckets``
+        sets ``rows`` FROM, so nothing could refute it. That matters beyond
+        the count: ``_agree``'s docstring names this partition as what keeps a
+        lost row caught while BOTH sides of the bucket identity are nulls, and
+        ordinary data reaches that state (one booking row with an unreported
+        amount nulls its bucket and the row total together). The compensating
+        control was the tautology.
+
+        Doctored here the way a row dropped from the classification looks: one
+        bucket a row short, the fold's counter unchanged.
+
+        **Mutation it catches:** the tautology. Measured 2026-10-26: green
+        before this change.
+        """
+        real = buckets.classify_buckets
+
+        def doctored(rows: object) -> buckets.BucketFold:
+            fold = real(rows)  # type: ignore[arg-type]
+            first, *rest = fold.buckets
+            return replace(fold, buckets=(replace(first, rows=first.rows - 1), *rest))
+
+        with mock.patch.object(buckets, "classify_buckets", doctored):
+            with self.assertRaises(report.CashBookIdentityError) as ctx:
+                report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=_SWEPT_UNTIL)
+
+        self.assertIn("bucket row count", str(ctx.exception))
+
     def test_a_broken_coverage_partition_refuses_too(self) -> None:
         """The second positive control: one identity raising does not show
         that the other one is wired at all."""
@@ -1315,6 +1399,62 @@ class AStoreThatNamesNoAccountCurrencyStillAnswers(IsolatedHomeTestCase):
 
         self.assertIsNone(body["basis"]["currency"])
         self.assertEqual(body["env"], _LIVE)
+
+
+class TheBucketRowCountIsWhatGuardsAStoreWithNoCurrency(IsolatedHomeTestCase):
+    """The claim ``_agree`` makes, exercised on the input that reaches it.
+
+    With no account currency stated anywhere, BOTH sides of the bucket
+    identity are named absences and that identity holds unconditionally -- by
+    design, since no total is published on that line either. ``_agree``'s
+    docstring names the fourth partition as what keeps a lost row caught
+    there. Until 2026-10-26 that partition compared ``bucket_fold.rows``
+    against the length of the list ``classify_buckets`` was handed, which is
+    what it sets ``rows`` from, so nothing was left guarding this state at all.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.read = _read(
+            events=(),
+            trades=(),
+            balance=NO_CURRENCY_BALANCE,
+            events_window=ReadWindow(_SWEPT_SINCE.isoformat(), _SWEPT_UNTIL.isoformat(), 0),
+            trades_window=ReadWindow(_SWEPT_SINCE.isoformat(), _SWEPT_UNTIL.isoformat(), 0),
+        )
+
+    def test_the_premise_is_that_the_bucket_identity_cannot_speak_here(self) -> None:
+        """Stated rather than assumed: if either side carried a number, the
+        bucket identity would be the thing that caught the lost row and this
+        class would be about nothing."""
+        _seed(read=self.read)
+
+        totals = report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=_SWEPT_UNTIL)
+
+        self.assertIsNone(totals.basis.currency)
+        self.assertEqual(totals.basis.rows_in_store, 0)
+
+    def test_a_row_count_that_does_not_add_up_still_refuses(self) -> None:
+        """Doctored the way a row dropped from the classification looks -- one
+        bucket a row short, the fold's counter unchanged -- which is the shape
+        the old tautology could not see.
+
+        **Mutation it catches:** the fourth partition left as the tautology,
+        which leaves this store with no count check at all.
+        """
+        _seed(read=self.read)
+        real = buckets.classify_buckets
+
+        def doctored(rows: object) -> buckets.BucketFold:
+            fold = real(rows)  # type: ignore[arg-type]
+            first, *rest = fold.buckets
+            return replace(fold, buckets=(replace(first, rows=first.rows - 1), *rest))
+
+        with mock.patch.object(buckets, "classify_buckets", doctored):
+            with self.assertRaises(report.CashBookIdentityError) as ctx:
+                report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=_SWEPT_UNTIL)
+
+        self.assertIn("bucket row count", str(ctx.exception))
 
 
 class TwoAccountCurrenciesInOneStoreStillAnswer(IsolatedHomeTestCase):

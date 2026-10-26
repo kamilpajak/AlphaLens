@@ -107,12 +107,35 @@ __all__ = [
     "append_sweep",
     "append_trade_rows",
     "assert_writable",
+    "folded_records",
     "read_balances",
     "read_cash_events",
     "read_sweeps",
     "read_trade_rows",
     "sweep_window",
 ]
+
+
+def folded_records(fold: CashEventFold | TradeRowFold | BalanceFold) -> int:
+    """How many records this fold's journal held, from its COUNTERS.
+
+    ``lines - malformed - duplicate_lines``. Every line the read saw is
+    accounted for by exactly one of three terms, each incremented while the
+    file was read -- on statements separate from the one that puts a record in
+    the published list. So this is a second path to the same number, and a
+    record lost between the counters and the list makes the two disagree.
+
+    That is the whole point: the report's row partition splits the published
+    list by the window and compares the parts against THIS, not against the
+    length of the list it just split. A partition of a list against that same
+    list's length cannot produce the observation that would refute it.
+
+    It is a derivation and not a stored field so there is no third number to
+    keep in step; the arithmetic is pinned by
+    ``tests/account_cash/test_store.py``'s
+    ``TheFoldAccountsForEveryLineItRead``.
+    """
+    return fold.lines - fold.malformed - fold.duplicate_lines
 
 
 def sweep_window(record: codec.SweepRecord) -> tuple[dt.date, dt.date] | None:
@@ -217,16 +240,31 @@ class CashEventFold:
     events: list[CashEvent]
     malformed: int
     restated: int
+    #: Lines that DECODED onto a key already seen -- an identical re-append or
+    #: a restatement. The term that completes ``len(events) + malformed +
+    #: duplicate_lines == lines``, and ``restated`` could not serve as it:
+    #: that counts KEYS, so one key corrected twice is one restatement over
+    #: two duplicate lines.
+    #:
+    #: Its consumer is the report's row partition. That partition splits the
+    #: FOLDED records by the window and used to compare the parts against
+    #: ``len(events)`` -- a partition of one list against that same list's
+    #: length, which no dropped row can refute. These three counters are
+    #: incremented while the journal is READ, on statements separate from the
+    #: one that puts a record in the list, so they are a second path to the
+    #: same number and a record lost between the two breaks the identity.
+    duplicate_lines: int
     lines: int
 
 
 @dataclass(frozen=True)
 class TradeRowFold:
-    """Latest-per-``TradeId`` rows, with the same three counters."""
+    """Latest-per-``TradeId`` rows, with the same four counters."""
 
     rows: list[TradeRow]
     malformed: int
     restated: int
+    duplicate_lines: int
     lines: int
 
 
@@ -252,7 +290,7 @@ class BalanceAt:
 
 @dataclass(frozen=True)
 class BalanceFold:
-    """Oldest-first snapshots, each with its sweep key, plus the three counters.
+    """Oldest-first snapshots, each with its sweep key, plus the four counters.
 
     Before this the read threw ``malformed``, ``restated`` and ``lines`` into
     ``_, _, _``, so a corrupt balance line was invisible to every later reader
@@ -263,6 +301,7 @@ class BalanceFold:
     snapshots: list[BalanceAt]
     malformed: int
     restated: int
+    duplicate_lines: int
     lines: int
 
 
@@ -301,8 +340,8 @@ def _fold_by_key(
     decode: Callable[[Any], Any],
     key_of: Callable[[Any], str],
     row: str,
-) -> tuple[dict[str, Any], int, int, int]:
-    """``(latest per key, malformed, restated, lines)`` over one journal.
+) -> tuple[dict[str, Any], int, int, int, int]:
+    """``(latest per key, malformed, restated, duplicate_lines, lines)``.
 
     A malformed line is COUNTED, never dropped silently: a reader of a money
     store must be able to say how much of the journal it could not account for.
@@ -316,6 +355,7 @@ def _fold_by_key(
     rendered: dict[str, Any] = {}
     restated_keys: set[str] = set()
     malformed = 0
+    duplicate_lines = 0
     lines = 0
     for index, payload in _iter_payloads(path):
         lines += 1
@@ -330,11 +370,16 @@ def _fold_by_key(
             logger.warning("%s line %d is not a readable %s row: %s", path, index + 1, row, exc)
             continue
         key = key_of(record)
-        if key in latest and rendered[key] != payload:
-            restated_keys.add(key)
+        if key in latest:
+            # Counted per LINE, not per key: this is the term that makes
+            # `len(latest) + malformed + duplicate_lines == lines` hold, and
+            # `restated_keys` below is a set on purpose.
+            duplicate_lines += 1
+            if rendered[key] != payload:
+                restated_keys.add(key)
         latest[key] = record
         rendered[key] = payload
-    return latest, malformed, len(restated_keys), lines
+    return latest, malformed, len(restated_keys), duplicate_lines, lines
 
 
 # --- Appenders ---------------------------------------------------------------
@@ -409,27 +454,39 @@ def read_cash_events(*, env: str) -> CashEventFold:
     vendor row, so the sort key substitutes ``""`` rather than comparing
     ``None`` with a string, which raises.
     """
-    latest, malformed, restated, lines = _fold_by_key(
+    latest, malformed, restated, duplicates, lines = _fold_by_key(
         paths.cash_events_path(env),
         decode=codec.cash_event_from_jsonable,
         key_of=lambda event: event.bk_amount_id,
         row="cash_events",
     )
     events = sorted(latest.values(), key=lambda event: (event.date or "", event.bk_amount_id))
-    return CashEventFold(events=events, malformed=malformed, restated=restated, lines=lines)
+    return CashEventFold(
+        events=events,
+        malformed=malformed,
+        restated=restated,
+        duplicate_lines=duplicates,
+        lines=lines,
+    )
 
 
 def read_trade_rows(*, env: str) -> TradeRowFold:
     """Fold ``trade_rows.jsonl`` to one row per ``TradeId``, sorted by
     ``(trade_date, trade_id)``."""
-    latest, malformed, restated, lines = _fold_by_key(
+    latest, malformed, restated, duplicates, lines = _fold_by_key(
         paths.trade_rows_path(env),
         decode=codec.trade_row_from_jsonable,
         key_of=lambda row: row.trade_id,
         row="trade_rows",
     )
     rows = sorted(latest.values(), key=lambda row: (row.trade_date or "", row.trade_id))
-    return TradeRowFold(rows=rows, malformed=malformed, restated=restated, lines=lines)
+    return TradeRowFold(
+        rows=rows,
+        malformed=malformed,
+        restated=restated,
+        duplicate_lines=duplicates,
+        lines=lines,
+    )
 
 
 def read_balances(*, env: str) -> BalanceFold:
@@ -448,7 +505,7 @@ def read_balances(*, env: str) -> BalanceFold:
     ["balances"] is the place that gives the number a meaning, and the wire
     form of a stored sweep record stays unchanged.
     """
-    latest, malformed, restated, lines = _fold_by_key(
+    latest, malformed, restated, duplicates, lines = _fold_by_key(
         paths.balances_path(env),
         decode=_balance_line_from_jsonable,
         key_of=lambda pair: pair[0],
@@ -461,13 +518,14 @@ def read_balances(*, env: str) -> BalanceFold:
         ],
         malformed=malformed,
         restated=restated,
+        duplicate_lines=duplicates,
         lines=lines,
     )
 
 
 def read_sweeps(*, env: str) -> list[codec.SweepRecord]:
     """Every sweep record, one per ``sweep_id``, oldest first."""
-    latest, _, _, _ = _fold_by_key(
+    latest, _, _, _, _ = _fold_by_key(
         paths.sweeps_path(env),
         decode=codec.sweep_from_jsonable,
         key_of=lambda record: record.sweep_id,

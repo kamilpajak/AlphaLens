@@ -43,22 +43,37 @@ closed outside the window. ``residual_acct`` is that difference, computed by
 the same summing function as everything else, and it is zero only by accident
 on a window that happens to contain every episode whole.
 
-**Four partitions are checked, not described.** The bucket identity (the
-buckets add back to the rows they were given), the fill coverage partition
-(assigned + unassigned == the fills read), the row partition (window + outside
-+ undated + unparseable == the store's rows) and the classification count
-(every row handed to the classifier was counted by it). Each raises
-:class:`CashBookIdentityError` on its own rather than publishing a number
-beside a broken identity, which is the one thing they exist to prevent. The
-episode partition -- summed + excluded == episodes -- is held by construction
-instead, because :func:`_exclusions_of` stamps each episode exactly once.
+**Four partitions are checked, not described, and each of the four can be
+refuted.** The bucket identity (the buckets' amounts add back to the amount of
+the rows they were given), the fill coverage partition (assigned + unassigned
+== the fills read), the row partition (window + outside + undated +
+unparseable == the records the JOURNAL accounted for) and the bucket row count
+(the published per-bucket counts add back to the fold's own ``rows`` counter).
+Each raises :class:`CashBookIdentityError` on its own rather than publishing a
+number beside a broken identity, which is the one thing they exist to prevent.
+The episode partition -- summed + excluded == episodes -- is held by
+construction instead, because :func:`_exclusions_of` stamps each episode
+exactly once.
+
+Until 2026-10-26 two of those four were tautologies, so the honest count was
+TWO. The row partition compared a partition of ``events_fold.events`` against
+that same list's length, and the bucket row count compared
+``bucket_fold.rows`` against the length of the list
+:func:`~.buckets.classify_buckets` was handed -- which is what it sets ``rows``
+from. Each now reads its other side from a different path: the journal's own
+line arithmetic (:func:`~.store.folded_records`) and the published bucket
+counts. The second of the two is the compensating control :func:`_agree`
+names, so the relaxed bucket identity had nothing behind it.
 
 The bucket identity is arithmetic, so it needs a number on both sides: when
 neither side has one -- no account currency stated anywhere, or two of them --
 it is unevaluable rather than broken, and the report publishes the named
-absence on that line instead of a total (see :func:`_agree`). A lost row is
-still caught there by the fourth partition, which compares COUNTS and reads no
-amount at all.
+absence on that line instead of a total (see :func:`_agree`). That state is
+ordinary rather than exotic -- one booking row whose amount the vendor did not
+report nulls its bucket and the row total together -- and a lost row is caught
+there by the fourth partition, which compares COUNTS and reads no amount at
+all. It is the fourth partition's REPAIRED form that does so; the tautology it
+replaced could not.
 
 The one relation NOT checked here is ``subtotal + deposits ==
 cash_book_sum_acct``: the residual is DEFINED as the cash book sum minus the
@@ -384,6 +399,10 @@ class Basis:
     episodes_summed: int
     episodes_excluded: int
     exclusions: Mapping[str, int]
+    #: How many records the cash-events JOURNAL accounted for, from its own
+    #: counters (:func:`~.store.folded_records`) rather than from the length of
+    #: the folded list the window splits. A record lost between the two is what
+    #: the row partition exists to catch, and it cannot catch it from one side.
     rows_in_store: int
     rows_read: int
     rows_outside_window: int
@@ -662,7 +681,11 @@ def _agree(left: AcctAmount, right: AcctAmount) -> bool:
 
     What keeps a lost row caught while both sides are nulls is the fourth
     partition, ``bucket row count``: it compares COUNTS and reads no amount at
-    all.
+    all. That sentence was false until 2026-10-26, because the partition it
+    names compared ``bucket_fold.rows`` against the length of the list
+    :func:`~.buckets.classify_buckets` was handed -- the very thing it sets
+    ``rows`` from. It now compares the PUBLISHED per-bucket counts against
+    that counter, so a row the classification drops does break it.
     """
     if (left.null_reason is not None) or (right.null_reason is not None):
         return (left.null_reason is not None) and (right.null_reason is not None)
@@ -690,6 +713,18 @@ def _check_identities(
 
     Each one is a separate claim and each raises on its own, so none of them
     can be satisfied by another holding.
+
+    **Two of the four used to be tautologies**, and the rest of this layer's
+    protection was described as resting on one of them. The row partition
+    compared a partition of ``events_fold.events`` against that same list's
+    length, so a row lost in the READ was missing from both sides at once; the
+    bucket row count compared ``bucket_fold.rows`` against the length of the
+    list :func:`~.buckets.classify_buckets` was handed, which is what it sets
+    ``rows`` FROM. Both are now compared against a count reached by a
+    different path -- ``rows_in_store`` by the journal's own line arithmetic
+    (see :attr:`~.store.CashEventFold.duplicate_lines`), and the published
+    bucket counts against the fold's own ``rows`` counter, which is the
+    control :func:`_agree` names.
     """
     summed_buckets = acct_sum(
         _as_pairs([bucket.total for bucket in bucket_fold.buckets], currency=currency),
@@ -728,10 +763,18 @@ def _check_identities(
         f"{window.undated} undated + {window.date_malformed} unparseable "
         f"against {rows_in_store} in the store",
     )
+    # The PUBLISHED per-bucket counts against the fold's own ``rows`` counter.
+    # Comparing ``rows`` against the length of the list it was handed was a
+    # tautology -- that is what ``classify_buckets`` sets it from -- and this
+    # is the partition :func:`_agree` names as what keeps a lost row caught
+    # while BOTH sides of the bucket identity are nulls, a state ordinary data
+    # reaches. A row whose bucket name is not in ``BUCKET_ORDER``, or one
+    # dropped from a bucket, now fails here.
+    counted_in_buckets = sum(bucket.rows for bucket in bucket_fold.buckets)
     _hold(
         "bucket row count",
-        bucket_fold.rows == len(window.inside),
-        f"{bucket_fold.rows} classified against {len(window.inside)} given",
+        counted_in_buckets == bucket_fold.rows,
+        f"{counted_in_buckets} in the published buckets against {bucket_fold.rows} classified",
     )
 
 
@@ -855,6 +898,14 @@ def build_totals(*, env: str, since: dt.date, until: dt.date) -> CashBookTotals:
     latest = balances.snapshots[-1] if balances.snapshots else None
     currency = _account_currency(events_fold.events, latest)
 
+    # The journal's OWN count of the records it folded, reached by a different
+    # path than the list below: every line it read is accounted for by exactly
+    # one of three counters, all incremented during the read. The row partition
+    # used to compare a partition of ``events_fold.events`` against that same
+    # list's length, so a row lost in the READ was missing from both sides and
+    # the report published a total one row short with no identity broken.
+    rows_in_store = store.folded_records(events_fold)
+
     window = _split_by_window(events_fold.events, since=since, until=until)
     bucket_fold = buckets.classify_buckets(window.inside)
     # Over EVERY stored fill, never the window's: an episode clipped by a
@@ -867,7 +918,7 @@ def build_totals(*, env: str, since: dt.date, until: dt.date) -> CashBookTotals:
         bucket_fold=bucket_fold,
         episode_fold=episode_fold,
         window=window,
-        rows_in_store=len(events_fold.events),
+        rows_in_store=rows_in_store,
         currency=currency,
     )
 
@@ -921,7 +972,7 @@ def build_totals(*, env: str, since: dt.date, until: dt.date) -> CashBookTotals:
             episodes_summed=len(summed),
             episodes_excluded=sum(exclusions.values()),
             exclusions=exclusions,
-            rows_in_store=len(events_fold.events),
+            rows_in_store=rows_in_store,
             rows_read=len(window.inside),
             rows_outside_window=window.outside,
             rows_undated=window.undated,

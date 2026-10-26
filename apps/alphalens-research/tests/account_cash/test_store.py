@@ -990,6 +990,123 @@ class AReadIsAllowedOnEveryEnvironment(IsolatedHomeTestCase):
                 self.assertIn("prod", str(ctx.exception))
 
 
+class TheFoldAccountsForEveryLineItRead(IsolatedHomeTestCase):
+    """``lines == len(records) + malformed + duplicate_lines``, exactly (F3).
+
+    ``lines`` and ``restated`` could not be combined into that statement:
+    ``restated`` counts KEYS whose payload changed, so a key corrected twice
+    is one restatement over two duplicate lines, and an identical re-append is
+    a duplicate line that is no restatement at all. The missing term is
+    therefore its own counter.
+
+    What it is FOR: the report's row partition splits the folded records by the
+    window and used to compare the three parts against ``len(records)`` -- the
+    length of the very list it had just split, which no dropped row can
+    refute. The three counters here are incremented while the journal is READ,
+    on statements separate from the one that puts a record in the list, so
+    they are a second path to the same number and a record lost between the
+    two breaks the identity.
+    """
+
+    def _fold_with_every_shape(self) -> store.CashEventFold:
+        """One journal holding all four line shapes at once.
+
+        A fixture uniform in the column under test cannot tell a read from a
+        constant, and each shape moves a different counter.
+        """
+        store.append_cash_events([_event("1"), _event("2")], env=_LIVE)
+        store.append_cash_events([_event("1")], env=_LIVE)  # identical re-append
+        store.append_cash_events(
+            [_event("2", amount_account_currency=-99.99)], env=_LIVE
+        )  # restatement
+        with paths.cash_events_path(_LIVE).open("a", encoding="utf-8") as fh:
+            fh.write("not json at all\n")
+        return store.read_cash_events(env=_LIVE)
+
+    def test_a_missing_journal_accounts_for_nothing(self) -> None:
+        fold = store.read_cash_events(env=_LIVE)
+
+        self.assertEqual(fold.duplicate_lines, 0)
+        self.assertEqual(fold.lines, 0)
+
+    def test_distinct_keys_leave_no_duplicate_line(self) -> None:
+        """The negative control: a counter that answered ``lines`` would
+        satisfy every case below."""
+        store.append_cash_events([_event("1"), _event("2"), _event("3")], env=_LIVE)
+
+        fold = store.read_cash_events(env=_LIVE)
+
+        self.assertEqual(fold.duplicate_lines, 0)
+        self.assertEqual((fold.lines, len(fold.events)), (3, 3))
+
+    def test_an_identical_re_append_is_a_duplicate_line_and_no_restatement(self) -> None:
+        """The shape ``restated`` deliberately does NOT count."""
+        store.append_cash_events([_event("1")], env=_LIVE)
+        store.append_cash_events([_event("1")], env=_LIVE)
+
+        fold = store.read_cash_events(env=_LIVE)
+
+        self.assertEqual(fold.duplicate_lines, 1)
+        self.assertEqual(fold.restated, 0)
+        self.assertEqual((fold.lines, len(fold.events)), (2, 1))
+
+    def test_one_key_restated_twice_is_two_duplicate_lines_and_one_restatement(self) -> None:
+        """The discriminator between the two counters: ``restated`` counts
+        keys, this counts lines, and here they differ."""
+        for amount in (-51.49, -61.49, -71.49):
+            store.append_cash_events([_event("1", amount_account_currency=amount)], env=_LIVE)
+
+        fold = store.read_cash_events(env=_LIVE)
+
+        self.assertEqual(fold.duplicate_lines, 2)
+        self.assertEqual(fold.restated, 1)
+        self.assertEqual((fold.lines, len(fold.events)), (3, 1))
+
+    def test_a_malformed_line_is_not_a_duplicate(self) -> None:
+        """It never reached a key, so it belongs to the other term."""
+        store.append_cash_events([_event("1")], env=_LIVE)
+        with paths.cash_events_path(_LIVE).open("a", encoding="utf-8") as fh:
+            fh.write("not json at all\n")
+
+        fold = store.read_cash_events(env=_LIVE)
+
+        self.assertEqual((fold.malformed, fold.duplicate_lines), (1, 0))
+        self.assertEqual((fold.lines, len(fold.events)), (2, 1))
+
+    def test_the_identity_holds_over_a_journal_with_every_shape_in_it(self) -> None:
+        """5 lines: two new keys, one identical re-append, one restatement and
+        one line that is not JSON -- so 2 records, 1 malformed, 2 duplicates.
+
+        **Mutation it catches:** counting a malformed line as a duplicate, or
+        a restatement as not one. Both leave the three counters adding up to
+        something other than ``lines``.
+        """
+        fold = self._fold_with_every_shape()
+
+        self.assertEqual(fold.lines, 5)
+        self.assertEqual(len(fold.events), 2)
+        self.assertEqual(fold.malformed, 1)
+        self.assertEqual(fold.duplicate_lines, 2)
+        self.assertEqual(fold.restated, 1)
+        self.assertEqual(len(fold.events) + fold.malformed + fold.duplicate_lines, fold.lines)
+
+    def test_the_other_two_journals_account_for_their_lines_the_same_way(self) -> None:
+        """One fold function serves all three journals, so the term belongs to
+        all three: a counter on only the one journal a consumer reads today is
+        a counter that drifts when the next one gets a reader."""
+        store.append_trade_rows([_trade("1"), _trade("1")], env=_LIVE)
+        store.append_balance(_balance(), env=_LIVE, sweep_id="s1")
+        store.append_balance(_balance(), env=_LIVE, sweep_id="s1")
+
+        trades = store.read_trade_rows(env=_LIVE)
+        balances = store.read_balances(env=_LIVE)
+
+        self.assertEqual((trades.duplicate_lines, trades.lines, len(trades.rows)), (1, 2, 1))
+        self.assertEqual(
+            (balances.duplicate_lines, balances.lines, len(balances.snapshots)), (1, 2, 1)
+        )
+
+
 class TheSweepWindowIsParsedInExactlyOnePlace(unittest.TestCase):
     """One parser for both readers of a stored window (F8).
 
