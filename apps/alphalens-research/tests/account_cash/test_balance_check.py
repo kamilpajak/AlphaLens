@@ -212,6 +212,26 @@ class TheToleranceIsAGroszAndIsTwoClaims(unittest.TestCase):
         self.assertEqual(check.expected.value, 20738.685)
         self.assertEqual(check.verdict, balance_check.VERDICT_RECONCILES)
 
+    def test_a_disagreement_of_exactly_one_grosz_still_reconciles(self) -> None:
+        """The third claim a tolerance makes, after its unit and its order of
+        magnitude: which side of the boundary the boundary itself is on.
+
+        2000.00 becomes 2000.01, so the cash book sums to 20 738.69 against a
+        balance of 20 738.68 and the difference is exactly
+        ``BALANCE_TOLERANCE_ACCT``. "Agree to within one grosz" includes the
+        grosz, so this reconciles.
+
+        **Mutation it catches:** ``<`` in place of ``<=``. Measured
+        2026-10-26: green before this test, because the two constructed cases
+        were 0.005 -- strictly inside -- and 0.50, far outside, leaving the
+        edge itself unasserted.
+        """
+        check = self._with_first_row_shifted(2000.01)
+
+        self.assertEqual(check.expected.value, 20738.69)
+        self.assertAlmostEqual(check.difference.value or 0.0, BALANCE_TOLERANCE_ACCT, places=9)
+        self.assertEqual(check.verdict, balance_check.VERDICT_RECONCILES)
+
     def test_a_fifty_grosz_disagreement_is_content_and_not_a_crash(self) -> None:
         """**Mutation it catches:** raising on a disagreement, and a tolerance
         widened to 1.0, which this 0.50 would swallow."""
