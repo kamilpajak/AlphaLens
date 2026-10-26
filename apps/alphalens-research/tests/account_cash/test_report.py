@@ -90,6 +90,15 @@ LATE_ROWS, LATE_ROWS_TOTAL_PLN = 72, 11755.34
 LATE_DEPOSITS_PLN, LATE_DEPOSIT_ROWS = 15000.00, 1
 LATE_SUMMED, LATE_NET_CLOSED_PLN = 10, 346.15
 
+# --- A second sweep whose balance body moved, for the cumulative check -------
+
+#: How far the account's own cash moves between the two snapshots, with the
+#: booking rows unchanged. Large enough that the two readings of "the latest
+#: snapshot" answer different VERDICTS and not merely different digits.
+BALANCE_MOVED_BY_PLN = 5000.00
+MOVED_CASH_PLN = 25738.68
+MOVED_ASOF = dt.datetime(2026, 10, 4, 6, 12, tzinfo=dt.UTC)
+
 
 _BASE_READ = AccountCashRead(
     events=tuple(BOOKINGS),
@@ -600,6 +609,41 @@ class TheTwoBalanceChecksReachThePublishedTotal(IsolatedHomeTestCase):
         self.assertEqual(check.until, self.totals.coverage.swept_through)
         self.assertNotEqual(check.since, self.totals.basis.window_since)
         self.assertNotEqual(check.rows, self.totals.basis.rows_read)
+
+    def test_the_cumulative_check_reads_the_LATEST_snapshot_and_not_the_first(self) -> None:
+        """Which snapshot is "the account's own cash" is a 5 000.00 PLN
+        question, and one sweep cannot ask it.
+
+        A second sweep stores a balance body whose ``CashBalance`` has moved
+        +5 000.00 while the booking rows are unchanged, so the two readings
+        answer different words: against the LATER snapshot the cash book is
+        5 000.00 short and the check says ``differs``, against the first one
+        it says ``reconciles``.
+
+        **Mutation it catches:** ``balances.snapshots[0]``. Measured
+        2026-10-26: green before this test, because every other case that
+        asserts a cumulative verdict seeds ONE sweep -- where the first and
+        the last snapshot are the same record -- and the one two-sweep case
+        stores the same balance body twice and asserts only the incremental
+        half.
+        """
+        _seed(
+            read=_read(balance=replace(BALANCE, cash_balance=MOVED_CASH_PLN, asof=MOVED_ASOF)),
+            now=_SWEPT_AT + dt.timedelta(days=1),
+        )
+
+        totals = report.build_totals(env=_LIVE, since=LATE_SINCE, until=_SWEPT_UNTIL)
+        check = next(
+            one for one in totals.balance_checks if one.kind == balance_check.CHECK_CUMULATIVE
+        )
+
+        self.assertEqual(check.observed.value, MOVED_CASH_PLN)
+        self.assertEqual(check.asof, MOVED_ASOF.isoformat())
+        self.assertEqual(check.expected.value, ALL_ROWS_TOTAL_PLN)
+        self.assertEqual(check.verdict, balance_check.VERDICT_DIFFERS)
+        self.assertAlmostEqual(check.difference.value or 0.0, -BALANCE_MOVED_BY_PLN, places=9)
+        self.assertNotEqual(check.observed.value, ALL_ROWS_TOTAL_PLN)
+        self.assertNotEqual(check.asof, BALANCE.asof.isoformat())
 
     def test_one_sweep_leaves_the_incremental_check_not_checkable(self) -> None:
         """A store with one sweep has one snapshot, and a change needs two."""
