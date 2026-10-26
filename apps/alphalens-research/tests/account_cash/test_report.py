@@ -332,6 +332,73 @@ class TheNarrowWindowAtTheCut(IsolatedHomeTestCase):
         )
 
 
+#: 2026-08-01..2026-08-05: inside the swept range and BEFORE the first booking
+#: row, which the capture stamps 2026-08-06. Reachable on any account with a
+#: quiet stretch, so it is not an edge case.
+EMPTY_UNTIL = dt.date(2026, 8, 5)
+
+
+class AnEmptyWindowInsideTheSweptRange(IsolatedHomeTestCase):
+    """A window the store covers and that holds no booking row.
+
+    The buckets can only read the account's currency off the rows they are
+    handed (``classify_buckets``' own docstring says naming it on an empty
+    window is the CALLER's job), so every bucket total arrives as a unit-less
+    zero. Three things then went wrong at once, and all three are measured:
+    the bucket identity RAISED, because a pair carrying no currency nulls its
+    sum with ``account_amount_not_reported`` while ``all_rows`` is ``0.00``;
+    the residual and the subtotal would have been nulls for the same reason;
+    and the published lines printed ``0.00`` with no unit against memo section
+    5(d)'s rule that the currency goes ON the number.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        _seed()
+        self.totals = report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=EMPTY_UNTIL)
+
+    def test_the_premise_is_that_the_window_really_is_empty(self) -> None:
+        self.assertEqual(self.totals.basis.rows_read, 0)
+        self.assertEqual(self.totals.basis.rows_outside_window, ALL_ROWS)
+        self.assertEqual(min(event.date or "" for event in BOOKINGS), "2026-08-06")
+
+    def test_it_answers_rather_than_raising_a_broken_identity(self) -> None:
+        """**Mutation it catches:** the ``CashBookIdentityError`` this window
+        raised before the fix -- an empty window is answerable, and a
+        partition that cannot hold over zero rows is a defect in the
+        partition, not an incomplete number."""
+        self.assertEqual(self.totals.cash_book_sum_acct.value, 0.0)
+        self.assertEqual(self.totals.residual_acct.value, -COST_BASIS_OPEN_PLN)
+        self.assertEqual(self.totals.subtotal_acct.value, 0.0)
+
+    def test_every_number_still_carries_the_account_currency(self) -> None:
+        """Memo section 5(d). The unit comes from the store's own rows, which
+        the report reads even when the window holds none of them."""
+        self.assertEqual(self.totals.basis.currency, "PLN")
+        for name, line in sorted(self.totals.lines().items()):
+            with self.subTest(line=name):
+                self.assertEqual(line.currency, "PLN")
+                self.assertTrue(line.rendered.endswith(" PLN"), line.rendered)
+        for bucket in self.totals.buckets:
+            with self.subTest(bucket=bucket.name):
+                self.assertEqual(bucket.total.currency, "PLN")
+                self.assertEqual(bucket.total.value, 0.0)
+
+    def test_the_open_cost_basis_is_not_emptied_by_an_empty_window(self) -> None:
+        """It is never window-scoped, so a quiet stretch does not hide the
+        money at risk -- it shows up in the residual instead."""
+        self.assertEqual(self.totals.cost_basis_open_acct.value, COST_BASIS_OPEN_PLN)
+        self.assertEqual(self.totals.cost_basis_open_acct.rows, OPEN_EPISODES)
+
+    def test_the_cumulative_check_still_reconciles_because_it_is_store_wide(self) -> None:
+        check = next(
+            one for one in self.totals.balance_checks if one.kind == balance_check.CHECK_CUMULATIVE
+        )
+
+        self.assertEqual(check.verdict, balance_check.VERDICT_RECONCILES)
+        self.assertEqual(check.rows, ALL_ROWS)
+
+
 class TheIdentitiesAreCheckedAndNotDescribed(IsolatedHomeTestCase):
     def setUp(self) -> None:
         super().setUp()

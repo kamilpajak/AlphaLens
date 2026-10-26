@@ -186,8 +186,26 @@ class CashBookIdentityError(AssertionError):
     """
 
 
-def _as_pairs(amounts: Sequence[AcctAmount]) -> list[tuple[float | None, str | None]]:
+def _as_pairs(
+    amounts: Sequence[AcctAmount], *, currency: str | None
+) -> list[tuple[float | None, str | None]]:
     """Published totals, as pairs :func:`~.money.acct_sum` can add.
+
+    ``currency`` is the ACCOUNT's, and it is supplied for any line that states
+    none of its own. That is money.py's own documented pattern -- its
+    ``test_an_empty_total_is_a_unit_less_zero`` adds the unit-less zero back
+    through ``acct_sum`` with the currency named beside it -- and without it an
+    EMPTY window could not be answered at all: every bucket total arrives as a
+    unit-less zero, ``acct_sum`` refuses a pair whose currency is ``None`` with
+    ``account_amount_not_reported`` BEFORE its own ``currency=`` fallback
+    applies, and the bucket identity then compared a null against ``0.00`` and
+    raised. Measured on the real capture at ``until=2026-08-05``, a window the
+    store covers and the account was quiet in.
+
+    Substituting is safe because the only unit-less NUMBER this layer produces
+    is ``acct_sum`` over an empty sequence -- a zero, which money.py names as a
+    neutral element that cannot launder a unit. A line that is a named ABSENCE
+    keeps its ``None`` value, so the all-or-nothing rule still nulls the sum.
 
     The currency is bound to a LOCAL before the pair is built, and that is not
     cosmetic. ``tests/account_cash/test_money.py``'s FX guard keys a money pair
@@ -207,9 +225,28 @@ def _as_pairs(amounts: Sequence[AcctAmount]) -> list[tuple[float | None, str | N
     """
     pairs: list[tuple[float | None, str | None]] = []
     for amount in amounts:
-        unit = amount.currency
+        unit = amount.currency if amount.currency is not None else currency
         pairs.append((amount.value, unit))
     return pairs
+
+
+def _in_account_currency(amount: AcctAmount, currency: str | None) -> AcctAmount:
+    """A total with the account's currency stated on it (memo section 5(d)).
+
+    Only a value that states NO currency is touched, and the only such value
+    this layer produces is the zero :func:`~.money.acct_sum` publishes for an
+    empty sequence. A total that states one keeps it -- a disagreement must
+    stay ``currency_mixed`` rather than be overwritten -- and a named absence
+    keeps its reason.
+
+    The need is :func:`~.buckets.classify_buckets` reading its currency off
+    the rows it was handed: with no rows there is nothing to read it from, and
+    its own docstring says naming the account's currency on an empty window is
+    the caller's job. This is the caller.
+    """
+    if amount.null_reason is not None or amount.currency is not None:
+        return amount
+    return AcctAmount(value=amount.value, currency=currency, rows=amount.rows, null_reason=None)
 
 
 # --- Coverage: what the store can speak for ----------------------------------
@@ -571,6 +608,7 @@ def _check_identities(
     episode_fold: episodes.EpisodeFold,
     window: _EventWindow,
     rows_in_store: int,
+    currency: str | None,
 ) -> None:
     """The four partitions, in the order a dropped row would break them.
 
@@ -578,8 +616,9 @@ def _check_identities(
     can be satisfied by another holding.
     """
     summed_buckets = acct_sum(
-        _as_pairs([bucket.total for bucket in bucket_fold.buckets]),
+        _as_pairs([bucket.total for bucket in bucket_fold.buckets], currency=currency),
         rows=bucket_fold.rows,
+        currency=currency,
     )
     _hold(
         "bucket",
@@ -656,7 +695,7 @@ def _cost_basis_open(found: Sequence[episodes.CashEpisode], currency: str | None
     """
     still_open = [episode for episode in found if episode.state == episodes.STATE_OPEN]
     return acct_sum(
-        _as_pairs([episode.cost_basis_acct for episode in still_open]),
+        _as_pairs([episode.cost_basis_acct for episode in still_open], currency=currency),
         rows=len(still_open),
         currency=currency,
     )
@@ -731,25 +770,37 @@ def build_totals(*, env: str, since: dt.date, until: dt.date) -> CashBookTotals:
     # presentation window is indistinguishable from one clipped by the store,
     # and only the second is a real incompleteness.
     episode_fold = episodes.derive_episodes(trades_fold.rows)
+    # Over what ``classify_buckets`` published, BEFORE the unit is restated
+    # below: the identity's subject is what the classification produced.
     _check_identities(
         bucket_fold=bucket_fold,
         episode_fold=episode_fold,
         window=window,
         rows_in_store=len(events_fold.events),
+        currency=currency,
     )
 
     summed, exclusions = _exclusions_of(episode_fold.episodes, since=since, until=until)
     net_closed = acct_sum(
-        _as_pairs([episode.net_acct for episode in summed]),
+        _as_pairs([episode.net_acct for episode in summed], currency=currency),
         rows=len(summed),
         currency=currency,
     )
     cost_basis_open = _cost_basis_open(episode_fold.episodes, currency)
-    by_name = {bucket.name: bucket for bucket in bucket_fold.buckets}
+    published_buckets = tuple(
+        buckets.Bucket(
+            name=bucket.name,
+            bk_amount_types=bucket.bk_amount_types,
+            total=_in_account_currency(bucket.total, currency),
+            rows=bucket.rows,
+        )
+        for bucket in bucket_fold.buckets
+    )
+    by_name = {bucket.name: bucket for bucket in published_buckets}
     income = by_name[buckets.BUCKET_INCOME].total
     unclassified = by_name[buckets.BUCKET_UNCLASSIFIED].total
     deposits = by_name[buckets.BUCKET_DEPOSITS].total
-    cash_book_sum = bucket_fold.all_rows
+    cash_book_sum = _in_account_currency(bucket_fold.all_rows, currency)
 
     # The residual is the window's cash movement that the five named lines do
     # not explain -- a dividend after a close, withholding tax, financing, a
@@ -765,7 +816,7 @@ def build_totals(*, env: str, since: dt.date, until: dt.date) -> CashBookTotals:
     residual = _resting_on(residual, len(window.inside))
 
     subtotal = acct_sum(
-        _as_pairs([net_closed, cost_basis_open, income, unclassified, residual]),
+        _as_pairs([net_closed, cost_basis_open, income, unclassified, residual], currency=currency),
         rows=len(window.inside) - deposits.rows,
         currency=currency,
     )
@@ -808,7 +859,7 @@ def build_totals(*, env: str, since: dt.date, until: dt.date) -> CashBookTotals:
         subtotal_acct=subtotal,
         deposits_acct=deposits,
         cash_book_sum_acct=cash_book_sum,
-        buckets=bucket_fold.buckets,
+        buckets=published_buckets,
         balance_checks=(
             # Over EVERY stored row, with the store's own watermarks as its
             # basis: this check is store-wide by definition and the balance it
