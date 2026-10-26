@@ -42,7 +42,11 @@ The modules are ``paths`` (where the journals are), ``codec`` (the wire form),
 book account for the cash) and ``report`` (one window's published answer). The
 DAG is ``paths -> codec -> store -> sweep`` on the store side, ``money ->
 {buckets, episodes, balance_check}`` on the derivation side, and ``report``
-above both. They are deliberately NOT re-exported here: nothing imports the
+above both. One edge crosses: ``balance_check`` imports ``store.BalanceAt``,
+the record that pairs a balance snapshot with the sweep whose window produced
+it. It is a TYPE and nothing else -- ``balance_check`` calls no reader and
+knows no ``env`` -- and the alternative would be declaring the pairing record
+twice. They are deliberately NOT re-exported here: nothing imports the
 package for its own sake, and a re-export would make every reader of one
 module pay for all of them.
 """
