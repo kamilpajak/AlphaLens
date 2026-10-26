@@ -285,10 +285,21 @@ class TheIncrementalCheckOnTheP8PairWithAuthoredRowIds(unittest.TestCase):
         every row that explains the movement is dated 2026-10-08.
 
         **Mutation it catches:** keying the interval on the ``asof``
-        instants. Measured 2026-10-26: a row's date read as midnight
-        2026-10-08 falls before the earlier snapshot's 23:46:52, so such a
-        check sums 0 of the 6 rows and publishes ``differs`` with +4 319.07 on
-        a pair that reconciles exactly.
+        instants. Measured 2026-10-26, and the two shapes of that slip are not
+        equally loud:
+
+        - comparing a row's date against the INSTANTS -- midnight 2026-10-08
+          falls before the earlier snapshot's 23:46:52 -- sums 0 of the 6 rows
+          and publishes ``differs`` with +4 319.07 on a pair that reconciles
+          exactly. Five assertions in this class go red.
+        - taking ``asof.date()`` on both ends instead keeps the one-day
+          offset's effect by accident, because the earlier snapshot is stamped
+          2026-10-08 and that IS the earlier window's ``until`` plus a day. It
+          still sums all six and still answers ``reconciles``, so the only
+          assertion with power over it is the published ``until`` below --
+          2026-10-09 against 2026-10-08. The money verdict moves only with a
+          row past the later window in the store, which is what
+          ``test_a_row_past_the_later_window_is_not_summed_either`` adds.
         """
         self.assertEqual(self.check.since, P8_TRADE_DATE)
         self.assertEqual(self.check.until, P8_TRADE_DATE)
@@ -332,6 +343,34 @@ class TheIncrementalCheckOnTheP8PairWithAuthoredRowIds(unittest.TestCase):
         self.assertEqual(check.verdict, balance_check.VERDICT_RECONCILES)
         self.assertEqual(check.rows, 6)
         self.assertEqual(check.since, P8_TRADE_DATE)
+
+    def test_a_row_past_the_later_window_is_not_summed_either(self) -> None:
+        """The same control on the interval's RIGHT edge, and the one that
+        gives the MONEY a stake in the interval's basis.
+
+        The store can hold a row dated after the latest sweep's window: a wide
+        back-fill (say 2026-10-01..2026-10-10) read it, and the two narrower
+        sweeps that produced these snapshots end 10-07 and 10-08. So the extra
+        row is dated 2026-10-09 and carries -500.00.
+
+        **Mutation it catches:** ``earlier.snapshot.asof.date()`` and
+        ``later.snapshot.asof.date()`` in place of the two sweep windows.
+        Measured 2026-10-26: that slip keeps the one-day offset's effect by
+        accident -- the earlier snapshot is stamped 2026-10-08, which is the
+        earlier window's ``until`` plus a day -- so it still sums all six real
+        rows and still answers ``reconciles``. Its only visible trace was the
+        published ``until``, 2026-10-09 against 2026-10-08. With this row in
+        the store it sums seven and answers ``differs`` by 500.00 PLN.
+        """
+        with_extra = (*_p8_events(), _event("later", -500.00, date="2026-10-09"))
+
+        check = balance_check.incremental_check(
+            with_extra, snapshots=self.snapshots, sweeps=self.sweeps
+        )
+
+        self.assertEqual(check.verdict, balance_check.VERDICT_RECONCILES)
+        self.assertEqual(check.rows, 6)
+        self.assertEqual(check.until, P8_TRADE_DATE)
 
     def test_it_pairs_the_LAST_two_snapshots_and_not_the_first_and_the_last(self) -> None:
         """**Mutation it catches:** ``snapshots[0], snapshots[-1]``, which on
