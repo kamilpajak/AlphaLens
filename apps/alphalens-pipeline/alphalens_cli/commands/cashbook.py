@@ -51,6 +51,7 @@ from alphalens_cli.commands._cli_envelope import (
     _FORMAT_JSON,
     _FORMAT_OPTION,
     _OUTPUT_FORMAT,
+    _emit_json,
     _envelope,
     _fail_from_broker_error,
     _fail_with,
@@ -59,6 +60,7 @@ from alphalens_cli.commands._cli_envelope import (
 )
 
 _SYNC_SCHEMA = "alphalens.cashbook.sync/v1"
+_TOTALS_SCHEMA = "alphalens.cashbook.totals/v1"
 
 cashbook_app = typer.Typer(
     name="cashbook",
@@ -89,6 +91,19 @@ _UNTIL_OPTION = typer.Option(
     ...,
     "--until",
     help="Last booking date to read, YYYY-MM-DD (inclusive).",
+)
+
+_TOTALS_SINCE_OPTION = typer.Option(
+    ...,
+    "--since",
+    help="First booking date the report covers, YYYY-MM-DD (inclusive). Earlier than the "
+    "store's own first swept day is refused, never answered smaller.",
+)
+
+_TOTALS_UNTIL_OPTION = typer.Option(
+    ...,
+    "--until",
+    help="Last booking date the report covers, YYYY-MM-DD (inclusive).",
 )
 
 _DRY_RUN_OPTION = typer.Option(
@@ -291,6 +306,12 @@ def _render_sync_human(body: dict[str, Any]) -> None:
         _row("journals", f"{name:<12} {path}")
 
 
+def _render_totals_human(body: dict[str, Any]) -> None:
+    """The operator's version of the cash book's answer (memo section 6)."""
+    basis = body["basis"]
+    typer.echo(f"cashbook totals {body['env']} {basis['window_since']} .. {basis['window_until']}")
+
+
 @cashbook_app.command("sync")
 def sync_command(
     since: str = _SINCE_OPTION,
@@ -464,3 +485,101 @@ def sync_command(
         typer.echo(rendered)
         return
     _render_sync_human(body)
+
+
+def _totals_body(totals: Any) -> dict[str, Any]:
+    """The record's own wire form, with the envelope's field removed.
+
+    Nothing is computed here and nothing is renamed: the body IS
+    ``CashBookTotals.to_jsonable()``, because memo section 5(d) makes every
+    total structurally inseparable from its basis and a CLI that rebuilt the
+    body field by field is a second place the two could come apart. ``env`` is
+    dropped because :func:`_envelope` publishes it, and publishing it twice
+    would let the two disagree.
+    """
+    body = totals.to_jsonable()
+    body.pop("env")
+    return body
+
+
+@cashbook_app.command("totals")
+def totals_command(
+    since: str = _TOTALS_SINCE_OPTION,
+    until: str = _TOTALS_UNTIL_OPTION,
+    env: str | None = _CASHBOOK_ENV_OPTION,
+    output_format: str | None = _FORMAT_OPTION,
+) -> None:
+    """What the account's own money did over one window (#1689).
+
+    Reads the stored cash book -- the bookings, the trades and the balance
+    snapshots a previous ``cashbook sync`` appended -- and publishes one set of
+    lines with the basis they rest on. It touches NO vendor: a window is
+    answerable offline or it is refused.
+
+    STEPS, in this order:
+
+    \b
+      format      settled first, so every refusal below renders as asked
+      window      both bounds as dates, then --since <= --until
+      instance    the same `state_paths` seam the broker group resolves, so
+                  the store root this reads cannot disagree with the one a
+                  sweep wrote
+      answer      `report.build_totals`, which refuses a window it cannot
+                  answer rather than returning a smaller number
+      render      the record, as JSON or as prose; no number is computed here
+
+    WHAT IT REFUSES, all as `cashbook_totals_refused` with `details.reason`:
+    `sim_reports_unusable` (on SIM the vendor's report endpoints answer with
+    other accounts' canned rows, so the store is empty by construction and a
+    sum over it would publish 0.00 for an account nobody read),
+    `nothing_swept` (no sweep has ever covered any window, so there is no
+    watermark to answer against) and `before_first_sweep` (`--since` is
+    earlier than the earliest window any sweep asked for; the store holds rows
+    whose own entries may predate it, so a smaller number would read as a
+    complete answer).
+
+    An `--until` beyond the swept range is NOT refused: the store can be asked
+    about a day nobody swept and answers that it holds nothing for it, which
+    is honest because the coverage block is published beside every number.
+    """
+    from alphalens_pipeline.account_cash import report
+    from alphalens_pipeline.brokers.automanager import state_paths
+
+    from alphalens_cli.commands.broker import _apply_env_option
+
+    resolved_format = _resolve_format(output_format)
+    since_date = _booking_date(since, option="--since")
+    until_date = _booking_date(until, option="--until")
+    if since_date > until_date:
+        raise _fail_with(
+            "usage",
+            f"--since {since} is after --until {until}; the window is inclusive on both ends",
+            details={"option": "--since", "value": since},
+        )
+
+    # BEST-EFFORT composition, unlike `sync`'s. This command holds no broker
+    # and places nothing, so the LIVE unit's rails are no part of its answer;
+    # what it needs from `--env live` is the instance pin, which the
+    # best-effort branch still applies (and it forces ALLOW_ORDERS=0 either
+    # way). Requiring the unit would refuse a read of a store copied onto a
+    # machine where no LIVE unit is installed.
+    _apply_env_option(env, required=False)
+    try:
+        resolved_env = state_paths.broker_environment()
+    except ValueError as exc:
+        raise _fail_with("usage", str(exc)) from exc
+
+    try:
+        totals = report.build_totals(env=resolved_env, since=since_date, until=until_date)
+    except report.CashBookTotalsRefusedError as exc:
+        raise _fail_with(
+            "cashbook_totals_refused",
+            str(exc),
+            details={"reason": exc.reason, "env": exc.env},
+        ) from exc
+
+    body = _envelope(_TOTALS_SCHEMA, resolved_env, **_totals_body(totals))
+    if resolved_format == _FORMAT_JSON:
+        _emit_json(body)
+        return
+    _render_totals_human(body)

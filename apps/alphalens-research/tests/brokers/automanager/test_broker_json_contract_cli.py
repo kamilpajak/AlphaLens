@@ -224,7 +224,52 @@ _CASHBOOK_JSON_COMMANDS: tuple[tuple[str, list[str], bool, tuple[str, ...]], ...
             "journals",
         ),
     ),
+    (
+        "totals",
+        [
+            "totals",
+            "--since",
+            "2026-08-01",
+            "--until",
+            "2026-10-03",
+            "--env",
+            _CASHBOOK_TABLE_ENV,
+        ],
+        True,
+        (
+            "basis",
+            "coverage",
+            "cost_basis_open_asof",
+            "cost_basis_open_excluded",
+            "buckets",
+            "balance_checks",
+            "net_closed_acct",
+            "cost_basis_open_acct",
+            "income_acct",
+            "unclassified_acct",
+            "residual_acct",
+            "subtotal_acct",
+            "deposits_acct",
+            "cash_book_sum_acct",
+        ),
+    ),
 )
+
+#: What each cashbook command answers on the OTHER instance, by command name.
+#: Beside the table rather than as a fifth tuple member: three sites unpack
+#: these rows four-wide and one of them iterates this table together with the
+#: 4-wide broker table, so widening the tuple breaks four call sites to carry
+#: one expectation that belongs to one group.
+#:
+#: The two differ because the two commands refuse at different doors. `sync`
+#: authorises its WRITE through the store's live-only guard
+#: (`sim_store_refused`); `totals` only READS, and refuses because a SIM store
+#: is empty by construction (`sim_reports_unusable`) -- #1689's memo section 5
+#: asks for that reason there, so this is not satisfied by changing the report.
+_CASHBOOK_SIM_REFUSAL: dict[str, str] = {
+    "sync": "sim_store_refused",
+    "totals": "sim_reports_unusable",
+}
 
 
 # The commands that APPEND to an instance inbox. They refuse an ambient
@@ -595,6 +640,31 @@ class CashbookJsonEnvelopeContractTest(_BrokerCliCase):
     only because they are the CLI's.
     """
 
+    def setUp(self) -> None:
+        super().setUp()
+        self._seed_cashbook_store()
+
+    def _seed_cashbook_store(self) -> None:
+        """One LIVE sweep of the fixture into this case's temporary home.
+
+        ``_BrokerCliCase`` hands every row an EMPTY home, which is right for
+        the broker group and wrong for ``totals``: an unswept store is a
+        REFUSAL (``nothing_swept``), so the success-shaped rows of the table
+        could not pass against one. Written through the real sweep path rather
+        than by composing journal lines, so the row the table reads is the row
+        a sweep writes.
+
+        ``sync`` is unaffected: its row is a ``--dry-run``, and a dry run reads
+        the store, plans, and appends nothing.
+        """
+        from alphalens_pipeline.account_cash import sweep
+
+        since, until = dt.date(2026, 8, 1), dt.date(2026, 10, 3)
+        plan = sweep.plan_sweep(
+            self.broker.list_account_cash(since, until), env="live", since=since, until=until
+        )
+        sweep.apply_sweep(plan, now=dt.datetime(2026, 10, 4, 0, 31, tzinfo=dt.UTC))
+
     def invoke_cashbook(self, argv: list[str]):
         from alphalens_cli.commands.cashbook import cashbook_app
 
@@ -621,11 +691,14 @@ class CashbookJsonEnvelopeContractTest(_BrokerCliCase):
         """The other instance, which cannot answer an envelope at all.
 
         A sweep authorises in both directions (#1689 F1), so SIM is refused by
-        the store's live-only write guard whether or not it is a dry run. What
-        "the option reached the command" looks like here is therefore the
-        refusal and an empty stdout, not a second envelope — click keeps the
-        LAST value of a repeated option, so the `--env sim` below is what the
-        command resolves.
+        the store's live-only write guard whether or not it is a dry run, and
+        `totals` refuses because that same guard leaves a SIM store empty by
+        construction. What "the option reached the command" looks like here is
+        therefore the refusal and an empty stdout, not a second envelope —
+        click keeps the LAST value of a repeated option, so the `--env sim`
+        below is what the command resolves. Each command's own reason comes
+        from `_CASHBOOK_SIM_REFUSAL`, so this cannot pass by both answering one
+        word.
         """
         for name, argv, has_env_option, _keys in _CASHBOOK_JSON_COMMANDS:
             if not has_env_option:
@@ -634,7 +707,7 @@ class CashbookJsonEnvelopeContractTest(_BrokerCliCase):
                 result = self.invoke_cashbook([*argv, "--env", "sim", "--format", "json"])
                 self.assertEqual(result.exit_code, 1, result.output)
                 self.assertEqual(result.stdout, "")
-                self.assertIn("sim_store_refused", result.stderr)
+                self.assertIn(_CASHBOOK_SIM_REFUSAL[name], result.stderr)
 
     def test_a_refusal_leaves_stdout_empty(self) -> None:
         for name, argv, _env, _keys in _CASHBOOK_JSON_COMMANDS:

@@ -156,6 +156,17 @@ _CLI_FAILURE_CODES: Mapping[str, FailureCode] = {
             ),
         ),
         FailureCode(
+            name="cashbook_totals_refused",
+            retryable=False,
+            meaning=(
+                "The cash book will not answer this window: the instance is not LIVE, "
+                "no sweep has ever covered any window, or --since is earlier than the "
+                "first one that did. `details.reason` names which and `details.env` "
+                "names the instance. A refusal rather than a smaller number, which "
+                "would read as a complete answer."
+            ),
+        ),
+        FailureCode(
             name="cashbook_sweep_busy",
             retryable=True,
             meaning=(

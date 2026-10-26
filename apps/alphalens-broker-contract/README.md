@@ -76,6 +76,7 @@ breaking change, so `unclassified` must never be a branch condition. Read it as
 | `queue_write_failed` | CLI | **yes** | Appending to an append-only journal failed (disk full, permissions): a broker queue journal, or the account cash book. No broker order can be in flight either way — the commands that report this either write only to the queue or place nothing at all — and a cash-book sweep appends in an order that leaves a partial sweep for a re-sweep to close, so the same command may be re-run once the cause clears. One caveat on that re-run: a cash-book sweep's balance line is keyed on the sweep id, so if `balances.jsonl` holds a trailing `sweep_id` that `sweeps.jsonl` has no record for, re-run with `alphalens cashbook sync --sweep-id <that id>` — a fresh id adds a second snapshot instead of closing the window. `details.journal` names the file, and is null only when the failure identified none — or when what failed was not an append at all: a cash-book sweep that could not take its own lock publishes that path under `details.lock`, the key `cashbook_sweep_busy` already uses, and leaves `details.journal` null. |
 | `stream_metrics_missing` | CLI | no | The stream gauge textfile does not exist for this instance. Carries a `suggestions` argv. |
 | `cashbook_sync_refused` | CLI | no | The cash-book sweep will not read or store this account's cash. `details.reason` names which rule refused it (see below) and `details.env` names the instance. |
+| `cashbook_totals_refused` | CLI | no | The cash book will not answer this window at all. `details.reason` names which rule refused it (see below) and `details.env` names the instance. A refusal rather than a smaller number: a window the store cannot speak for would otherwise publish a total that reads as complete. |
 | `cashbook_sweep_busy` | CLI | **yes** | Another sweep holds this instance's cash-book lock. Nothing was appended, so re-running needs no reconcile first. `details.lock` names the file. |
 | `unclassified` | CLI | no | Not yet given a code. Never branch on it. |
 
@@ -136,6 +137,21 @@ so one of them refuses the READ and the other refuses the WRITE.
 |---|---|---|
 | `cashbook_sync_refused` | `sim_reports_unusable` | the read answered nothing storable and said why: on SIM the bookings and trades reports are canned rows from other accounts. Nothing was read, so nothing can be stored |
 | | `sim_store_refused` | a write was aimed at a non-live environment. The store's write guard refuses it over every appender, so the environment's store root does not even come into existence |
+
+#### `cashbook_totals_refused` publishes a `reason` too
+
+The same shape once more, for the READ side of that store: one code for the
+mode "this window cannot be answered", with a closed `details.reason` naming
+which rule refused it. All three refuse BEFORE any number is summed, and that
+is the point — a window the store cannot speak for must not come back as a
+smaller total, because a smaller total reads as a complete answer. `details.env`
+names the instance on every one of them.
+
+| code | `details.reason` | what refused |
+|---|---|---|
+| `cashbook_totals_refused` | `sim_reports_unusable` | the instance is not LIVE. The store refuses SIM writes over every appender, so a SIM store is empty by construction and a sum over it would publish `0.00` for an account nobody ever read |
+| | `nothing_swept` | no sweep has ever covered any window on this instance, so there is no watermark to compare `--since` against and no row the store can vouch for |
+| | `before_first_sweep` | `--since` is earlier than the earliest window any sweep asked for. The store holds rows whose own episodes may have opened before that day, so the answer would be both smaller and silently incomplete. `alphalens cashbook totals --format json` publishes `coverage.history_begins`, which is the earliest `--since` that is answerable |
 
 #### The exit declaration, and what it may say
 
