@@ -486,6 +486,60 @@ class TheIdentitiesAreCheckedAndNotDescribed(IsolatedHomeTestCase):
 
         self.assertIn("bucket", str(ctx.exception))
 
+    def _with_all_rows_shifted(self, by: float) -> None:
+        """Run the report with ``all_rows`` moved ``by`` away from the buckets.
+
+        The observable shape of a row the classification lost: the buckets
+        still add to what they were given, and the total they must agree with
+        no longer does.
+        """
+        real = buckets.classify_buckets
+
+        def doctored(rows: object) -> buckets.BucketFold:
+            fold = real(rows)  # type: ignore[arg-type]
+            shifted = (fold.all_rows.value or 0.0) + by
+            return replace(fold, all_rows=replace(fold.all_rows, value=shifted))
+
+        with mock.patch.object(buckets, "classify_buckets", doctored):
+            report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=_SWEPT_UNTIL)
+
+    def test_half_a_grosz_of_drift_is_already_a_broken_bucket_identity(self) -> None:
+        """``_IDENTITY_EPSILON_ACCT``'s own claim, which nothing else pins.
+
+        It is an ARITHMETIC epsilon -- the residual between a ``Decimal``
+        accumulation and its ``float`` publication, measured below 1e-9 on the
+        real 104 rows -- and NOT the one-grosz width of agreement between two
+        independently computed money figures. Its docstring says using the
+        grosz here would let a dropped half-grosz row satisfy an identity, so
+        both halves of that sentence are asserted: a drift of 0.005 and a
+        drift of exactly ``BALANCE_TOLERANCE_ACCT`` must each still raise.
+
+        **Mutation it catches:** the epsilon widened to the grosz, and to 1.0,
+        and to 1000.0. Measured 2026-10-26: all three were green before this
+        test, because the only case with any power doctored ``all_rows`` to
+        1.00 against a real 20 738.68 and so fired only past about 20 737.
+        """
+        for drift in (0.005, BALANCE_TOLERANCE_ACCT):
+            with self.subTest(drift=drift):
+                with self.assertRaises(report.CashBookIdentityError):
+                    self._with_all_rows_shifted(drift)
+
+    def test_the_float_residual_the_epsilon_exists_for_still_holds(self) -> None:
+        """The other direction, which makes the epsilon two claims rather than
+        one: a drift below it is the ``Decimal``-to-``float`` residual the
+        constant was measured for, and it must NOT raise.
+
+        1e-10 is 28 units in the last place at 20 738.68, so the shifted total
+        really is a different float -- a drift of 1e-12 is not representable
+        there and would make this test vacuous.
+
+        **Mutation it catches:** the epsilon narrowed to 0.0, which turns
+        every report into a refusal the first time a sum lands a hair off.
+        """
+        self.assertNotEqual(ALL_ROWS_TOTAL_PLN + 1e-10, ALL_ROWS_TOTAL_PLN)
+
+        self._with_all_rows_shifted(1e-10)
+
     def test_a_broken_coverage_partition_refuses_too(self) -> None:
         """The second positive control: one identity raising does not show
         that the other one is wired at all."""
