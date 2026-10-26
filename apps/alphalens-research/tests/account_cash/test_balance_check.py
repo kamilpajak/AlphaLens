@@ -32,7 +32,7 @@ from dataclasses import replace
 
 from alphalens_pipeline.account_cash import balance_check
 from alphalens_pipeline.account_cash.codec import SweepRecord
-from alphalens_pipeline.account_cash.money import BALANCE_TOLERANCE_ACCT
+from alphalens_pipeline.account_cash.money import BALANCE_TOLERANCE_ACCT, acct_difference
 from alphalens_pipeline.account_cash.store import BalanceAt
 from alphalens_pipeline.brokers.account_cash import BalanceSnapshot, CashEvent
 
@@ -186,6 +186,38 @@ class TheCumulativeCheckOnTheRealCapture(unittest.TestCase):
         """
         self.assertEqual(self.check.rows, ALL_ROWS)
         self.assertEqual(self.check.asof, BALANCE.asof.isoformat())
+
+    def test_the_difference_rests_on_the_rows_it_summed_and_not_on_both_counts(self) -> None:
+        """A DIFFERENCE between a 104-row sum and one balance snapshot has no
+        row count of its own, and the one it used to publish counted nothing:
+        ``acct_difference`` adds both sides' counts, so the record carried
+        ``rows: 105`` and the operator read "difference 0.00 PLN over 105
+        rows". There are 104 booking rows and no 105th anything.
+
+        The published count is the booking rows the cash-book side summed,
+        which is this check's own basis -- so the record cannot state two
+        different counts for one check. ``acct_difference``'s rule is NOT
+        changed: adding both counts is right for a difference of two
+        independent sums over disjoint rows, which is what it is for, and it
+        is relied on in ``money.py``'s own tests.
+
+        **Mutation it catches:** publishing the raw difference, which is the
+        last assertion's 105; and publishing 0, which would read like the
+        ``not_checkable`` records that really do rest on no row.
+        """
+        self.assertEqual(self.check.expected.rows, ALL_ROWS)
+        self.assertEqual(self.check.observed.rows, 1)
+        self.assertEqual(self.check.difference.rows, ALL_ROWS)
+        self.assertEqual(self.check.difference.rows, self.check.rows)
+        self.assertNotEqual(self.check.difference.rows, 0)
+        self.assertEqual(
+            acct_difference(self.check.expected, self.check.observed).rows,
+            ALL_ROWS + 1,
+        )
+        self.assertNotEqual(
+            self.check.difference.rows,
+            acct_difference(self.check.expected, self.check.observed).rows,
+        )
 
     def test_the_interval_is_the_span_of_the_rows_it_summed(self) -> None:
         """F5. The basis is read off the rows SUMMED, not handed in.
@@ -344,6 +376,23 @@ class TheIncrementalCheckOnTheP8PairWithAuthoredRowIds(unittest.TestCase):
         self.assertIsNotNone(self.check.difference.value)
         self.assertLess(abs(self.check.difference.value or 0.0), BALANCE_TOLERANCE_ACCT)
         self.assertEqual(self.check.rows, 6)
+
+    def test_the_difference_rests_on_the_six_rows_and_not_on_eight(self) -> None:
+        """The same rule on the other check, where both sides are sums: six
+        booking rows against a change over two balance snapshots. The raw
+        difference adds them to eight, and there is no eighth row.
+
+        The ``observed`` line keeps its own count of 2, deliberately. It is a
+        sum over two balance snapshots and two is how many it read -- a count
+        of something that exists, in the balances journal rather than in the
+        cash book. What the difference had was a count of two SPACES added
+        together, which counts nothing in either.
+        """
+        self.assertEqual(self.check.expected.rows, 6)
+        self.assertEqual(self.check.observed.rows, 2)
+        self.assertEqual(self.check.difference.rows, 6)
+        self.assertEqual(self.check.difference.rows, self.check.rows)
+        self.assertNotEqual(self.check.difference.rows, 8)
 
     def test_it_says_on_its_face_that_it_can_see_a_restatement(self) -> None:
         """**Mutation it catches:** copying the flag from the cumulative
@@ -707,10 +756,13 @@ class AVerdictOfNotCheckableAlwaysNamesItsReason(unittest.TestCase):
         self.assertEqual(check.verdict, balance_check.VERDICT_RECONCILES)
         self.assertIsNone(check.null_reason)
 
-    def test_the_verdict_and_the_reason_agree_on_every_shape(self) -> None:
-        """One property over all of them: a record says ``not_checkable``
-        exactly when it names a reason. That is the invariant a renderer may
-        rely on, and neither half of it held before."""
+    def _every_shape(self) -> dict[str, balance_check.BalanceCheck]:
+        """Every record shape either check can publish, keyed by what it is.
+
+        Shared by the two properties below rather than built twice: a shape
+        added to one copy and not the other is a shape one property stops
+        covering, silently.
+        """
         snapshots, sweeps = _p8_pair()
         latest = BalanceAt(sweep_id="s1", snapshot=BALANCE)
         shapes = {
@@ -738,8 +790,13 @@ class AVerdictOfNotCheckableAlwaysNamesItsReason(unittest.TestCase):
                 _p8_events(), snapshots=snapshots, sweeps=sweeps
             ),
         }
+        return shapes
 
-        for name, check in sorted(shapes.items()):
+    def test_the_verdict_and_the_reason_agree_on_every_shape(self) -> None:
+        """One property over all of them: a record says ``not_checkable``
+        exactly when it names a reason. That is the invariant a renderer may
+        rely on, and neither half of it held before."""
+        for name, check in sorted(self._every_shape().items()):
             with self.subTest(shape=name):
                 self.assertEqual(
                     check.verdict == balance_check.VERDICT_NOT_CHECKABLE,
@@ -748,6 +805,24 @@ class AVerdictOfNotCheckableAlwaysNamesItsReason(unittest.TestCase):
                 )
                 if check.null_reason is not None:
                     self.assertIn(check.null_reason, balance_check.CHECK_NULL_REASONS)
+
+    def test_no_published_difference_states_a_count_of_its_own(self) -> None:
+        """The second property over the same shapes: the difference rests on
+        the rows the check itself summed, never on both sides' counts added.
+
+        One record must not carry two counts of one basis. A renderer prints
+        ``difference <amount> over <rows> rows`` beside ``rows <the record's
+        own>``, so two numbers there are two answers to one question -- and
+        the added one answers 105 over a 104-row cash book.
+
+        **Mutation it catches:** restating only the check that was measured.
+        The eight shapes include both kinds and every ``not_checkable``
+        reason, where the count is 0 on both sides and must stay there.
+        """
+        for name, check in sorted(self._every_shape().items()):
+            with self.subTest(shape=name):
+                self.assertEqual(check.difference.rows, check.rows)
+                self.assertEqual(check.expected.rows, check.rows)
 
 
 #: Every reason a check can answer ``not_checkable`` with, written out rather

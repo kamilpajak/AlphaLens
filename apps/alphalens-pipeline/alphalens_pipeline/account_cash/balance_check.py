@@ -52,6 +52,14 @@ a money line whose own stated interval runs backwards.
 :data:`NULL_INTERVAL_RUNS_BACKWARDS` is the fourth named absence, and it
 publishes no bounds at all.
 
+**The DIFFERENCE carries no count of its own.** Its two sides are counted in
+different spaces -- booking rows on one, balance snapshots on the other -- and
+:func:`~.money.acct_difference` adds both counts, so the record published
+``rows: 105`` for a 104-row cash book against one snapshot and the human
+render printed "difference 0.00 PLN over 105 rows". It rests on the booking
+rows the check summed instead, which is :attr:`BalanceCheck.rows`, so one
+record states one count for one basis (:func:`_difference_of`).
+
 **A verdict of ``not_checkable`` always names its reason on the RECORD.** It is
 reachable two ways: a check that could not be SET UP (the four absences above),
 and one that was set up and whose arithmetic produced no number -- no
@@ -89,6 +97,7 @@ from alphalens_pipeline.account_cash.money import (
     AcctAmount,
     acct_difference,
     acct_null,
+    acct_resting_on,
     acct_sum,
 )
 from alphalens_pipeline.account_cash.store import BalanceAt, sweep_window
@@ -186,8 +195,14 @@ class BalanceCheck:
     verdict: str
     #: What the cash book says moved, in the ACCOUNT currency.
     expected: AcctAmount
-    #: What the account's own cash did: ``CashBalance``, or its change.
+    #: What the account's own cash did: ``CashBalance``, or its change. Its
+    #: own ``rows`` counts BALANCE SNAPSHOTS -- one here, two on the
+    #: incremental check -- and not booking rows.
     observed: AcctAmount
+    #: ``expected - observed``. Its ``rows`` is :attr:`rows`, the booking rows
+    #: this check summed: a difference whose sides are counted in two spaces
+    #: has no count of its own, and the two added together counted nothing
+    #: (``rows: 105`` over a 104-row cash book). See :func:`_difference_of`.
     difference: AcctAmount
     #: Published, never implied. ``False`` on the cumulative check.
     detects_restatement: bool
@@ -249,6 +264,37 @@ def _cash_as_acct(at: BalanceAt) -> AcctAmount:
     """
     account_currency = _account_currency(at)
     return acct_sum([(at.snapshot.cash_balance, account_currency)], rows=1)
+
+
+def _difference_of(expected: AcctAmount, observed: AcctAmount, *, rows: int) -> AcctAmount:
+    """``expected - observed``, resting on the BOOKING rows the check summed.
+
+    The two sides are counted in different spaces: ``expected`` is a sum over
+    booking rows and ``observed`` is a balance snapshot, or the change between
+    two of them. :func:`~.money.acct_difference` adds both counts, which is
+    right for a difference of two independent sums over disjoint rows and
+    counts nothing here -- measured on the real capture as ``rows: 105``
+    against a 104-row cash book, which the human render printed as "difference
+    0.00 PLN over 105 rows". There is no 105th anything.
+
+    So the published count is ``rows``: the booking rows this check summed,
+    which is also :attr:`BalanceCheck.rows`. One record then states ONE count
+    for one basis -- a renderer prints the nested count beside the record's
+    own, and two different numbers there are two answers to one question.
+
+    The fix is here and not in :func:`~.money.acct_difference`, whose rule is
+    relied on elsewhere and is right for what it documents. Nor is the count
+    dropped to ``0``: that is what a check which summed nothing publishes (see
+    :func:`_not_checkable`), so a real difference carrying it would read as a
+    check that rests on no row.
+
+    ``observed`` keeps its own count, deliberately. On the incremental check
+    that count is 2, and two is how many balance snapshots it read -- a count
+    of records that exist, in the balances journal rather than in the cash
+    book. What the difference carried was two spaces ADDED, which counts
+    nothing in either.
+    """
+    return acct_resting_on(acct_difference(expected, observed), rows=rows)
 
 
 def _verdict(difference: AcctAmount) -> str:
@@ -359,7 +405,7 @@ def cumulative_check(events: Sequence[CashEvent], latest: BalanceAt | None) -> B
         currency=_account_currency(latest),
     )
     observed = _cash_as_acct(latest)
-    difference = acct_difference(expected, observed)
+    difference = _difference_of(expected, observed, rows=len(events))
     return BalanceCheck(
         kind=CHECK_CUMULATIVE,
         verdict=_verdict(difference),
@@ -440,7 +486,7 @@ def incremental_check(
         currency=_account_currency(later),
     )
     observed = acct_difference(_cash_as_acct(later), _cash_as_acct(earlier))
-    difference = acct_difference(expected, observed)
+    difference = _difference_of(expected, observed, rows=len(settled))
     return BalanceCheck(
         kind=CHECK_INCREMENTAL,
         verdict=_verdict(difference),

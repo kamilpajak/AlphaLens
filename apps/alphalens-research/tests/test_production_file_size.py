@@ -158,7 +158,12 @@ BASELINE: dict[str, int] = {
     # explained above" over a window holding no booking row). The
     # `_cost_basis_open` note lost its propagation argument to the same change
     # and had to say which argument is left standing.
-    "apps/alphalens-pipeline/alphalens_pipeline/account_cash/report.py": 1170,
+    #
+    # Lowered from that 1170 to 1145: `_resting_on` moved to `money.py` as
+    # `acct_resting_on` when the balance check became its second user, and
+    # took its 25 lines with it. Lowered rather than kept as slack, which is
+    # what this table asks for when a file shrinks.
+    "apps/alphalens-pipeline/alphalens_pipeline/account_cash/report.py": 1145,
     # Raised again, by 8, to say that the raise page's ticker fallback is
     # unreachable by construction. It sits beside the stop-PLACED page's
     # fallback, which looks identical and IS reachable and tested, so without

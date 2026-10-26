@@ -112,6 +112,7 @@ __all__ = [
     "AcctAmount",
     "acct_difference",
     "acct_null",
+    "acct_resting_on",
     "acct_sum",
 ]
 
@@ -288,3 +289,40 @@ def acct_difference(left: AcctAmount, right: AcctAmount) -> AcctAmount:
     assert left.value is not None and right.value is not None  # the dataclass invariant
     difference = Decimal(str(left.value)) - Decimal(str(right.value))
     return _published(difference, resolved, rows=rows)
+
+
+def acct_resting_on(amount: AcctAmount, *, rows: int) -> AcctAmount:
+    """``amount`` with the row count the PUBLISHED line actually rests on.
+
+    The compensating half of :func:`acct_difference`'s row rule, and it lives
+    beside that rule rather than beside either caller: adding both sides'
+    counts is right for a difference of two independent sums over disjoint
+    rows, and wrong wherever the published line is not that. Two lines in this
+    layer are not:
+
+    * the report's ``residual_acct``, a total minus four lines, whose counts
+      would add to five times the window; and
+    * a balance check's ``difference``, between a sum over BOOKING rows and a
+      balance snapshot, whose counts added a row count to a snapshot count --
+      measured as ``rows: 105`` over a 104-row cash book, printed to the
+      operator as "difference 0.00 PLN over 105 rows".
+
+    So the caller states the basis once, HERE, and the value and the null
+    reason still come from the one summer. Restating is not the same as
+    publishing a zero: ``rows=0`` is what a check that summed nothing
+    carries, so a derived line borrowing it would read as resting on no row.
+
+    Written as a constructor call rather than ``dataclasses.replace``: the
+    package's own anti-compaction gate
+    (``tests/account_cash/test_no_compactor_reaches_the_cash_book.py``)
+    refuses any ``.replace`` attribute call in this package by NAME, because
+    ``os.replace`` is how a compactor arrives and a name-keyed gate cannot
+    tell the two apart. Naming the four fields is also the more readable form
+    here: it shows that only the count changes.
+    """
+    return AcctAmount(
+        value=amount.value,
+        currency=amount.currency,
+        rows=rows,
+        null_reason=amount.null_reason,
+    )

@@ -141,6 +141,7 @@ from alphalens_pipeline.account_cash.money import (
     BALANCE_TOLERANCE_ACCT,
     AcctAmount,
     acct_difference,
+    acct_resting_on,
     acct_sum,
 )
 from alphalens_pipeline.brokers.account_cash import CashEvent
@@ -697,32 +698,6 @@ def _account_currency(events: Sequence[CashEvent], latest: store.BalanceAt | Non
     return latest.snapshot.currency if latest is not None else None
 
 
-def _resting_on(amount: AcctAmount, rows: int) -> AcctAmount:
-    """``amount`` with the row count the published line actually rests on.
-
-    :func:`~.money.acct_difference` adds both sides' counts, which is right
-    for a difference of two independent sums and wrong for a line like the
-    residual, computed by subtracting four lines from one total: the counts
-    would add to five times the window. Re-stated once, HERE, rather than by
-    letting each caller build its own ``AcctAmount`` -- the value and the null
-    reason still come from the one summer.
-
-    Written as a constructor call rather than ``dataclasses.replace``: the
-    package's own anti-compaction gate
-    (``tests/account_cash/test_no_compactor_reaches_the_cash_book.py``) refuses
-    any ``.replace`` attribute call in this package by NAME, because
-    ``os.replace`` is how a compactor arrives and a name-keyed gate cannot
-    tell the two apart. Naming the four fields is also the more readable form
-    here: it shows that only the count changes.
-    """
-    return AcctAmount(
-        value=amount.value,
-        currency=amount.currency,
-        rows=rows,
-        null_reason=amount.null_reason,
-    )
-
-
 # --- The identities, checked ---------------------------------------------------
 
 
@@ -1087,7 +1062,7 @@ def build_totals(*, env: str, since: dt.date, until: dt.date) -> CashBookTotals:
     # It rests on the whole window, not on a subset of it: the named lines
     # live in two row spaces (booking rows for the buckets, trades rows for
     # the episodes), so no set of booking rows is the residual's own.
-    residual = _resting_on(residual, len(window.inside))
+    residual = acct_resting_on(residual, rows=len(window.inside))
 
     # The same four window-scoped lines, with the deposits moved from the
     # subtraction to the line BELOW the subtotal -- which is what makes
