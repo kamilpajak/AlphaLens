@@ -42,6 +42,12 @@ module may not import (dependency rule 2) -- the shape is mirrored, not reused.
 Two deliberate differences: the published order is sorted EXPLICITLY, because
 first-seen key order is the wrong order for a cash book, and ``restated``
 counts keys whose payload CHANGED, which is the signal the journal exists for.
+
+**One parser for a stored window**, :func:`sweep_window`. Two readers consume
+it and they must agree: :func:`~.report.coverage_of` decides whether a window
+EXISTS at all, and :func:`~.balance_check.incremental_check` decides which
+interval to sum. Each held a verbatim copy, which behaves identically on the day
+it is written and drifts on the day the rule changes.
 """
 
 from __future__ import annotations
@@ -105,7 +111,37 @@ __all__ = [
     "read_cash_events",
     "read_sweeps",
     "read_trade_rows",
+    "sweep_window",
 ]
+
+
+def sweep_window(record: codec.SweepRecord) -> tuple[dt.date, dt.date] | None:
+    """The record's asked window as dates, or ``None`` when it is not one.
+
+    ONE parse of a stored window, for both of its readers:
+    :func:`~.report.coverage_of` asks whether the window exists at all, and
+    :func:`~.balance_check.incremental_check` asks which interval to sum. They
+    must answer the same thing about the same record, so they share this
+    function rather than a copy each.
+
+    One parse at the BOUNDARY, because the three date vocabularies in this
+    layer are different types: ``SweepRecord.since`` / ``.until`` are ISO
+    strings, ``SweepPlan.since`` / ``.until`` are ``dt.date``, and
+    ``CashEvent.date`` is a raw vendor string. Comparing them unparsed either
+    raises or sorts lexically.
+
+    A window that ends BEFORE it starts is refused the same way one that will
+    not parse is: the codec takes both bounds as free text, so a hand-edited
+    line decodes, and neither reader has anything to say about an interval
+    that runs backwards. A one-day window -- ``since == until``, the ordinary
+    daily shape -- is a window.
+    """
+    try:
+        since = dt.date.fromisoformat(record.since)
+        until = dt.date.fromisoformat(record.until)
+    except ValueError:
+        return None
+    return (since, until) if since <= until else None
 
 
 class SimCashBookRefusedError(Exception):

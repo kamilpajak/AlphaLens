@@ -990,5 +990,63 @@ class AReadIsAllowedOnEveryEnvironment(IsolatedHomeTestCase):
                 self.assertIn("prod", str(ctx.exception))
 
 
+class TheSweepWindowIsParsedInExactlyOnePlace(unittest.TestCase):
+    """One parser for both readers of a stored window (F8).
+
+    ``report.coverage_of`` decides whether a window EXISTS at all and
+    ``balance_check.incremental_check`` decides which interval to SUM, so the
+    two must answer the same thing about the same record. They held two
+    verbatim copies of the same function, which behave identically on the day
+    they are written and drift on the day the rule changes -- the argument
+    ``store.assert_writable`` already makes about the write guard.
+
+    A plain ``TestCase``: this resolves no path and reads no store.
+    """
+
+    def test_a_well_formed_window_comes_back_as_two_dates(self) -> None:
+        self.assertEqual(
+            store.sweep_window(_sweep(since="2026-08-01", until="2026-08-10")),
+            (dt.date(2026, 8, 1), dt.date(2026, 8, 10)),
+        )
+
+    def test_a_window_that_will_not_parse_is_no_window(self) -> None:
+        """The codec takes ``since`` / ``until`` as free text, so a
+        hand-edited line decodes and only the parse can refuse it."""
+        self.assertIsNone(store.sweep_window(_sweep(since="last tuesday", until="whenever")))
+
+    def test_a_window_that_ends_before_it_starts_is_no_window(self) -> None:
+        """Both bounds parse and the pair is still not an interval."""
+        self.assertIsNone(store.sweep_window(_sweep(since="2026-08-10", until="2026-08-01")))
+
+    def test_a_single_day_window_is_a_window(self) -> None:
+        """The negative control for the test above: a refusal written ``since
+        < until`` would refuse every one-day sweep, which is the ordinary
+        daily shape."""
+        self.assertEqual(
+            store.sweep_window(_sweep(since="2026-08-10", until="2026-08-10")),
+            (dt.date(2026, 8, 10), dt.date(2026, 8, 10)),
+        )
+
+    def test_neither_reader_declares_a_window_parser_of_its_own(self) -> None:
+        """The duplication gate, keyed on the OPERATION and on the name.
+
+        The name both copies carried is gated because that is how the two came
+        to exist; the parse itself is gated because a rename would carry the
+        duplication past a name-only check. Both modules must instead reach
+        the shared parser.
+
+        **Mutation it catches:** re-adding a private window parser to either
+        module, under its old name or a new one.
+        """
+        from alphalens_pipeline.account_cash import balance_check, report
+
+        for module in (report, balance_check):
+            with self.subTest(module=module.__name__):
+                source = inspect.getsource(module)
+                self.assertNotIn("def _window_of", source)
+                self.assertNotIn("fromisoformat(record.", source)
+                self.assertIn("sweep_window", source)
+
+
 if __name__ == "__main__":
     unittest.main()

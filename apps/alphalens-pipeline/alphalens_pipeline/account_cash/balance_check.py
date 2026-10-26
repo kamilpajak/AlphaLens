@@ -63,7 +63,7 @@ from alphalens_pipeline.account_cash.money import (
     acct_null,
     acct_sum,
 )
-from alphalens_pipeline.account_cash.store import BalanceAt
+from alphalens_pipeline.account_cash.store import BalanceAt, sweep_window
 from alphalens_pipeline.brokers.account_cash import CashEvent
 
 #: The cash book and the account agree to within one grosz.
@@ -268,15 +268,6 @@ def cumulative_check(
     )
 
 
-def _window_of(record: SweepRecord) -> tuple[dt.date, dt.date] | None:
-    try:
-        since = dt.date.fromisoformat(record.since)
-        until = dt.date.fromisoformat(record.until)
-    except ValueError:
-        return None
-    return (since, until) if since <= until else None
-
-
 def incremental_check(
     events: Sequence[CashEvent],
     *,
@@ -302,7 +293,7 @@ def incremental_check(
         )
 
     earlier, later = snapshots[-2], snapshots[-1]
-    windows = {record.sweep_id: _window_of(record) for record in sweeps}
+    windows = {record.sweep_id: sweep_window(record) for record in sweeps}
     earlier_window = windows.get(earlier.sweep_id)
     later_window = windows.get(later.sweep_id)
     if earlier_window is None or later_window is None:

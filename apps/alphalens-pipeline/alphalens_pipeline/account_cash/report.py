@@ -298,26 +298,9 @@ class Coverage:
         }
 
 
-def _window_of(record: SweepRecord) -> tuple[dt.date, dt.date] | None:
-    """The record's asked window as dates, or ``None`` when it will not parse.
-
-    One parse at the boundary, because the three date vocabularies in this
-    layer are different types: ``SweepRecord.since`` / ``.until`` are ISO
-    strings, ``SweepPlan.since`` / ``.until`` are ``dt.date``, and
-    ``CashEvent.date`` is a raw vendor string. Comparing them unparsed either
-    raises or sorts lexically.
-    """
-    try:
-        since = dt.date.fromisoformat(record.since)
-        until = dt.date.fromisoformat(record.until)
-    except ValueError:
-        return None
-    return (since, until) if since <= until else None
-
-
 def history_begins(sweeps: Sequence[SweepRecord]) -> str | None:
     """The earliest window any sweep ASKED for, or ``None`` if none did."""
-    windows = [window for window in map(_window_of, sweeps) if window is not None]
+    windows = [window for window in map(store.sweep_window, sweeps) if window is not None]
     return min(since for since, _ in windows).isoformat() if windows else None
 
 
@@ -329,7 +312,7 @@ def coverage_of(sweeps: Sequence[SweepRecord]) -> Coverage:
     08-01..08-20 with no hole, and a contiguity test written ``next.since <=
     prev.until`` reports a one-day gap between every such pair.
     """
-    windows = sorted(window for window in map(_window_of, sweeps) if window is not None)
+    windows = sorted(window for window in map(store.sweep_window, sweeps) if window is not None)
     malformed = len(sweeps) - len(windows)
     if not windows:
         return Coverage(
