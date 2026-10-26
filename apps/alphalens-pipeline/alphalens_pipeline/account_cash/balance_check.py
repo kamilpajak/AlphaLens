@@ -34,6 +34,15 @@ one's ended, both taken from :class:`~.codec.SweepRecord`, and
 23:46:52 -- and publishes ``differs`` with +4 319.07 against a pair that
 reconciles exactly.
 
+**That interval is derived, so its DIRECTION is a check and not an assumption.**
+A re-run of a sweep over the same window, and a backfill of an older one, both
+put the interval's start past its end. It then holds no row, and the empty sum
+would be compared against a balance change that is real: measured ``differs``
+with -5 000.00 PLN over 0 rows, ``since=2026-10-09``, ``until=2026-10-08`` --
+a money line whose own stated interval runs backwards.
+:data:`NULL_INTERVAL_RUNS_BACKWARDS` is the fourth named absence, and it
+publishes no bounds at all.
+
 **What this cannot see**, and the memo says so rather than the code pretending
 otherwise: a sweep run inside the window between the settlement batch and the
 report completing sees the whole day's cash movement with none, or only some,
@@ -88,10 +97,24 @@ NULL_ONE_SNAPSHOT_ONLY = "one_snapshot_only"
 #: BEFORE ``sweeps.jsonl``, so a crash between the two leaves exactly this.
 #: Defaulting to the other snapshot's window would sum an interval nobody read.
 NULL_SWEEP_WINDOW_NOT_FOUND = "sweep_window_not_found"
+#: The two sweep windows are on disk and the interval they DERIVE runs
+#: backwards: the later sweep's window ends no later than the earlier one's, so
+#: ``[earlier until + 1 day, later until]`` has its bounds the wrong way round
+#: and no row can fall inside it. Two ordinary operator actions reach it -- a
+#: re-run of a sweep over the same window, and a backfill of an older one --
+#: and both leave two snapshots whose cash may genuinely differ. Without this
+#: the empty sum was compared against that real change and published
+#: ``differs`` with a money number beside an interval running backwards
+#: (measured: -5 000.00 PLN over 0 rows, ``since=2026-10-09``,
+#: ``until=2026-10-08``). Registered beside
+#: :data:`NULL_SWEEP_WINDOW_NOT_FOUND` because it is the same KIND of fact:
+#: the join the check rests on did not produce an interval it may sum.
+NULL_INTERVAL_RUNS_BACKWARDS = "interval_runs_backwards"
 CHECK_NULL_REASONS: tuple[str, ...] = (
     NULL_NO_BALANCE_SNAPSHOT,
     NULL_ONE_SNAPSHOT_ONLY,
     NULL_SWEEP_WINDOW_NOT_FOUND,
+    NULL_INTERVAL_RUNS_BACKWARDS,
 )
 
 __all__ = [
@@ -99,6 +122,7 @@ __all__ = [
     "CHECK_INCREMENTAL",
     "CHECK_KINDS",
     "CHECK_NULL_REASONS",
+    "NULL_INTERVAL_RUNS_BACKWARDS",
     "NULL_NO_BALANCE_SNAPSHOT",
     "NULL_ONE_SNAPSHOT_ONLY",
     "NULL_SWEEP_WINDOW_NOT_FOUND",
@@ -196,7 +220,13 @@ def _verdict(difference: AcctAmount) -> str:
 
 
 def _not_checkable(kind: str, reason: str, *, asof: str | None = None) -> BalanceCheck:
-    """A check nobody could make: three named absences and no number."""
+    """A check nobody could make: four named absences and no number.
+
+    ``since`` / ``until`` are left unset on purpose. Three of the four reasons
+    have no interval to state, and the fourth --
+    :data:`NULL_INTERVAL_RUNS_BACKWARDS` -- has one that is not an interval,
+    which is the whole reason it refuses.
+    """
     absent = acct_null(_money_null_for(reason), None, rows=0)
     return BalanceCheck(
         kind=kind,
@@ -282,6 +312,14 @@ def incremental_check(
     sweep before about 00:30 UTC for the preceding trade date) is what makes
     that true, because a row dated inside the earlier window but settled after
     its snapshot would break it.
+
+    **The interval is DERIVED, so it is also checked.** Nothing about the two
+    windows guarantees the second ends after the first: a re-run of the same
+    window and a backfill of an older one both put ``first`` past ``last``.
+    Such a pair holds no row, so the sum would be empty while the two
+    snapshots' cash may differ by a real amount --
+    :data:`NULL_INTERVAL_RUNS_BACKWARDS` refuses it instead, and publishes no
+    bounds, because an interval nobody can form has none to state.
     """
     if not snapshots:
         return _not_checkable(CHECK_INCREMENTAL, NULL_NO_BALANCE_SNAPSHOT)
@@ -305,6 +343,17 @@ def incremental_check(
 
     first = earlier_window[1] + dt.timedelta(days=1)
     last = later_window[1]
+    if last < first:
+        # Refused rather than summed: a backwards pair holds no row, so the
+        # empty sum would be compared against a balance change that is real.
+        # `last == first` is the ordinary daily cadence -- two back-to-back
+        # sweeps one day apart -- so the guard is strict.
+        return _not_checkable(
+            CHECK_INCREMENTAL,
+            NULL_INTERVAL_RUNS_BACKWARDS,
+            asof=later.snapshot.asof.isoformat(),
+        )
+
     settled = [event for event in events if _settles_in(event, first, last)]
     expected = acct_sum(
         [(event.amount_account_currency, event.account_currency) for event in settled],

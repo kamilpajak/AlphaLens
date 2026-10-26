@@ -116,6 +116,13 @@ BALANCE_MOVED_BY_PLN = 5000.00
 MOVED_CASH_PLN = 25738.68
 MOVED_ASOF = dt.datetime(2026, 10, 4, 6, 12, tzinfo=dt.UTC)
 
+#: A second sweep's window, strictly AFTER the first one's and adjacent to it,
+#: so the two leave no gap and the derived incremental interval runs forward.
+#: It holds no booking row, which is what makes the interval's own direction --
+#: and not its contents -- the subject.
+SECOND_SINCE = dt.date(2026, 10, 4)
+SECOND_UNTIL = dt.date(2026, 10, 6)
+
 
 _BASE_READ = AccountCashRead(
     events=tuple(BOOKINGS),
@@ -827,9 +834,41 @@ class TheTwoBalanceChecksReachThePublishedTotal(IsolatedHomeTestCase):
         self.assertEqual(check.null_reason, balance_check.NULL_ONE_SNAPSHOT_ONLY)
         self.assertIs(check.detects_restatement, True)
 
-    def test_a_second_sweep_makes_the_incremental_check_answerable(self) -> None:
+    def test_a_second_sweep_over_a_LATER_window_makes_the_check_answerable(self) -> None:
         """The negative control for the test above: without it, an
-        implementation that always answers ``not_checkable`` passes."""
+        implementation that always answers ``not_checkable`` passes.
+
+        The second sweep asks for a LATER window (2026-10-04..2026-10-06), so
+        the derived interval really is one: ``[2026-10-04, 2026-10-06]``. Until
+        2026-10-26 this case seeded the second sweep over the SAME window as
+        the first and asserted only that ``since`` was not ``None`` -- which an
+        interval running BACKWARDS satisfies, and that is exactly what the
+        same-window shape publishes (F1). The direction is asserted here, and
+        the same-window shape has its own case below.
+        """
+        _seed(since=SECOND_SINCE, until=SECOND_UNTIL, now=_SWEPT_AT + dt.timedelta(days=3))
+
+        totals = report.build_totals(env=_LIVE, since=LATE_SINCE, until=_SWEPT_UNTIL)
+        check = next(
+            one for one in totals.balance_checks if one.kind == balance_check.CHECK_INCREMENTAL
+        )
+
+        self.assertIsNone(check.null_reason)
+        self.assertEqual(check.since, SECOND_SINCE.isoformat())
+        self.assertEqual(check.until, SECOND_UNTIL.isoformat())
+        self.assertLessEqual(check.since or "", check.until or "")
+
+    def test_a_second_sweep_over_the_SAME_window_forms_no_interval(self) -> None:
+        """The operator action the store sees most often after a failed run:
+        the same window swept again.
+
+        The interval is ``[until + 1 day, until]``, which runs backwards and
+        holds no row, so the check refuses by name instead of comparing
+        ``0.00`` against whatever the balance did (F1).
+
+        **Mutation it catches:** dropping the order guard, which publishes a
+        verdict over 0 rows with ``since`` one day past ``until``.
+        """
         _seed(since=_SWEPT_SINCE, until=_SWEPT_UNTIL, now=_SWEPT_AT + dt.timedelta(days=1))
 
         totals = report.build_totals(env=_LIVE, since=LATE_SINCE, until=_SWEPT_UNTIL)
@@ -837,8 +876,10 @@ class TheTwoBalanceChecksReachThePublishedTotal(IsolatedHomeTestCase):
             one for one in totals.balance_checks if one.kind == balance_check.CHECK_INCREMENTAL
         )
 
-        self.assertNotEqual(check.null_reason, balance_check.NULL_ONE_SNAPSHOT_ONLY)
-        self.assertIsNotNone(check.since)
+        self.assertEqual(check.verdict, balance_check.VERDICT_NOT_CHECKABLE)
+        self.assertEqual(check.null_reason, balance_check.NULL_INTERVAL_RUNS_BACKWARDS)
+        self.assertIsNone(check.since)
+        self.assertIsNone(check.until)
 
     def test_the_checks_survive_the_strict_json_render(self) -> None:
         body = json.loads(json.dumps(self.totals.to_jsonable(), allow_nan=False, sort_keys=True))

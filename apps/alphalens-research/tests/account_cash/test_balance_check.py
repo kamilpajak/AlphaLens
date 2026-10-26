@@ -401,6 +401,119 @@ class TheIncrementalCheckOnTheP8PairWithAuthoredRowIds(unittest.TestCase):
         self.assertAlmostEqual(check.difference.value or 0.0, 0.50, places=9)
 
 
+class TheIncrementalIntervalRunsForwardOrIsNotAnInterval(unittest.TestCase):
+    """F1: the interval is DERIVED, so it can come out backwards.
+
+    It runs from the day AFTER the earlier sweep's window ended to the day the
+    later one's ended. Two ordinary operator actions make ``first > last``: a
+    re-run of a sweep over the same window, and a backfill of an older one.
+    No row can fall inside a backwards pair, so the sum is empty and the check
+    compares ``0.00`` against a real balance change -- publishing ``differs``
+    with a money number beside an interval whose own stated bounds are in the
+    wrong order.
+    """
+
+    def setUp(self) -> None:
+        self.snapshots, self.sweeps = _p8_pair()
+
+    #: Both sweeps over one window. The reviewer's probe shape.
+    def _same_window(self) -> tuple[SweepRecord, ...]:
+        return (
+            _sweep("s1", "2026-10-01", "2026-10-08"),
+            _sweep("s2", "2026-10-01", "2026-10-08"),
+        )
+
+    #: The later SNAPSHOT belongs to a sweep that asked for an EARLIER window.
+    def _backfill(self) -> tuple[SweepRecord, ...]:
+        return (
+            _sweep("s1", "2026-10-01", "2026-10-08"),
+            _sweep("s2", "2026-09-01", "2026-09-30"),
+        )
+
+    def test_a_re_run_of_the_same_window_forms_no_interval_at_all(self) -> None:
+        """The loudest shape, with the money moving under it: the account's
+        cash falls 5 000.00 between the two snapshots while the derived
+        interval is ``[2026-10-09, 2026-10-08]`` and holds nothing.
+
+        **Mutation it catches:** dropping the order guard, which publishes
+        ``differs`` with -5 000.00 PLN over 0 rows, ``since=2026-10-09`` and
+        ``until=2026-10-08``.
+        """
+        moved = (
+            _snapshot("s1", P8_EARLIER_CASH_PLN, P8_EARLIER_ASOF),
+            _snapshot("s2", P8_EARLIER_CASH_PLN - 5000.00, P8_LATER_ASOF),
+        )
+
+        check = balance_check.incremental_check(
+            _p8_events(), snapshots=moved, sweeps=self._same_window()
+        )
+
+        self.assertEqual(check.verdict, balance_check.VERDICT_NOT_CHECKABLE)
+        self.assertEqual(check.null_reason, balance_check.NULL_INTERVAL_RUNS_BACKWARDS)
+        self.assertIsNone(check.difference.value)
+        self.assertIsNone(check.since)
+        self.assertIsNone(check.until)
+        self.assertEqual(check.rows, 0)
+
+    def test_a_backfill_of_an_older_window_forms_no_interval_either(self) -> None:
+        """The other way in, and it is not a re-run.
+
+        **Mutation it catches:** a guard written only for the equal-window
+        case, which a backfill walks straight past.
+        """
+        check = balance_check.incremental_check(
+            _p8_events(), snapshots=self.snapshots, sweeps=self._backfill()
+        )
+
+        self.assertEqual(check.verdict, balance_check.VERDICT_NOT_CHECKABLE)
+        self.assertEqual(check.null_reason, balance_check.NULL_INTERVAL_RUNS_BACKWARDS)
+
+    def test_the_shortest_forward_interval_is_still_answerable(self) -> None:
+        """The negative control, on the boundary the guard sits on.
+
+        The P8 pair's later window ends exactly ONE day after the earlier
+        one's, so the interval is the single day ``[until + 1, until + 1]``. A
+        guard written ``last <= first`` refuses it -- and that is the ordinary
+        daily cadence, so it would refuse every back-to-back pair of sweeps.
+        """
+        check = balance_check.incremental_check(
+            _p8_events(), snapshots=self.snapshots, sweeps=self.sweeps
+        )
+
+        self.assertEqual(check.since, P8_TRADE_DATE)
+        self.assertEqual(check.until, P8_TRADE_DATE)
+        self.assertEqual(check.verdict, balance_check.VERDICT_RECONCILES)
+        self.assertEqual(check.rows, 6)
+
+    def test_a_published_interval_always_runs_forward(self) -> None:
+        """The direction itself, over all three shapes, asserted rather than
+        inferred from a row count: a check that publishes an interval must
+        publish one a row could fall inside, and one that cannot form an
+        interval must publish no bounds at all.
+
+        **Mutation it catches:** keeping the backwards pair on the record
+        while nulling only the money, which leaves the published basis saying
+        something impossible.
+        """
+        for name, sweeps in (
+            ("forward", self.sweeps),
+            ("same window", self._same_window()),
+            ("backfill", self._backfill()),
+        ):
+            with self.subTest(sweeps=name):
+                check = balance_check.incremental_check(
+                    _p8_events(), snapshots=self.snapshots, sweeps=sweeps
+                )
+
+                if check.null_reason == balance_check.NULL_INTERVAL_RUNS_BACKWARDS:
+                    self.assertIsNone(check.since)
+                    self.assertIsNone(check.until)
+                else:
+                    self.assertIsNotNone(check.since)
+                    self.assertIsNotNone(check.until)
+                    self.assertLessEqual(check.since or "", check.until or "")
+
+
 class ACheckThatCannotBeMadeIsNullAndNeverZero(unittest.TestCase):
     def test_one_snapshot_cannot_answer_the_incremental_check(self) -> None:
         """**Mutation it catches:** publishing ``0.0`` as the difference,
@@ -461,7 +574,26 @@ class ACheckThatCannotBeMadeIsNullAndNeverZero(unittest.TestCase):
         self.assertIsNone(check.difference.value)
 
 
+#: Every reason a check can answer ``not_checkable`` with, written out rather
+#: than read back off ``CHECK_NULL_REASONS``: ``_money_null_for`` validates
+#: against that very tuple, so comparing the published set against it is
+#: production against production.
+CHECK_NULL_VOCABULARY = (
+    "no_balance_snapshot",
+    "one_snapshot_only",
+    "sweep_window_not_found",
+    "interval_runs_backwards",
+)
+
+
 class TheVocabularyIsClosed(unittest.TestCase):
+    def test_the_four_check_null_reasons_are_the_published_vocabulary(self) -> None:
+        """**Mutation it catches:** a reason registered in the tuple and never
+        published, or published and never registered -- which is what a
+        renderer branching on the field would meet as an unknown string."""
+        self.assertEqual(balance_check.CHECK_NULL_REASONS, CHECK_NULL_VOCABULARY)
+        self.assertEqual(balance_check.NULL_INTERVAL_RUNS_BACKWARDS, "interval_runs_backwards")
+
     def test_every_verdict_and_null_reason_is_registered_and_distinct(self) -> None:
         self.assertEqual(len(set(balance_check.VERDICTS)), len(balance_check.VERDICTS))
         self.assertEqual(
