@@ -14,6 +14,15 @@ published body against that record's own ``to_jsonable()``, and one hands the
 command a record whose lines were replaced with values the store cannot
 produce and requires those to be what it prints.
 
+One of the doctored lines is DERIVED, and that is the half that was missing.
+``net_closed_acct`` and ``cash_book_sum_acct`` are the lines a recomputation
+would take as INPUTS, so neither can see a CLI that re-sums the subtotal from
+the five lines above it -- and the real store cannot either, because on
+CPython 3.12+ ``sum()`` is Neumaier-compensated and reproduces ``report.py``'s
+Decimal answer to the cent on this capture. The guard therefore rested on a
+float rounding accident until ``subtotal_acct`` was doctored too, to a value
+the five lines above it do not add up to.
+
 Rows are the LIVE account's own, from
 ``tests/brokers/automanager/fixtures/trades/live_2026_10_03/venue.json``: 104
 bookings rows and 41 trades rows, swept under one sweep covering
