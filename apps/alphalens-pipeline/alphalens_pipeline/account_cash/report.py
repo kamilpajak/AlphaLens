@@ -13,10 +13,14 @@ them.
 The cash-event buckets and ``cash_book_sum_acct`` are over the booking rows
 INSIDE the window: a report that states a window in its header and publishes a
 store-wide total is a number that lies about its own basis. The CUMULATIVE
-balance check is store-wide by definition -- the cash book since
-``history_begins`` against the latest balance snapshot -- so it publishes its
-OWN row count and its own since/until on its own line and can never be read as
-the window's figure. ``cost_basis_open_acct`` is the third case: it keeps the
+balance check is store-wide by definition -- the whole stored cash book against
+the latest balance snapshot -- so it publishes its OWN row count and its own
+since/until on its own line and can never be read as the window's figure. That
+since/until is the span of the rows it SUMMED and NOT the coverage watermarks
+below: ``swept_through`` stops at the end of the first contiguous run so a hole
+cannot be claimed as covered, which is the right answer to "what can the store
+speak for" and the wrong one to "what does this number rest on".
+``cost_basis_open_acct`` is the third case: it keeps the
 FULL cost of every open episode and publishes its own as-of, because the cost
 of a still-open position is as-of now and not as-of the window's end. On the
 real capture at ``until=2026-09-12`` a window-clipped basis would be -466.98
@@ -449,7 +453,13 @@ class CashBookTotals:
     buckets: tuple[buckets.Bucket, ...]
     #: Both versions, cumulative first. The cumulative one carries
     #: ``detects_restatement: False`` on its face, so "reconciles" can never
-    #: be read as proof the history is intact (memo section 5(c)).
+    #: be read as proof the history is intact (memo section 5(c)). Each states
+    #: its OWN interval, and the cumulative one's is the span of the rows it
+    #: summed -- not :attr:`Coverage.swept_through`, which answers what the
+    #: store can speak for and stops at the first contiguous run.
+    #:
+    #: The coverage watermark and the cumulative basis are two different
+    #: facts, and they are meant to disagree whenever the coverage has a hole.
     balance_checks: tuple[balance_check.BalanceCheck, ...]
 
     def lines(self) -> dict[str, AcctAmount]:
@@ -894,15 +904,16 @@ def build_totals(*, env: str, since: dt.date, until: dt.date) -> CashBookTotals:
         cash_book_sum_acct=cash_book_sum,
         buckets=published_buckets,
         balance_checks=(
-            # Over EVERY stored row, with the store's own watermarks as its
-            # basis: this check is store-wide by definition and the balance it
-            # is compared against reflects every row, not the window's.
-            balance_check.cumulative_check(
-                events_fold.events,
-                latest,
-                since=coverage.history_begins,
-                until=coverage.swept_through,
-            ),
+            # Over EVERY stored row: this check is store-wide by definition
+            # and the balance it is compared against reflects every row, not
+            # the window's. It states the span of the rows it summed as its
+            # own basis, which is a DIFFERENT fact from the coverage
+            # watermarks published above -- those say what the store can speak
+            # for, and ``swept_through`` stops at the first contiguous run so
+            # a hole cannot be claimed as covered. Handing it those watermarks
+            # published a store-wide row count under an ``until`` that stopped
+            # at the hole.
+            balance_check.cumulative_check(events_fold.events, latest),
             balance_check.incremental_check(
                 events_fold.events, snapshots=balances.snapshots, sweeps=sweeps
             ),

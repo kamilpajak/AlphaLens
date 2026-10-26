@@ -9,13 +9,22 @@ is refuse to print.
 
 Two versions, and the difference matters more than it looks.
 
-**Cumulative** -- the cash book since ``history_begins`` against the latest
+**Cumulative** -- the whole stored cash book against the latest
 ``CashBalance``. Known to hold, and it carries ``detects_restatement: False``
 on its face: a check that only ever says yes cannot see a correction to an old
 row, and without that field "reconciles" reads as proof the history is intact,
 which it is not. It is also STORE-WIDE by definition, so it publishes its own
 row count and its own since/until on its own line and can never be read as the
 presentation window's figure (amendment W1).
+
+**Its stated basis is the span of the rows it SUMMED**, read off those rows and
+never handed in. The report's coverage watermarks answer a different question
+-- what the store can speak for -- and ``swept_through`` stops at the end of
+the first contiguous run so a hole cannot be claimed as covered. Passing them
+here published a store-wide row count under an ``until`` that stopped at the
+hole: with sweeps of 08-01..08-10 and 09-01..09-10, ``until`` read 08-10 with
+September money inside the number. Clipping the SUM to the first run instead
+would make the verdict wrong, which is worse.
 
 **Incremental** -- the change between two snapshots against the events
 settling between them. This is the one that catches a late restatement, which
@@ -300,21 +309,50 @@ def _money_null_for(check_null_reason: str) -> str:
     return "account_amount_not_reported"
 
 
-def cumulative_check(
-    events: Sequence[CashEvent],
-    latest: BalanceAt | None,
-    *,
-    since: str | None,
-    until: str | None,
-) -> BalanceCheck:
-    """The cash book since ``history_begins`` against the latest ``CashBalance``.
+def _span_of(events: Sequence[CashEvent]) -> tuple[str | None, str | None]:
+    """The first and last date the rows THEMSELVES carry, as ISO strings.
+
+    The basis of a sum is read off what was summed, never handed in. The
+    caller used to pass :func:`~.report.coverage_of`'s watermarks, and those
+    answer a different question: that function stops at the end of the FIRST
+    contiguous run so that a hole cannot be claimed as covered, while this
+    check is handed EVERY stored row. With sweeps of 08-01..08-10 and
+    09-01..09-10 it therefore published a row count covering everything under
+    an ``until`` of 08-10 -- September money inside a number whose stated
+    basis excluded it.
+
+    Clipping the SUM to the first run instead would make the VERDICT wrong,
+    which is worse: the balance snapshot reflects every row the account
+    booked, not the ones before the hole. So the sum stays store-wide and the
+    stated span follows it.
+
+    Rows carrying no readable date contribute no bound: ``CashEvent.date`` is
+    optional and the codec stores it as free text, so an absent or
+    unparseable one has nothing to put in a span. Such a row is still SUMMED
+    -- that is what makes this check store-wide -- so a store holding one has
+    a ``rows`` count wider than its span, and that is the honest pair rather
+    than a span invented for it or money dropped to make the two agree.
+
+    No row at all is no span, not a zero-length one.
+    """
+    dated = sorted(
+        stamped for stamped in (_stamped(event) for event in events) if stamped is not None
+    )
+    return (dated[0].isoformat(), dated[-1].isoformat()) if dated else (None, None)
+
+
+def cumulative_check(events: Sequence[CashEvent], latest: BalanceAt | None) -> BalanceCheck:
+    """The whole stored cash book against the latest ``CashBalance``.
 
     ``events`` is EVERY stored booking row, not the window's: this check is
-    store-wide by definition, and ``since`` / ``until`` are the store's own
-    watermarks so the published line says which basis it used.
+    store-wide by definition. Its published ``since`` / ``until`` are the span
+    of the rows it actually summed (:func:`_span_of`), which is a DIFFERENT
+    fact from the coverage watermarks the report publishes beside it -- those
+    say what the store can speak for, this says what the number rests on.
     """
     if latest is None:
         return _not_checkable(CHECK_CUMULATIVE, NULL_NO_BALANCE_SNAPSHOT)
+    since, until = _span_of(events)
     expected = acct_sum(
         [(event.amount_account_currency, event.account_currency) for event in events],
         rows=len(events),
@@ -420,17 +458,29 @@ def incremental_check(
     )
 
 
-def _settles_in(event: CashEvent, first: dt.date, last: dt.date) -> bool:
-    """``event.date`` -- the TRADE date -- inside the interval.
+def _stamped(event: CashEvent) -> dt.date | None:
+    """``event.date`` -- the TRADE date -- as a date, or ``None``.
 
     ``value_date`` is deliberately not read: the venue stamps it with the next
     day on every row, so reading it moves every row of a settlement batch out
     of the interval that batch explains.
+
+    One parse for both readers of a booking row's date in this module: the
+    interval membership test and the cumulative span. ``None`` covers an
+    absent value and one the parse refuses, because neither reader has
+    anything different to do with the two -- a row with no placeable date
+    falls in no interval and bounds no span. The REPORT tells them apart,
+    because there a row excluded from a window has to say which way it went.
     """
     if event.date is None:
-        return False
+        return None
     try:
-        stamped = dt.date.fromisoformat(event.date)
+        return dt.date.fromisoformat(event.date)
     except ValueError:
-        return False
-    return first <= stamped <= last
+        return None
+
+
+def _settles_in(event: CashEvent, first: dt.date, last: dt.date) -> bool:
+    """``event.date`` inside the interval, both ends included."""
+    stamped = _stamped(event)
+    return stamped is not None and first <= stamped <= last

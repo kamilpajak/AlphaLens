@@ -123,6 +123,23 @@ MOVED_ASOF = dt.datetime(2026, 10, 4, 6, 12, tzinfo=dt.UTC)
 SECOND_SINCE = dt.date(2026, 10, 4)
 SECOND_UNTIL = dt.date(2026, 10, 6)
 
+#: The span the 104 booking rows THEMSELVES cover. Not the window the sweep
+#: asked for (2026-08-01..2026-10-03): the first booking row is five days
+#: after the asked start and the last is two days before the asked end.
+ROWS_FIRST_DATE = "2026-08-06"
+ROWS_LAST_DATE = "2026-10-01"
+
+# --- Two sweeps with a hole between them, the memo's own coverage example ----
+
+#: 08-01..08-10 and 09-01..09-10 leave a 21-day hole, so ``swept_through`` is
+#: the end of the FIRST run and ``gaps`` holds the hole. Every booking row is
+#: stored under the first sweep, so the cumulative check sums all 104 of them
+#: -- including the September money that is on the far side of the hole.
+GAP_FIRST_UNTIL = dt.date(2026, 8, 10)
+GAP_SECOND_SINCE = dt.date(2026, 9, 1)
+GAP_SECOND_UNTIL = dt.date(2026, 9, 10)
+GAP_HOLE = ("2026-08-11", "2026-08-31")
+
 
 _BASE_READ = AccountCashRead(
     events=tuple(BOOKINGS),
@@ -782,12 +799,12 @@ class TheTwoBalanceChecksReachThePublishedTotal(IsolatedHomeTestCase):
         check = self.checks[balance_check.CHECK_CUMULATIVE]
 
         self.assertEqual(check.rows, ALL_ROWS)
-        # Literals, not the coverage block they were read from: comparing the
-        # check's interval against ``totals.coverage`` is production against
-        # production, and both watermark mutations were caught only by the two
-        # assertNotEqual lines below it.
-        self.assertEqual(check.since, _SWEPT_SINCE.isoformat())
-        self.assertEqual(check.until, _SWEPT_UNTIL.isoformat())
+        # Literals, not the coverage block or the rows they were read from:
+        # comparing the check's interval against ``totals.coverage`` is
+        # production against production, and both watermark mutations were
+        # caught only by the two assertNotEqual lines below it.
+        self.assertEqual(check.since, ROWS_FIRST_DATE)
+        self.assertEqual(check.until, ROWS_LAST_DATE)
         self.assertNotEqual(check.since, self.totals.basis.window_since)
         self.assertNotEqual(check.rows, self.totals.basis.rows_read)
 
@@ -889,6 +906,64 @@ class TheTwoBalanceChecksReachThePublishedTotal(IsolatedHomeTestCase):
             [balance_check.CHECK_CUMULATIVE, balance_check.CHECK_INCREMENTAL],
         )
         self.assertIs(body["balance_checks"][0]["detects_restatement"], False)
+
+
+class TheCoverageWatermarkAndTheCumulativeBasisAreTwoDifferentFacts(IsolatedHomeTestCase):
+    """A hole in the coverage, which no test covered until now (F5).
+
+    ``coverage_of`` deliberately stops at the end of the FIRST contiguous run,
+    so a hole cannot be claimed as covered. The cumulative check is handed
+    EVERY stored row. Those are two different facts, and the check used to
+    publish the watermark as its own basis -- a row count covering everything
+    under an ``until`` of 2026-08-10, with September money inside the number.
+
+    Clipping the SUM to the first run instead would make the verdict wrong,
+    which is worse: the balance snapshot reflects every row the account
+    booked, not the ones before the hole.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        _seed(since=_SWEPT_SINCE, until=GAP_FIRST_UNTIL)
+        _seed(
+            since=GAP_SECOND_SINCE,
+            until=GAP_SECOND_UNTIL,
+            now=_SWEPT_AT + dt.timedelta(days=1),
+        )
+        self.totals = report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=_SWEPT_UNTIL)
+        self.check = next(
+            one for one in self.totals.balance_checks if one.kind == balance_check.CHECK_CUMULATIVE
+        )
+
+    def test_the_premise_is_that_the_coverage_really_has_a_hole(self) -> None:
+        """Stated rather than assumed: with no hole the two readings of the
+        basis answer the same thing and the test below proves nothing."""
+        self.assertEqual(self.totals.coverage.swept_through, GAP_FIRST_UNTIL.isoformat())
+        self.assertEqual(self.totals.coverage.gaps, (GAP_HOLE,))
+        self.assertEqual(self.totals.coverage.sweeps, 2)
+
+    def test_the_cumulative_check_states_the_span_of_the_rows_it_summed(self) -> None:
+        """**Mutation it catches:** publishing ``coverage.swept_through`` as
+        the ``until``, which stops at 2026-08-10 while the number beside it
+        rests on rows booked through 2026-10-01.
+        """
+        self.assertEqual(self.check.rows, ALL_ROWS)
+        self.assertEqual(self.check.until, ROWS_LAST_DATE)
+        self.assertNotEqual(self.check.until, self.totals.coverage.swept_through)
+        self.assertEqual(self.check.since, ROWS_FIRST_DATE)
+
+    def test_the_verdict_still_rests_on_every_stored_row(self) -> None:
+        """The other half, and why the remedy is not to clip the sum: the
+        balance body reflects all 104 rows, so a sum stopping at the hole
+        would answer ``differs`` on an account that reconciles."""
+        self.assertEqual(self.check.verdict, balance_check.VERDICT_RECONCILES)
+        self.assertEqual(self.check.expected.value, ALL_ROWS_TOTAL_PLN)
+
+    def test_the_coverage_block_still_refuses_to_claim_the_hole(self) -> None:
+        """The watermark is NOT relaxed to match: it answers what the store
+        can speak for, which is a different question from what the check
+        summed."""
+        self.assertEqual(self.totals.cost_basis_open_asof, GAP_FIRST_UNTIL.isoformat())
 
 
 class TheBasisReportsWhatTheReadCouldNotAccountFor(IsolatedHomeTestCase):

@@ -42,6 +42,13 @@ _LIVE = "live"
 
 ALL_ROWS = 104
 ALL_ROWS_TOTAL_PLN = 20738.68
+#: The span the 104 rows THEMSELVES cover, which is not the window the one
+#: sweep asked for (2026-08-01..2026-10-03): the account's first booking row
+#: is five days after the asked start and its last is two days before the
+#: asked end. That is what makes the two readings of the cumulative basis
+#: distinguishable at all.
+ROWS_FIRST_DATE = "2026-08-06"
+ROWS_LAST_DATE = "2026-10-01"
 
 # --- Memo section 1.7 P8: a real two-snapshot pair, three trades in flight ---
 
@@ -144,9 +151,7 @@ class TheCumulativeCheckOnTheRealCapture(unittest.TestCase):
 
     def setUp(self) -> None:
         self.latest = BalanceAt(sweep_id="s1", snapshot=BALANCE)
-        self.check = balance_check.cumulative_check(
-            BOOKINGS, self.latest, since="2026-08-01", until="2026-10-03"
-        )
+        self.check = balance_check.cumulative_check(BOOKINGS, self.latest)
 
     def test_the_premise_is_that_both_sides_are_read_and_not_authored(self) -> None:
         """Stated rather than assumed. If these two came from one source the
@@ -180,9 +185,84 @@ class TheCumulativeCheckOnTheRealCapture(unittest.TestCase):
         window.
         """
         self.assertEqual(self.check.rows, ALL_ROWS)
-        self.assertEqual(self.check.since, "2026-08-01")
-        self.assertEqual(self.check.until, "2026-10-03")
         self.assertEqual(self.check.asof, BALANCE.asof.isoformat())
+
+    def test_the_interval_is_the_span_of_the_rows_it_summed(self) -> None:
+        """F5. The basis is read off the rows SUMMED, not handed in.
+
+        The caller used to pass the coverage watermarks, and ``coverage_of``
+        stops at the end of the FIRST contiguous run so that a hole cannot be
+        claimed as covered. This check is handed EVERY stored row, so with a
+        hole in the coverage it published a row count covering everything
+        under an ``until`` that stopped at the first run -- money from after
+        the hole inside a number whose stated basis excluded it.
+
+        **Mutation it catches:** taking the interval from anywhere but the
+        rows. The real capture separates the two readings: the rows span
+        2026-08-06..2026-10-01 while the one sweep asked for
+        2026-08-01..2026-10-03.
+        """
+        self.assertEqual(
+            (
+                min(event.date or "" for event in BOOKINGS),
+                max(event.date or "" for event in BOOKINGS),
+            ),
+            (ROWS_FIRST_DATE, ROWS_LAST_DATE),
+        )
+
+        self.assertEqual(self.check.since, ROWS_FIRST_DATE)
+        self.assertEqual(self.check.until, ROWS_LAST_DATE)
+        self.assertNotEqual(self.check.since, "2026-08-01")
+        self.assertNotEqual(self.check.until, "2026-10-03")
+
+    def test_no_row_at_all_is_no_span_rather_than_a_zero_length_one(self) -> None:
+        """A first sweep over a quiet window. There is nothing to state, and a
+        stated pair of dates would be a basis nobody measured."""
+        check = balance_check.cumulative_check((), self.latest)
+
+        self.assertIsNone(check.since)
+        self.assertIsNone(check.until)
+        self.assertEqual(check.rows, 0)
+
+    def test_an_undated_row_is_still_summed_and_bounds_no_span(self) -> None:
+        """``CashEvent.date`` is optional, and this check sums EVERY stored
+        row rather than the dated ones -- that is what makes it store-wide.
+
+        So the span covers the rows that carry a readable date while ``rows``
+        counts every row summed, and the two differing is the honest answer:
+        an undated row has no date to put in a span.
+
+        The row emptied here is ``BOOKINGS[1]``, dated 2026-08-10, which is
+        strictly INSIDE the span -- so the span must not move at all.
+
+        **Mutation it catches:** dropping the undated row from the SUM to keep
+        the span and the count agreeing, which would move real money out of
+        the only check that compares against the account's own cash.
+        """
+        undated = (BOOKINGS[0], replace(BOOKINGS[1], date=None), *BOOKINGS[2:])
+
+        check = balance_check.cumulative_check(undated, self.latest)
+
+        self.assertEqual(check.rows, ALL_ROWS)
+        self.assertEqual(check.expected.value, ALL_ROWS_TOTAL_PLN)
+        self.assertEqual(check.since, ROWS_FIRST_DATE)
+        self.assertEqual(check.until, ROWS_LAST_DATE)
+
+    def test_the_span_is_read_off_the_dated_rows_and_is_not_a_constant(self) -> None:
+        """The other direction, and the reason the test above has power.
+
+        ``BOOKINGS[0]`` is the ONLY row dated 2026-08-06, so emptying its date
+        moves the span's left bound to the next date the rows carry,
+        2026-08-10. A span hard-coded to the capture's own dates, or taken
+        from anywhere but the rows, stays at 2026-08-06 here.
+        """
+        without_the_edge = (replace(BOOKINGS[0], date=None), *BOOKINGS[1:])
+
+        check = balance_check.cumulative_check(without_the_edge, self.latest)
+
+        self.assertEqual(check.since, "2026-08-10")
+        self.assertEqual(check.until, ROWS_LAST_DATE)
+        self.assertEqual(check.rows, ALL_ROWS)
 
 
 class TheToleranceIsAGroszAndIsTwoClaims(unittest.TestCase):
@@ -193,12 +273,7 @@ class TheToleranceIsAGroszAndIsTwoClaims(unittest.TestCase):
 
     def _with_first_row_shifted(self, to: float) -> balance_check.BalanceCheck:
         events = (replace(BOOKINGS[0], amount_account_currency=to), *BOOKINGS[1:])
-        return balance_check.cumulative_check(
-            events,
-            BalanceAt(sweep_id="s1", snapshot=BALANCE),
-            since="2026-08-01",
-            until="2026-10-03",
-        )
+        return balance_check.cumulative_check(events, BalanceAt(sweep_id="s1", snapshot=BALANCE))
 
     def test_a_half_grosz_inside_the_tolerance_still_reconciles(self) -> None:
         """2000.00 becomes 2000.005, so the cash book sums to 20 738.685
@@ -531,9 +606,7 @@ class ACheckThatCannotBeMadeIsNullAndNeverZero(unittest.TestCase):
 
     def test_no_snapshot_at_all_nulls_both_checks(self) -> None:
         """**Mutation it catches:** ``or 0.0`` on ``cash_balance``."""
-        cumulative = balance_check.cumulative_check(
-            BOOKINGS, None, since="2026-08-01", until="2026-10-03"
-        )
+        cumulative = balance_check.cumulative_check(BOOKINGS, None)
         incremental = balance_check.incremental_check(BOOKINGS, snapshots=(), sweeps=())
 
         for check in (cumulative, incremental):
@@ -563,10 +636,7 @@ class ACheckThatCannotBeMadeIsNullAndNeverZero(unittest.TestCase):
         """A money field the vendor did not report is a named absence, never a
         zero -- the rule ``money.py`` holds for every total."""
         check = balance_check.cumulative_check(
-            BOOKINGS,
-            BalanceAt(sweep_id="s1", snapshot=replace(BALANCE, cash_balance=None)),
-            since="2026-08-01",
-            until="2026-10-03",
+            BOOKINGS, BalanceAt(sweep_id="s1", snapshot=replace(BALANCE, cash_balance=None))
         )
 
         self.assertEqual(check.verdict, balance_check.VERDICT_NOT_CHECKABLE)
@@ -592,9 +662,7 @@ class AVerdictOfNotCheckableAlwaysNamesItsReason(unittest.TestCase):
     def test_an_absent_cash_balance_names_a_reason_on_the_cumulative_record(self) -> None:
         """**Mutation it catches:** ``null_reason=None`` on this path, which
         publishes a verdict with nothing beside it to branch on."""
-        check = balance_check.cumulative_check(
-            BOOKINGS, self._absent_balance(), since="2026-08-01", until="2026-10-03"
-        )
+        check = balance_check.cumulative_check(BOOKINGS, self._absent_balance())
 
         self.assertEqual(check.verdict, balance_check.VERDICT_NOT_CHECKABLE)
         self.assertEqual(check.null_reason, balance_check.NULL_DIFFERENCE_NOT_A_NUMBER)
@@ -625,12 +693,7 @@ class AVerdictOfNotCheckableAlwaysNamesItsReason(unittest.TestCase):
         verdict rests on it."""
         mixed = (replace(BOOKINGS[0], account_currency="EUR"), *BOOKINGS[1:])
 
-        check = balance_check.cumulative_check(
-            mixed,
-            BalanceAt(sweep_id="s1", snapshot=BALANCE),
-            since="2026-08-01",
-            until="2026-10-03",
-        )
+        check = balance_check.cumulative_check(mixed, BalanceAt(sweep_id="s1", snapshot=BALANCE))
 
         self.assertEqual(check.verdict, balance_check.VERDICT_NOT_CHECKABLE)
         self.assertEqual(check.null_reason, balance_check.NULL_DIFFERENCE_NOT_A_NUMBER)
@@ -639,12 +702,7 @@ class AVerdictOfNotCheckableAlwaysNamesItsReason(unittest.TestCase):
     def test_a_check_that_was_made_names_no_reason(self) -> None:
         """The negative control. Without it, hard-coding the reason on every
         record satisfies every assertion above."""
-        check = balance_check.cumulative_check(
-            BOOKINGS,
-            BalanceAt(sweep_id="s1", snapshot=BALANCE),
-            since="2026-08-01",
-            until="2026-10-03",
-        )
+        check = balance_check.cumulative_check(BOOKINGS, BalanceAt(sweep_id="s1", snapshot=BALANCE))
 
         self.assertEqual(check.verdict, balance_check.VERDICT_RECONCILES)
         self.assertIsNone(check.null_reason)
@@ -656,17 +714,12 @@ class AVerdictOfNotCheckableAlwaysNamesItsReason(unittest.TestCase):
         snapshots, sweeps = _p8_pair()
         latest = BalanceAt(sweep_id="s1", snapshot=BALANCE)
         shapes = {
-            "reconciles": balance_check.cumulative_check(BOOKINGS, latest, since="a", until="b"),
+            "reconciles": balance_check.cumulative_check(BOOKINGS, latest),
             "differs": balance_check.cumulative_check(
-                (replace(BOOKINGS[0], amount_account_currency=2000.50), *BOOKINGS[1:]),
-                latest,
-                since="a",
-                until="b",
+                (replace(BOOKINGS[0], amount_account_currency=2000.50), *BOOKINGS[1:]), latest
             ),
-            "no snapshot": balance_check.cumulative_check(BOOKINGS, None, since="a", until="b"),
-            "absent balance": balance_check.cumulative_check(
-                BOOKINGS, self._absent_balance(), since="a", until="b"
-            ),
+            "no snapshot": balance_check.cumulative_check(BOOKINGS, None),
+            "absent balance": balance_check.cumulative_check(BOOKINGS, self._absent_balance()),
             "one snapshot": balance_check.incremental_check(
                 _p8_events(), snapshots=snapshots[:1], sweeps=sweeps[:1]
             ),
@@ -730,7 +783,7 @@ class TheVocabularyIsClosed(unittest.TestCase):
 
     def test_the_wire_form_names_the_basis_beside_every_number(self) -> None:
         body = balance_check.cumulative_check(
-            BOOKINGS, BalanceAt(sweep_id="s1", snapshot=BALANCE), since="a", until="b"
+            BOOKINGS, BalanceAt(sweep_id="s1", snapshot=BALANCE)
         ).to_jsonable()
 
         self.assertEqual(
