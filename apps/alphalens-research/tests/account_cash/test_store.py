@@ -689,7 +689,7 @@ class AnUnusableSweepKeyIsRefusedBeforeItReachesTheJournal(IsolatedHomeTestCase)
         satisfy every assertion above."""
         store.append_balance(_balance(), env=_LIVE, sweep_id="s1")
         store.append_sweep(_sweep("s1"), env=_LIVE)
-        self.assertEqual(len(store.read_balances(env=_LIVE)), 1)
+        self.assertEqual(len(store.read_balances(env=_LIVE).snapshots), 1)
         self.assertEqual([record.sweep_id for record in store.read_sweeps(env=_LIVE)], ["s1"])
 
     def test_the_sim_refusal_stays_the_outer_gate(self) -> None:
@@ -748,7 +748,7 @@ class TheTradeRowFold(IsolatedHomeTestCase):
 
 class TheBalanceAndSweepJournalsDedupeOnTheSweepId(IsolatedHomeTestCase):
     def test_a_missing_journal_reads_empty(self) -> None:
-        self.assertEqual(store.read_balances(env=_LIVE), [])
+        self.assertEqual(store.read_balances(env=_LIVE).snapshots, [])
         self.assertEqual(store.read_sweeps(env=_LIVE), [])
 
     def test_one_balance_and_one_sweep_record_per_sweep_id(self) -> None:
@@ -760,7 +760,7 @@ class TheBalanceAndSweepJournalsDedupeOnTheSweepId(IsolatedHomeTestCase):
         store.append_balance(_balance(), env=_LIVE, sweep_id="s1")
         store.append_sweep(_sweep("s1"), env=_LIVE)
 
-        self.assertEqual(len(store.read_balances(env=_LIVE)), 1)
+        self.assertEqual(len(store.read_balances(env=_LIVE).snapshots), 1)
         self.assertEqual(len(store.read_sweeps(env=_LIVE)), 1)
         self.assertEqual(
             len(paths.sweeps_path(_LIVE).read_text(encoding="utf-8").strip().splitlines()), 2
@@ -787,7 +787,7 @@ class TheBalanceAndSweepJournalsDedupeOnTheSweepId(IsolatedHomeTestCase):
         store.append_balance(_balance(asof=oldest), env=_LIVE, sweep_id="s1")
 
         self.assertEqual(
-            [snapshot.asof for snapshot in store.read_balances(env=_LIVE)],
+            [at.snapshot.asof for at in store.read_balances(env=_LIVE).snapshots],
             [oldest, middle, newest],
         )
 
@@ -797,16 +797,16 @@ class TheBalanceAndSweepJournalsDedupeOnTheSweepId(IsolatedHomeTestCase):
         store.append_balance(_balance(), env=_LIVE, sweep_id="s2")
         store.append_balance(_balance(cash_balance=1.0), env=_LIVE, sweep_id="s1")
         self.assertEqual(
-            [snapshot.cash_balance for snapshot in store.read_balances(env=_LIVE)],
+            [at.snapshot.cash_balance for at in store.read_balances(env=_LIVE).snapshots],
             [1.0, 20738.68],
         )
 
     def test_a_restated_balance_for_one_sweep_keeps_the_latest(self) -> None:
         store.append_balance(_balance(cash_balance=1.0), env=_LIVE, sweep_id="s1")
         store.append_balance(_balance(cash_balance=2.0), env=_LIVE, sweep_id="s1")
-        balances = store.read_balances(env=_LIVE)
+        balances = store.read_balances(env=_LIVE).snapshots
         self.assertEqual(len(balances), 1)
-        self.assertEqual(balances[0].cash_balance, 2.0)
+        self.assertEqual(balances[0].snapshot.cash_balance, 2.0)
 
     def test_an_absent_balance_money_field_survives_the_journal_as_null(self) -> None:
         """The append path's half of the balance's absent-versus-zero rule. The
@@ -830,7 +830,7 @@ class TheBalanceAndSweepJournalsDedupeOnTheSweepId(IsolatedHomeTestCase):
         # The field memo section 1.7 P5 calls out: it parks a whole day's
         # trading, so a null read as 0.0 reads as "nothing unbooked".
         self.assertIsNone(line["transactions_not_booked"])
-        self.assertEqual(store.read_balances(env=_LIVE), [empty])
+        self.assertEqual([at.snapshot for at in store.read_balances(env=_LIVE).snapshots], [empty])
 
     def test_the_balance_line_carries_the_sweep_key_beside_the_snapshot(self) -> None:
         store.append_balance(_balance(), env=_LIVE, sweep_id="s1")
@@ -843,7 +843,7 @@ class TheBalanceAndSweepJournalsDedupeOnTheSweepId(IsolatedHomeTestCase):
         with paths.balances_path(_LIVE).open("a", encoding="utf-8") as fh:
             fh.write("{not json\n")
         with self.assertLogs("alphalens_pipeline.account_cash.store", level="WARNING"):
-            self.assertEqual(len(store.read_balances(env=_LIVE)), 1)
+            self.assertEqual(len(store.read_balances(env=_LIVE).snapshots), 1)
 
     def test_a_balance_line_whose_sweep_key_is_unusable_is_refused_on_read(self) -> None:
         """The READ side of the key rule, which the write-side guard hides.
@@ -877,9 +877,74 @@ class TheBalanceAndSweepJournalsDedupeOnTheSweepId(IsolatedHomeTestCase):
                 with self.assertLogs(
                     "alphalens_pipeline.account_cash.store", level="WARNING"
                 ) as caught:
-                    rows = store.read_balances(env=_LIVE)
+                    rows = store.read_balances(env=_LIVE).snapshots
                 self.assertEqual(len(rows), 1)
                 self.assertIn("sweep_id", "\n".join(caught.output))
+
+
+class TheBalanceFoldCarriesItsCountersAndTheSweepEachSnapshotBelongsTo(IsolatedHomeTestCase):
+    """``read_balances`` used to throw both away (#1689, Phase 4).
+
+    It returned ``list[BalanceSnapshot]``: the three counters the fold already
+    computed were discarded into ``_, _, _``, and the ``sweep_id`` the journal
+    is KEYED on was popped by the decode and dropped by the comprehension. Its
+    own docstring named Phase 4 as the consumer that would give the counters a
+    meaning, and the balance cross-check is that consumer -- so both halves are
+    published here.
+
+    Why the key matters, and not merely the snapshot: a cash event carries a
+    trade DATE and no timestamp, while the settlement batch fires at about
+    23:48 UTC (memo section 1.7 P5), so the interval between two snapshots is
+    in TRADE DATES taken from the sweep record each one belongs to, never in
+    ``asof`` instants. Without the key there is nothing to join a snapshot to
+    its window on.
+    """
+
+    def test_a_missing_journal_folds_empty_with_zero_counters(self) -> None:
+        fold = store.read_balances(env=_LIVE)
+        self.assertEqual(fold.snapshots, [])
+        self.assertEqual((fold.malformed, fold.restated, fold.lines), (0, 0, 0))
+
+    def test_a_snapshot_carries_the_sweep_it_belongs_to(self) -> None:
+        """**Mutation it catches:** dropping ``sweep_id`` again in the
+        comprehension, which leaves the incremental check unable to find the
+        trade-date interval its snapshots were read over."""
+        older = dt.datetime(2026, 10, 8, 0, 31, tzinfo=dt.UTC)
+        store.append_balance(_balance(asof=older), env=_LIVE, sweep_id="s1")
+        store.append_balance(_balance(cash_balance=1.0), env=_LIVE, sweep_id="s2")
+
+        fold = store.read_balances(env=_LIVE)
+        self.assertEqual([at.sweep_id for at in fold.snapshots], ["s1", "s2"])
+        self.assertEqual([at.snapshot.cash_balance for at in fold.snapshots], [20738.68, 1.0])
+
+    def test_a_corrupt_balance_line_is_now_counted_and_not_only_logged(self) -> None:
+        """**Mutation it catches:** the ``latest, _, _, _ =`` discard coming
+        back, which makes a corrupt balance line invisible to the cross-check
+        that is now its only consumer."""
+        store.append_balance(_balance(), env=_LIVE, sweep_id="s1")
+        with paths.balances_path(_LIVE).open("a", encoding="utf-8") as fh:
+            fh.write("{not json\n")
+
+        with self.assertLogs("alphalens_pipeline.account_cash.store", level="WARNING"):
+            fold = store.read_balances(env=_LIVE)
+
+        self.assertEqual(fold.malformed, 1)
+        self.assertEqual(fold.lines, 2)
+        self.assertEqual(len(fold.snapshots), 1)
+
+    def test_a_restated_balance_is_counted_as_one_correction(self) -> None:
+        """The counter the journal form exists for, on the third journal.
+
+        ``cash_events.jsonl`` and ``trade_rows.jsonl`` have reported
+        ``restated`` since Phase 3; ``balances.jsonl`` computed it and dropped
+        it, so a balance snapshot rewritten under one ``sweep_id`` was a
+        correction nothing could report."""
+        store.append_balance(_balance(cash_balance=1.0), env=_LIVE, sweep_id="s1")
+        store.append_balance(_balance(cash_balance=2.0), env=_LIVE, sweep_id="s1")
+
+        fold = store.read_balances(env=_LIVE)
+        self.assertEqual((fold.restated, fold.lines), (1, 2))
+        self.assertEqual([at.snapshot.cash_balance for at in fold.snapshots], [2.0])
 
 
 class ARestatementSurvivesEveryLaterRead(IsolatedHomeTestCase):
