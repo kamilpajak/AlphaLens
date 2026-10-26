@@ -84,6 +84,22 @@ CUT_SUBTOTAL_PLN = -7827.16
 #: opened 2026-09-02. The other two open positions were opened after it.
 CUT_CLIPPED_COST_BASIS_PLN = -466.98
 
+# --- The two closed vocabularies, written out ---------------------------------
+
+#: Every reason an episode can be left out of the summed figure, in render
+#: order. Written here rather than read back off ``REPORT_EXCLUSION_ORDER``:
+#: ``_exclusions_of`` seeds its counts from that tuple, so asserting the
+#: published keys against it is production against production.
+EXCLUSION_VOCABULARY = ("window_clipped", "imbalanced", "open", "closed_outside_window")
+#: Every reason a fill can go unassigned, for the same reason:
+#: ``_unassigned_by_reason`` seeds its dict from ``UNASSIGNED_REASONS``.
+UNASSIGNED_VOCABULARY = (
+    "no_open_in_store",
+    "quantity_not_read",
+    "closes_nothing",
+    "short_open_not_modelled",
+)
+
 # --- Measured over 2026-09-01..2026-10-03, the other narrow window -----------
 
 LATE_SINCE = dt.date(2026, 9, 1)
@@ -297,13 +313,28 @@ class TheNarrowWindowAtTheCut(IsolatedHomeTestCase):
         """**Mutation it catches:** an episode stamped with several reasons,
         which makes counts-by-reason over-add. ``EXCLUSION_ORDER``'s first-hit
         rule is what keeps them addable, and the fourth reason exists so the
-        window does not break the identity."""
+        window does not break the identity.
+
+        The load-bearing lines are the two literals: ``sum(exclusions) ==
+        episodes_excluded`` cannot fail, because ``build_totals`` sets the
+        count to that sum.
+        """
         basis = self.totals.basis
 
-        self.assertEqual(sum(basis.exclusions.values()), basis.episodes_excluded)
         self.assertEqual(basis.episodes_summed + basis.episodes_excluded, basis.episodes)
         self.assertEqual(basis.episodes_excluded, CUT_CLOSED_OUTSIDE + OPEN_EPISODES)
-        self.assertEqual(sorted(basis.exclusions), sorted(report.REPORT_EXCLUSION_ORDER))
+        self.assertEqual(sorted(basis.exclusions), sorted(EXCLUSION_VOCABULARY))
+
+    def test_the_four_exclusion_reasons_are_the_published_vocabulary(self) -> None:
+        """Written out rather than read back off ``REPORT_EXCLUSION_ORDER``.
+
+        ``_exclusions_of`` seeds its counts from that very tuple, so comparing
+        the published keys against it is production against production: the
+        mutation that dropped the fourth reason from the tuple passed that
+        comparison.
+        """
+        self.assertEqual(report.REPORT_EXCLUSION_ORDER, EXCLUSION_VOCABULARY)
+        self.assertEqual(report.EXCLUSION_CLOSED_OUTSIDE_WINDOW, "closed_outside_window")
 
     def test_the_open_cost_basis_keeps_the_full_cost_of_every_open_episode(self) -> None:
         """Amendment W1: the cost of a still-open position is as-of NOW, not
@@ -539,7 +570,8 @@ class TheIdentitiesAreCheckedAndNotDescribed(IsolatedHomeTestCase):
         self.assertEqual(
             basis.fills_assigned + sum(basis.fills_unassigned.values()), basis.fills_read
         )
-        self.assertEqual(sorted(basis.fills_unassigned), sorted(episodes.UNASSIGNED_REASONS))
+        self.assertEqual(sorted(basis.fills_unassigned), sorted(UNASSIGNED_VOCABULARY))
+        self.assertEqual(episodes.UNASSIGNED_REASONS, UNASSIGNED_VOCABULARY)
 
     def test_the_coverage_partition_holds_when_something_is_unassigned(self) -> None:
         """The real capture leaves 0 fills unassigned, so every count in
@@ -743,8 +775,12 @@ class TheTwoBalanceChecksReachThePublishedTotal(IsolatedHomeTestCase):
         check = self.checks[balance_check.CHECK_CUMULATIVE]
 
         self.assertEqual(check.rows, ALL_ROWS)
-        self.assertEqual(check.since, self.totals.coverage.history_begins)
-        self.assertEqual(check.until, self.totals.coverage.swept_through)
+        # Literals, not the coverage block they were read from: comparing the
+        # check's interval against ``totals.coverage`` is production against
+        # production, and both watermark mutations were caught only by the two
+        # assertNotEqual lines below it.
+        self.assertEqual(check.since, _SWEPT_SINCE.isoformat())
+        self.assertEqual(check.until, _SWEPT_UNTIL.isoformat())
         self.assertNotEqual(check.since, self.totals.basis.window_since)
         self.assertNotEqual(check.rows, self.totals.basis.rows_read)
 
