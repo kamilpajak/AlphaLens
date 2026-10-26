@@ -6,11 +6,17 @@ written as a literal; none is computed by the code under test.
 
 **The seeded sweep always covers the WHOLE capture (2026-08-01..2026-10-03)
 while the queried window is narrower.** That is not incidental. The full span
-cannot tell a window-scoped total from a store-wide one, cannot tell a full
-open cost basis from a window-clipped one (both are -3594.86 there), and its
-residual is exactly 0.00 -- so a test at the full span alone passes for an
-implementation that has none of the three (amendment W1, W2). The narrow
-windows are 2026-09-01 and 2026-09-12, both measured.
+cannot tell a window-scoped total from a store-wide one, and cannot tell a
+full open cost basis from a window-clipped one (both are -3594.86 there) -- so
+a test at the full span alone passes for an implementation that has neither
+(amendment W1). The narrow windows are 2026-09-01 and 2026-09-12, both
+measured.
+
+The RESIDUAL is the one of the three the full span can now see. It was exactly
+0.00 there while the open cost basis was one of the five lines it subtracted,
+and it is -3594.86 there since that line left the subtraction (2026-10-26):
+over the whole store the only window cash the four remaining lines do not
+explain is what was spent on the three positions still open.
 
 Isolated home on every class: these tests APPEND to a cash store through the
 sweep, so an unisolated run would write into the operator's own book (#1696).
@@ -49,7 +55,7 @@ from tests.account_cash.cashbook_fixture import (
     synthetic_clipped_sell_only,
     synthetic_held_but_imbalanced,
 )
-from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
+from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase, isolate_home
 
 _LIVE = "live"
 _SIM = "sim"
@@ -71,8 +77,22 @@ EPISODES = 19
 CLOSED_EPISODES, NET_CLOSED_PLN = 16, 329.49
 OPEN_EPISODES, COST_BASIS_OPEN_PLN = 3, -3594.86
 FILLS = 41
-#: The subtotal at the full span: 329.49 - 3594.86 + 4.05 + 0.00 + 0.00.
+#: The subtotal at the full span: 329.49 + 4.05 + 0.00 - 3594.86, the four
+#: window-scoped lines. It is also 20738.68 - 24000.00 -- the cash book sum
+#: less the deposits -- because the residual is DEFINED as the sum minus the
+#: other three plus the deposits, which is what makes that identity
+#: algebraic rather than measured.
 SUBTOTAL_PLN = -3261.32
+#: The residual at the full span, since the open cost basis left the term list
+#: (2026-10-26): 20738.68 - 329.49 - 4.05 - 0.00 - 24000.00. Equivalently the
+#: old five-term residual of 0.00 plus the -3594.86 it used to subtract.
+#:
+#: Over the whole store the four window-scoped lines leave exactly the cash
+#: spent on the three positions still open, so this number and
+#: ``COST_BASIS_OPEN_PLN`` coincide HERE. They are two different facts -- one
+#: is window-scoped, one is as-of the store's watermark -- and the narrow
+#: windows below are where they stop agreeing.
+FULL_SPAN_RESIDUAL_PLN = -3594.86
 
 # --- Measured over 2026-08-01..2026-09-12, the narrow window -----------------
 
@@ -80,7 +100,13 @@ CUT = dt.date(2026, 9, 12)
 CUT_ROWS, CUT_ROWS_TOTAL_PLN = 64, 16172.84
 CUT_SUMMED, CUT_NET_CLOSED_PLN = 9, 101.80
 CUT_CLOSED_OUTSIDE = 7
-CUT_RESIDUAL_PLN = -4334.10
+#: 16172.84 - 101.80 - 0.00 - 0.00 - 24000.00: the window's cash book sum less
+#: the three other window-scoped lines (no income row and no unclassified row
+#: falls before the cut). Equivalently the old five-term -4334.10 plus the
+#: -3594.86 full open cost basis it used to subtract -- which is the whole
+#: defect this number carries the correction for: a window with no rows in it
+#: published +3594.86 as "residual not explained above".
+CUT_RESIDUAL_PLN = -7928.96
 CUT_SUBTOTAL_PLN = -7827.16
 #: What a window-CLIPPED open cost basis would answer at the cut: only RHI,
 #: opened 2026-09-02. The other two open positions were opened after it.
@@ -179,9 +205,9 @@ class TheGoldenLiveWindow(IsolatedHomeTestCase):
 
     **Mutation it catches:** any wiring error between the two pure derivations
     and the published lines. It is NOT sufficient on its own, which is the
-    point of every class below it: at this span the window scoping, the open
-    cost basis's as-of and the residual are all indistinguishable from their
-    absent versions.
+    point of every class below it: at this span the window scoping and the
+    open cost basis's as-of are both indistinguishable from their absent
+    versions.
     """
 
     def setUp(self) -> None:
@@ -254,18 +280,44 @@ class TheGoldenLiveWindow(IsolatedHomeTestCase):
         self.assertEqual(self.totals.coverage.gaps, ())
         self.assertEqual(self.totals.coverage.cannot_detect, (report.UNDETECTED_PARTIAL_ENTRY,))
 
-    def test_the_full_span_residual_is_exactly_zero(self) -> None:
-        """This class's own docstring rests on it -- "the residual is
-        indistinguishable from its absent version here" is only true at 0.00
-        -- and nothing asserted it, so the sentence was load-bearing prose.
+    def test_the_full_span_residual_is_the_cash_spent_on_what_is_still_open(self) -> None:
+        """The residual subtracts the FOUR window-scoped lines, so over the
+        whole store what is left is the cash that bought the three open
+        positions: 20738.68 - 329.49 - 4.05 - 0.00 - 24000.00 = -3594.86.
 
         It is also the number most exposed to a change in how rows are placed
-        in the window: the residual is the window's cash movement the five
-        named lines do not explain, so a row moved in or out of the window
-        moves it.
+        in the window -- a row moved in or out of the window moves it.
+
+        **Mutation it catches:** subtracting the open cost basis here as well,
+        which is what this line used to do and what answered 0.00. Both sides
+        are literals, and the two numbers are 3594.86 apart.
         """
-        self.assertEqual(self.totals.residual_acct.value, 0.0)
+        self.assertEqual(self.totals.residual_acct.value, FULL_SPAN_RESIDUAL_PLN)
         self.assertEqual(self.totals.residual_acct.rows, ALL_ROWS)
+        self.assertNotEqual(self.totals.residual_acct.value, 0.0)
+
+    def test_the_residual_subtracts_the_four_window_scoped_lines_and_no_other(self) -> None:
+        """Every term is a measured literal, so the identity cannot absorb a
+        changed term list: a fifth line in the subtraction, or a missing
+        fourth, leaves the left side alone and moves the right.
+
+        The open cost basis is NOT one of them. It carries its own as-of --
+        the cost of a position still open is as-of the store's watermark and
+        not as-of the window's end -- and a term with one scope inside an
+        identity with another is what published +3594.86 of "residual not
+        explained above" over a window holding no row at all.
+        """
+        self.assertEqual(
+            self.totals.residual_acct.value,
+            round(
+                ALL_ROWS_TOTAL_PLN - NET_CLOSED_PLN - INCOME_PLN - 0.00 - DEPOSITS_PLN,
+                2,
+            ),
+        )
+        self.assertNotEqual(
+            self.totals.residual_acct.value,
+            round(FULL_SPAN_RESIDUAL_PLN - COST_BASIS_OPEN_PLN, 2),
+        )
 
     def test_the_whole_record_renders_as_one_strict_json_value(self) -> None:
         """``allow_nan=False`` is the CLI's rule; a body that cannot satisfy it
@@ -321,10 +373,10 @@ class TheWindowScopesTheCashEventsAndNotTheStore(IsolatedHomeTestCase):
 class TheNarrowWindowAtTheCut(IsolatedHomeTestCase):
     """2026-08-01..2026-09-12, the window amendment W1 and W2 both name.
 
-    Here the residual is -4 334.10 rather than the 0.00 the full span answers,
-    seven closed episodes fall outside the window, and a window-clipped open
-    cost basis would answer -466.98 against the -3 594.86 that is actually at
-    risk.
+    Here the residual is -7 928.96 rather than the -3 594.86 the full span
+    answers, seven closed episodes fall outside the window, and a
+    window-clipped open cost basis would answer -466.98 against the -3 594.86
+    that is actually at risk.
     """
 
     def setUp(self) -> None:
@@ -414,21 +466,41 @@ class TheNarrowWindowAtTheCut(IsolatedHomeTestCase):
         self.assertEqual(self.totals.cost_basis_open_excluded, 0)
         self.assertEqual(self.totals.basis.episodes_excluded, CUT_CLOSED_OUTSIDE + OPEN_EPISODES)
 
-    def test_the_residual_is_published_and_is_not_zero_here(self) -> None:
+    def test_the_residual_is_the_windows_own_unexplained_cash(self) -> None:
         """Amendment W2. Memo section 4: episodes are summable and their sum
         is NOT the period total; the difference is real money -- here the
-        entry legs of the seven episodes that closed after the cut.
+        entry legs of the seven episodes that closed after the cut, and of the
+        three positions still open.
 
-        **Mutation it catches:** omitting the line entirely, which the full
-        span cannot see because its residual is exactly 0.00.
+        **Mutation it catches:** subtracting the open cost basis here. That is
+        the 2026-10-26 fix: the basis is as-of the store's watermark while
+        every other term is the window's, so it answered -4334.10 and, on a
+        window holding no row, +3594.86 of cash it called unexplained.
         """
         self.assertEqual(self.totals.residual_acct.value, CUT_RESIDUAL_PLN)
         self.assertEqual(self.totals.residual_acct.rows, CUT_ROWS)
         self.assertEqual(self.totals.cash_book_sum_acct.value, CUT_ROWS_TOTAL_PLN)
         self.assertEqual(self.totals.cash_book_sum_acct.rows, CUT_ROWS)
+        self.assertNotEqual(
+            self.totals.residual_acct.value,
+            round(CUT_RESIDUAL_PLN - COST_BASIS_OPEN_PLN, 2),
+        )
 
-    def test_the_subtotal_is_the_five_named_lines(self) -> None:
+    def test_the_subtotal_is_the_four_window_scoped_lines(self) -> None:
+        """Its terms are the realized net, income, unclassified and the
+        residual -- every one of them the window's own. The open cost basis
+        is not among them, which is why ``subtotal + deposits == cash book
+        sum`` stays an algebraic identity rather than a measurement.
+
+        **Mutation it catches:** keeping the open cost basis in the terms
+        while the residual no longer subtracts it, which counts -3594.86 once
+        and breaks the identity below.
+        """
         self.assertEqual(self.totals.subtotal_acct.value, CUT_SUBTOTAL_PLN)
+        self.assertEqual(
+            self.totals.subtotal_acct.value,
+            round(CUT_NET_CLOSED_PLN + 0.00 + 0.00 + CUT_RESIDUAL_PLN, 2),
+        )
         self.assertEqual(
             self.totals.cash_book_sum_acct.value,
             round(CUT_SUBTOTAL_PLN + DEPOSITS_PLN, 2),
@@ -563,6 +635,14 @@ class AnEmptyWindowInsideTheSweptRange(IsolatedHomeTestCase):
     the residual and the subtotal would have been nulls for the same reason;
     and the published lines printed ``0.00`` with no unit against memo section
     5(d)'s rule that the currency goes ON the number.
+
+    It is also the window that measures the residual's SCOPE, which is why it
+    is pinned both ways below. No row is inside it, so every window-scoped
+    line is 0.00 and the residual must be 0.00 too: there is no cash to
+    explain. The open cost basis is -3594.86 all the same, because it is
+    as-of the store's watermark -- and while it was a term of the residual
+    that difference in scope was published as +3594.86 of "residual not
+    explained above" over 0 rows, a number that explained nothing.
     """
 
     def setUp(self) -> None:
@@ -581,8 +661,22 @@ class AnEmptyWindowInsideTheSweptRange(IsolatedHomeTestCase):
         partition that cannot hold over zero rows is a defect in the
         partition, not an incomplete number."""
         self.assertEqual(self.totals.cash_book_sum_acct.value, 0.0)
-        self.assertEqual(self.totals.residual_acct.value, -COST_BASIS_OPEN_PLN)
+        self.assertEqual(self.totals.residual_acct.value, 0.0)
         self.assertEqual(self.totals.subtotal_acct.value, 0.0)
+
+    def test_the_residual_over_no_rows_is_zero_and_not_the_open_basis(self) -> None:
+        """Half of the scope pin. Every term of the residual is the window's,
+        and the window holds nothing -- so the line that says "cash the lines
+        above do not explain" has nothing to say and says 0.00 over 0 rows.
+
+        **Mutation it catches:** the term list this fix shortened. With the
+        open cost basis in it the residual was +3594.86 over 0 rows -- the
+        offset of an as-of-now term inside a window-scoped identity, published
+        under a label that claims it is unexplained window cash.
+        """
+        self.assertEqual(self.totals.residual_acct.value, 0.0)
+        self.assertEqual(self.totals.residual_acct.rows, 0)
+        self.assertNotEqual(self.totals.residual_acct.value, -COST_BASIS_OPEN_PLN)
 
     def test_every_number_still_carries_the_account_currency(self) -> None:
         """Memo section 5(d). The unit comes from the store's own rows, which
@@ -598,10 +692,24 @@ class AnEmptyWindowInsideTheSweptRange(IsolatedHomeTestCase):
                 self.assertEqual(bucket.total.value, 0.0)
 
     def test_the_open_cost_basis_is_not_emptied_by_an_empty_window(self) -> None:
-        """It is never window-scoped, so a quiet stretch does not hide the
-        money at risk -- it shows up in the residual instead."""
+        """The other half of the scope pin, and the owner's standing decision:
+        the line keeps the FULL cost of every open position and states its own
+        as-of, so a quiet stretch does not hide the money at risk.
+
+        Taking it out of the residual must not take it off the report. It is
+        published in full -- amount, episode count and the as-of that says the
+        window's end is not what it rests on -- while every term of the two
+        derived lines stays window-scoped.
+
+        **Mutation it catches:** answering the scope complaint by clipping the
+        line to the window instead, which here empties the one figure that
+        states the exposure (0.00 over 0 episodes against -3594.86 over 3).
+        """
         self.assertEqual(self.totals.cost_basis_open_acct.value, COST_BASIS_OPEN_PLN)
         self.assertEqual(self.totals.cost_basis_open_acct.rows, OPEN_EPISODES)
+        self.assertEqual(self.totals.cost_basis_open_asof, _SWEPT_UNTIL.isoformat())
+        self.assertNotEqual(self.totals.cost_basis_open_asof, self.totals.basis.window_until)
+        self.assertEqual(self.totals.cost_basis_open_excluded, 0)
 
     def test_the_cumulative_check_still_reconciles_because_it_is_store_wide(self) -> None:
         check = next(
@@ -1310,12 +1418,29 @@ class AWindowTheStoreCannotAnswerIsRefused(IsolatedHomeTestCase):
         self.assertIn("prod", str(ctx.exception))
 
 
-#: Measured: the capture's trade rows with the three still-open instruments
-#: removed. The BOOKING rows are untouched, so their share legs and fees are
-#: still in the cash book with no episode to account for them -- which is
-#: exactly what the residual line is for.
-FLAT_RESIDUAL_PLN = -3594.86
-FLAT_SUBTOTAL_PLN = -3261.32
+#: The capture's trade rows with the three still-open instruments removed.
+#: The BOOKING rows are untouched, so their share legs and fees are still in
+#: the cash book with no episode to account for them -- which is exactly what
+#: the residual line is for.
+#:
+#: Both numbers are the FULL SPAN's, and that is the measurement: deleting
+#: every trade row of the three open positions moves the open cost basis from
+#: -3594.86 to 0.00 and moves neither derived line, because neither has the
+#: open cost basis as a term any more. Before 2026-10-26 the residual here was
+#: -3594.86 against 0.00 at the full span -- the same two stores, two
+#: different residuals.
+FLAT_RESIDUAL_PLN = FULL_SPAN_RESIDUAL_PLN
+FLAT_SUBTOTAL_PLN = SUBTOTAL_PLN
+
+#: The three instruments whose episodes are still open at the end of the
+#: capture. Dropping their trade rows is the one difference between the two
+#: stores the invariance test below reads.
+OPEN_INSTRUMENTS = frozenset({"RHI:xnys", "TNGX:xnas", "NESR:xnas"})
+
+
+def _trades_of_closed_positions_only() -> tuple[Any, ...]:
+    """The capture's trade rows with every still-open position removed."""
+    return tuple(row for row in TRADES if row.instrument_symbol not in OPEN_INSTRUMENTS)
 
 
 class ThereIsNoOpenEpisodeAtAll(IsolatedHomeTestCase):
@@ -1324,12 +1449,7 @@ class ThereIsNoOpenEpisodeAtAll(IsolatedHomeTestCase):
 
     def setUp(self) -> None:
         super().setUp()
-        closed_only = tuple(
-            row
-            for row in TRADES
-            if row.instrument_symbol not in {"RHI:xnys", "TNGX:xnas", "NESR:xnas"}
-        )
-        _seed(read=_read(trades=closed_only))
+        _seed(read=_read(trades=_trades_of_closed_positions_only()))
         self.totals = report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=_SWEPT_UNTIL)
 
     def test_the_cost_basis_line_is_a_zero_with_a_row_count_of_zero(self) -> None:
@@ -1339,11 +1459,18 @@ class ThereIsNoOpenEpisodeAtAll(IsolatedHomeTestCase):
         CHANGED number rather than as a new row appearing.
 
         **Mutation it catches:** publishing ``money.NULL_NEVER_OPENED`` here.
-        A named absence is the more informative WORD, and it nulls the two
-        lines below through the all-or-nothing rule, which makes a whole
-        report unreadable in the ordinary case where nothing is at risk.
-        Measured before the fix: ``residual: never_opened`` and
-        ``subtotal: account_amount_not_reported``.
+        A named absence is the more informative WORD, and it would turn the
+        one line that states the money at risk into a refusal in the ordinary
+        case where nothing is at risk.
+
+        That is the whole cost of it now. Until 2026-10-26 it cost two more
+        lines -- measured ``residual: never_opened`` and ``subtotal:
+        account_amount_not_reported``, through the all-or-nothing rule -- but
+        the open cost basis is no longer a term of either, so a named absence
+        on it propagates nowhere. The zero stays for the reason that does not
+        depend on the propagation: zero open episodes is a measured empty set
+        and not an amount the vendor failed to report, and the row count
+        beside the 0.00 is what says so (memo section 5(a)'s pattern).
         """
         self.assertEqual(self.totals.cost_basis_open_acct.value, 0.0)
         self.assertIsNone(self.totals.cost_basis_open_acct.null_reason)
@@ -1352,16 +1479,60 @@ class ThereIsNoOpenEpisodeAtAll(IsolatedHomeTestCase):
         self.assertEqual(self.totals.basis.exclusions[episodes.STATE_OPEN], 0)
 
     def test_the_lines_below_it_still_carry_numbers(self) -> None:
-        """The reason the line above is a zero. Both literals are measured:
-        the booking rows still hold the share legs and fees of the three
-        positions whose trade rows are gone, so the residual is exactly the
-        -3 594.86 no episode accounts for."""
+        """Every published line is a number with its unit -- the gate that
+        catches a named absence on the line above, now that nothing
+        propagates from it.
+
+        The booking rows still hold the share legs and fees of the three
+        positions whose trade rows are gone, so the residual is the -3 594.86
+        no episode accounts for.
+        """
         self.assertEqual(self.totals.residual_acct.value, FLAT_RESIDUAL_PLN)
         self.assertEqual(self.totals.subtotal_acct.value, FLAT_SUBTOTAL_PLN)
         for name, line in sorted(self.totals.lines().items()):
             with self.subTest(line=name):
                 self.assertIsNone(line.null_reason)
                 self.assertEqual(line.currency, "PLN")
+
+
+class NeitherDerivedLineMovesWithTheOpenCostBasis(unittest.TestCase):
+    """The scope fix as an INVARIANCE over two stores, not as a value.
+
+    Two reports, over the same 104 booking rows and the same window, differing
+    in one thing: the second store has no trade row for any of the three
+    positions still open, so its open cost basis is 0.00 over 0 episodes
+    against -3594.86 over 3. Neither the residual nor the subtotal may move,
+    because the open cost basis is a term of neither.
+
+    A single store cannot say this. In the flat store the line is 0.00, so
+    adding it back to a term list changes nothing there; in the capture it is
+    -3594.86 and changes both. Only the PAIR can refute, which is why this is
+    one test over two isolated homes rather than an assertion in either class
+    above (``isolate_home`` exists for exactly this).
+
+    **Mutation it catches:** restoring the open cost basis to the residual's
+    term list, to the subtotal's, or to both. The first two each move one of
+    the two numbers below by 3594.86 in the capture and leave the flat store
+    alone; putting it back in both moves the residual and leaves the subtotal,
+    which is the shape that was shipped.
+    """
+
+    def _totals_of(self, *, trades: tuple[Any, ...] | None) -> report.CashBookTotals:
+        isolate_home(self)
+        _seed(read=_read(trades=trades) if trades is not None else None)
+        return report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=_SWEPT_UNTIL)
+
+    def test_removing_every_open_position_moves_the_basis_and_nothing_else(self) -> None:
+        with_open = self._totals_of(trades=None)
+        without_open = self._totals_of(trades=_trades_of_closed_positions_only())
+
+        self.assertEqual(with_open.cost_basis_open_acct.value, COST_BASIS_OPEN_PLN)
+        self.assertEqual(without_open.cost_basis_open_acct.value, 0.0)
+        self.assertEqual(with_open.cash_book_sum_acct.value, without_open.cash_book_sum_acct.value)
+        self.assertEqual(with_open.residual_acct.value, without_open.residual_acct.value)
+        self.assertEqual(with_open.subtotal_acct.value, without_open.subtotal_acct.value)
+        self.assertEqual(with_open.residual_acct.value, FULL_SPAN_RESIDUAL_PLN)
+        self.assertEqual(with_open.subtotal_acct.value, SUBTOTAL_PLN)
 
 
 class AHeldPositionExcludedFromTheLineIsCountedBesideIt(IsolatedHomeTestCase):

@@ -24,7 +24,10 @@ speak for" and the wrong one to "what does this number rest on".
 FULL cost of every open episode and publishes its own as-of, because the cost
 of a still-open position is as-of now and not as-of the window's end. On the
 real capture at ``until=2026-09-12`` a window-clipped basis would be -466.98
-of the -3594.86 that is actually at risk. It also publishes
+of the -3594.86 that is actually at risk. Because its as-of is its own, it is
+a term of NEITHER derived line -- not of ``residual_acct`` and not of
+``subtotal_acct`` -- so no published identity mixes two scopes. It also
+publishes
 ``cost_basis_open_excluded``: ``open`` is a STATE, resolved first-hit, so a
 span still holding shares under a ``window_clipped`` or ``imbalanced`` flag is
 left out of the amount -- rightly, since neither has a vouchable cost basis --
@@ -40,13 +43,32 @@ window (see :mod:`episodes`): an episode clipped by a presentation window is
 indistinguishable from one clipped by the store, and only the second is a real
 incompleteness.
 
-**The residual is a published line, not a reconciliation step.** Episodes are
-summable and their sum is NOT the period total (memo section 4): the
-difference is real money -- a dividend arriving after an episode closed,
-withholding tax, financing, a deposit, and the entry legs of an episode that
-closed outside the window. ``residual_acct`` is that difference, computed by
-the same summing function as everything else, and it is zero only by accident
-on a window that happens to contain every episode whole.
+**The residual is a published line, not a reconciliation step, and every term
+of it is the WINDOW's.** Episodes are summable and their sum is NOT the period
+total (memo section 4): the difference is real money -- a dividend arriving
+after an episode closed, withholding tax, financing, the entry legs of an
+episode that closed outside the window, and the legs of a position still open.
+``residual_acct`` is the window's cash book sum less FOUR window-scoped lines
+-- the realized net, income, unclassified and the deposits -- computed by the
+same summing function as everything else.
+
+``cost_basis_open_acct`` was the fifth of them until 2026-10-26 and is not a
+term any more. It keeps its own as-of by the decision above, so it was the one
+term of a window-scoped identity that answered as of a different day, and on a
+window holding NO booking row the arithmetic published its whole offset:
++3594.86 over 0 rows, under the label "residual not explained above", on a
+window whose cash book sum is 0.00. A line that is as-of-now is published on
+its own terms instead -- amount, episode count, as-of and the held-but-excluded
+count -- the way the deposits line is published below the subtotal rather than
+inside it.
+
+The residual is therefore NOT zero at the full span, and the sentence that
+said it is zero "only by accident" was the other half of the same mistake.
+Over the whole real capture it is -3594.86: the cash that bought the three
+positions still open is window cash, and no other line accounts for it once
+the basis is out. The two numbers coincide THERE and are two different facts
+-- a window total and an as-of-watermark exposure -- which the narrow windows
+separate (-7928.96 against the same -3594.86 at ``until=2026-09-12``).
 
 **Four partitions are checked, not described, and each of the four can be
 refuted.** The bucket identity (the buckets' amounts add back to the amount of
@@ -82,9 +104,14 @@ replaced could not.
 
 The one relation NOT checked here is ``subtotal + deposits ==
 cash_book_sum_acct``: the residual is DEFINED as the cash book sum minus the
-five named lines, so that equation is algebraically guaranteed and asserting
-it would be noise. ``test_report.py`` pins both sides against literals
-instead, which is what catches the deposits being folded into the subtotal.
+four named lines and the subtotal re-adds three of them, so that equation is
+algebraically guaranteed and asserting it would be noise. It stays guaranteed
+only while the subtotal's terms are exactly the residual's three
+non-deposit ones plus the residual itself -- the open cost basis left both
+lists together, and keeping it in the subtotal alone would have counted
+-3594.86 once and broken the identity. ``test_report.py`` pins both sides
+against literals instead, which is what catches the deposits being folded
+into the subtotal.
 
 **The balance cross-check comes in two versions and the weaker one says so.**
 The cumulative check carries ``detects_restatement: False`` on its face: a
@@ -463,6 +490,15 @@ class CashBookTotals:
     then the SUBTOTAL, then the deposits BELOW it labelled not P&L, then the
     cash book sum. Deposits sit below the subtotal because 24 000 PLN of
     funding is the easiest number in this repo to misread as profit.
+
+    **The order is not the arithmetic.** Four lines are the subtotal's terms
+    -- the realized net, income, unclassified and the residual -- and two are
+    STATED lines that no published identity adds up: ``deposits_acct``, which
+    is funding and sits below the subtotal for that reason, and
+    ``cost_basis_open_acct``, which is as-of the store's watermark rather than
+    as-of the window's end and sits above it. A renderer printing this order
+    therefore has to say which lines add, because a column of five numbers
+    above a rule reads as five terms of what is under it.
     """
 
     env: str
@@ -491,7 +527,27 @@ class CashBookTotals:
     cost_basis_open_excluded: int
     income_acct: AcctAmount
     unclassified_acct: AcctAmount
+    #: The window's cash book sum less the four WINDOW-SCOPED lines (the
+    #: realized net, income, unclassified, the deposits). Not a
+    #: reconciliation step: the difference is real money the named lines do
+    #: not explain -- a dividend after a close, withholding tax, financing,
+    #: the entry legs of an episode that closed outside the window, and the
+    #: legs of a position still open.
+    #:
+    #: ``cost_basis_open_acct`` is deliberately NOT a term. It answers as of
+    #: the store's watermark while every term here answers as of the window,
+    #: and one term in a different scope is published as that term's offset:
+    #: measured +3594.86 over 0 rows on a window holding no booking row at
+    #: all, under a label that says it is unexplained window cash. Over the
+    #: whole store the residual and that line coincide at -3594.86, because
+    #: the open positions' legs are then the only window cash the four lines
+    #: leave; at ``until=2026-09-12`` they are -7928.96 and -3594.86.
     residual_acct: AcctAmount
+    #: The four lines above that ADD: the realized net, income, unclassified
+    #: and the residual. Not the open cost basis (a different as-of) and not
+    #: the deposits (funding, and the line below it). Because the residual
+    #: already subtracted the deposits, ``subtotal + deposits ==
+    #: cash_book_sum_acct`` holds algebraically rather than by measurement.
     subtotal_acct: AcctAmount
     deposits_acct: AcctAmount
     cash_book_sum_acct: AcctAmount
@@ -646,8 +702,8 @@ def _resting_on(amount: AcctAmount, rows: int) -> AcctAmount:
 
     :func:`~.money.acct_difference` adds both sides' counts, which is right
     for a difference of two independent sums and wrong for a line like the
-    residual, computed by subtracting five lines from one total: the counts
-    would add to six times the window. Re-stated once, HERE, rather than by
+    residual, computed by subtracting four lines from one total: the counts
+    would add to five times the window. Re-stated once, HERE, rather than by
     letting each caller build its own ``AcctAmount`` -- the value and the null
     reason still come from the one summer.
 
@@ -880,19 +936,23 @@ def _cost_basis_open(found: Sequence[episodes.CashEpisode], currency: str | None
 
     **With no open episode this is ``0.00`` over 0 episodes, and NOT
     ``money.NULL_NEVER_OPENED``**, although that constant names this exact
-    line. The reason is measured: a named absence propagates through the
-    all-or-nothing rule into the residual and the subtotal, so an account that
-    is FLAT -- the ordinary state between positions -- published
-    ``residual: never_opened`` and ``subtotal: account_amount_not_reported``
-    and a report nobody could read. The row count carries the fact instead,
-    which is memo section 5(a)'s own pattern for ``unclassified``: the line is
-    printed at zero, and ``0.00 / 0 episodes`` says no position is open while
-    leaving a non-zero one later readable as a changed number.
+    line. The row count carries the fact instead, which is memo section
+    5(a)'s own pattern for ``unclassified``: the line is printed at zero, and
+    ``0.00 / 0 episodes`` says no position is open while leaving a non-zero
+    one later readable as a changed number.
 
     The all-or-nothing rule is untouched by this, because it is about an
     amount the VENDOR did not report. Zero open episodes is not an unreported
     number; it is a measured empty set, and ``acct_sum`` over an empty
-    sequence is the zero this returns.
+    sequence is the zero this returns. That is the whole argument now, and it
+    is the half that does not depend on what this line feeds: until
+    2026-10-26 a named absence here also propagated through the all-or-nothing
+    rule into the residual and the subtotal, so a FLAT account -- the ordinary
+    state between positions -- published ``residual: never_opened`` and
+    ``subtotal: account_amount_not_reported`` and a report nobody could read.
+    This line is a term of neither any more, so the cost of that mutation is
+    now exactly this line; the gate is ``test_report.py``'s assertion that
+    every published line carries a number and its unit.
     """
     still_open = [episode for episode in found if episode.state == episodes.STATE_OPEN]
     return acct_sum(
@@ -1011,21 +1071,29 @@ def build_totals(*, env: str, since: dt.date, until: dt.date) -> CashBookTotals:
     deposits = by_name[buckets.BUCKET_DEPOSITS].total
     cash_book_sum = _in_account_currency(bucket_fold.all_rows, currency)
 
-    # The residual is the window's cash movement that the five named lines do
-    # not explain -- a dividend after a close, withholding tax, financing, a
-    # deposit, and the entry legs of an episode that closed outside the
-    # window. Memo section 4: episodes are summable and their sum is NOT the
-    # period total, and the difference is real money.
+    # The residual is the window's cash movement that the four WINDOW-SCOPED
+    # lines do not explain -- a dividend after a close, withholding tax,
+    # financing, the entry legs of an episode that closed outside the window,
+    # and the legs of a position still open. Memo section 4: episodes are
+    # summable and their sum is NOT the period total, and the difference is
+    # real money.
+    #
+    # ``cost_basis_open`` is NOT one of them: it is as-of the store's
+    # watermark and every other term here is the window's (see
+    # :attr:`CashBookTotals.residual_acct`).
     residual = cash_book_sum
-    for line in (net_closed, cost_basis_open, income, unclassified, deposits):
+    for line in (net_closed, income, unclassified, deposits):
         residual = acct_difference(residual, line)
     # It rests on the whole window, not on a subset of it: the named lines
     # live in two row spaces (booking rows for the buckets, trades rows for
     # the episodes), so no set of booking rows is the residual's own.
     residual = _resting_on(residual, len(window.inside))
 
+    # The same four window-scoped lines, with the deposits moved from the
+    # subtraction to the line BELOW the subtotal -- which is what makes
+    # ``subtotal + deposits == cash_book_sum`` algebraic.
     subtotal = acct_sum(
-        _as_pairs([net_closed, cost_basis_open, income, unclassified, residual], currency=currency),
+        _as_pairs([net_closed, income, unclassified, residual], currency=currency),
         rows=len(window.inside) - deposits.rows,
         currency=currency,
     )

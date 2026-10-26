@@ -142,7 +142,23 @@ BASELINE: dict[str, int] = {
     # two-seam module split riding along at the end of a review-fix PR is how a
     # published money number moves without anyone reviewing the move. The split
     # is its own PR; this entry is what keeps it visible until then.
-    "apps/alphalens-pipeline/alphalens_pipeline/account_cash/report.py": 1102,
+    #
+    # Raised from 1102 to 1170, measured with `wc -l` after `ruff format`, for
+    # taking the open cost basis OUT of the residual's and the subtotal's term
+    # lists. ALL 68 are docstring or comment, measured on the diff: 97 lines
+    # added and 29 removed, of which exactly two on each side are code -- the
+    # loop's tuple and the subtotal's list, each a replacement that drops one
+    # term, so the code did not grow at all.
+    #
+    # What the 68 lines buy: the old text SAID the residual is the cash book
+    # sum minus five named lines and that it is "zero only by accident", and
+    # both halves became false in the same change. The two derived fields now
+    # carry their own term lists, the scope rule that keeps the basis out of
+    # them, and the measurement that forced it (+3594.86 of "residual not
+    # explained above" over a window holding no booking row). The
+    # `_cost_basis_open` note lost its propagation argument to the same change
+    # and had to say which argument is left standing.
+    "apps/alphalens-pipeline/alphalens_pipeline/account_cash/report.py": 1170,
     # Raised again, by 8, to say that the raise page's ticker fallback is
     # unreachable by construction. It sits beside the stop-PLACED page's
     # fallback, which looks identical and IS reachable and tested, so without
