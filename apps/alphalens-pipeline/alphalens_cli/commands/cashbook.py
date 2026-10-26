@@ -349,7 +349,7 @@ _TOTALS_MONEY_LINES: tuple[tuple[str, str], ...] = (
     ("net_closed_acct", "net on closed episodes"),
     ("income_acct", "dividends and withholding tax"),
     ("unclassified_acct", "unclassified cash events"),
-    ("residual_acct", "residual not explained above"),
+    ("residual_acct", "residual the named lines leave"),
     ("subtotal_acct", "trading and income subtotal"),
     ("deposits_acct", "deposits and withdrawals"),
     ("cash_book_sum_acct", "cash book sum"),
@@ -375,7 +375,11 @@ _TOTALS_MONEY_NOTES: dict[str, str] = {
     "cost_basis_open_acct": "episodes, not realized",
     "income_acct": "rows",
     "unclassified_acct": "rows",
-    "residual_acct": "rows, cash the lines above do not explain",
+    # The terms themselves are appended from the RECORD (see `_money_note`):
+    # one of them -- the deposits -- is rendered BELOW this line, so a note
+    # that said "the lines above" described a number 24 000.00 PLN away from
+    # the one it was printed beside.
+    "residual_acct": "rows, the window's cash book sum less",
     "subtotal_acct": "rows",
     "deposits_acct": "rows, not P&L",
     "cash_book_sum_acct": "rows",
@@ -386,6 +390,13 @@ _TOTALS_MONEY_NOTES: dict[str, str] = {
 #: speak for, not the window's end) and the count of spans still holding shares
 #: that the amount leaves out.
 _COST_BASIS_FIELD = "cost_basis_open_acct"
+
+#: The money line whose note names the OTHER lines it was computed from. Its
+#: terms come off the record's own ``residual_terms``, never from a list here:
+#: the deposits are one of them and are rendered below this line, so a note
+#: spelled in the renderer is a sentence that was true when it was written and
+#: wrong by 24 000.00 PLN after the deposits moved under the subtotal.
+_RESIDUAL_FIELD = "residual_acct"
 
 
 def _stated(value: Any) -> str:
@@ -406,15 +417,32 @@ def _fact(label: str, rest: str) -> None:
     typer.echo(f"{label:<{_TOTALS_LABEL_WIDTH}} {rest}")
 
 
+def _named_terms(terms: list[str]) -> str:
+    """A published list of line names, as the last clause of a note reads.
+
+    Commas and one ``and``, because this is the tail of an English sentence
+    rather than a column of counts. Each name stays bounded by whitespace or a
+    comma, so a reader looking for one of them finds it whole.
+    """
+    if len(terms) < 2:
+        return _joined(terms)
+    return f"{', '.join(terms[:-1])} and {terms[-1]}"
+
+
 def _money_note(field: str, body: dict[str, Any]) -> str:
     """The row count one money line rests on, and what it is not."""
     note = f"{body[field]['rows']} {_TOTALS_MONEY_NOTES[field]}"
-    if field != _COST_BASIS_FIELD:
-        return note
-    return (
-        f"{note}, as of {_stated(body['cost_basis_open_asof'])}, "
-        f"{body['cost_basis_open_excluded']} more held and not on this line"
-    )
+    if field == _COST_BASIS_FIELD:
+        return (
+            f"{note}, as of {_stated(body['cost_basis_open_asof'])}, "
+            f"{body['cost_basis_open_excluded']} more held and not on this line"
+        )
+    if field == _RESIDUAL_FIELD:
+        # From the RECORD: it states which lines its own subtraction took off,
+        # so adding or removing a term changes this note instead of leaving it
+        # describing the subtraction the report used to make.
+        return f"{note} {_named_terms(body['residual_terms'])}"
+    return note
 
 
 def _render_totals_money(body: dict[str, Any]) -> None:

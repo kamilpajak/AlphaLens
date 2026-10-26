@@ -319,6 +319,43 @@ class TheGoldenLiveWindow(IsolatedHomeTestCase):
             round(FULL_SPAN_RESIDUAL_PLN - COST_BASIS_OPEN_PLN, 2),
         )
 
+    def test_the_record_names_the_terms_the_residual_subtracted(self) -> None:
+        """The term list is PUBLISHED, so a render can name what was subtracted.
+
+        Written out here rather than read back off ``RESIDUAL_TERMS``: the
+        residual loop subtracts exactly that tuple, so comparing the published
+        list against it would be production against production.
+
+        **Mutation it catches:** a term list the record keeps to itself. While
+        it did, the prose named "the lines above" and the deposits are rendered
+        BELOW the residual, so the label was wrong by exactly 24 000.00 PLN and
+        every arithmetic test stayed green.
+        """
+        self.assertEqual(
+            self.totals.to_jsonable()["residual_terms"],
+            ["net_closed_acct", "income_acct", "unclassified_acct", "deposits_acct"],
+        )
+
+    def test_the_published_terms_add_back_to_the_windows_cash_book_sum(self) -> None:
+        """The published list IS the subtraction, not a caption beside it.
+
+        **Mutation it catches:** a list that names three of the four terms, or
+        one that names a line the residual never subtracted -- the open cost
+        basis, say, which is as-of the store's watermark. Either leaves this
+        sum 3594.86 or 24000.00 away from the measured literal.
+        """
+        body = self.totals.to_jsonable()
+
+        named = sum(body[name]["value"] for name in body["residual_terms"])
+
+        self.assertAlmostEqual(body["residual_acct"]["value"] + named, ALL_ROWS_TOTAL_PLN, places=2)
+
+    def test_one_named_term_is_rendered_below_the_residual_line(self) -> None:
+        """Why the label cannot say "above": the deposits are a term of the
+        residual and sit under it, below the subtotal, because 24 000 PLN of
+        funding is the easiest number in this repo to misread as profit."""
+        self.assertIn("deposits_acct", self.totals.to_jsonable()["residual_terms"])
+
     def test_the_whole_record_renders_as_one_strict_json_value(self) -> None:
         """``allow_nan=False`` is the CLI's rule; a body that cannot satisfy it
         turns a report into a refusal, so it is checked where the body is

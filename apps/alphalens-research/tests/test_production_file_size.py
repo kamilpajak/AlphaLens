@@ -163,7 +163,14 @@ BASELINE: dict[str, int] = {
     # `acct_resting_on` when the balance check became its second user, and
     # took its 25 lines with it. Lowered rather than kept as slack, which is
     # what this table asks for when a file shrinks.
-    "apps/alphalens-pipeline/alphalens_pipeline/account_cash/report.py": 1145,
+    #
+    # Raised from 1145 to 1181 for the P4-c review findings. 36 lines, of which
+    # 25 are comment: the residual's term list became a named constant the
+    # subtraction reads and the record PUBLISHES (`residual_terms`), because the
+    # prose label said "the lines above" while one of the terms -- the deposits
+    # -- is rendered below the line, so the label was wrong by exactly
+    # 24 000.00 PLN and no arithmetic test could see it.
+    "apps/alphalens-pipeline/alphalens_pipeline/account_cash/report.py": 1181,
     # Raised again, by 8, to say that the raise page's ticker fallback is
     # unreachable by construction. It sits beside the stop-PLACED page's
     # fallback, which looks identical and IS reachable and tested, so without

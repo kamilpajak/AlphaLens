@@ -171,6 +171,24 @@ REPORT_EXCLUSION_ORDER: tuple[str, ...] = (
     EXCLUSION_CLOSED_OUTSIDE_WINDOW,
 )
 
+#: The published lines :attr:`CashBookTotals.residual_acct` SUBTRACTS from the
+#: window's cash book sum, in subtraction order. One tuple, read by the
+#: subtraction itself and published with the record, because the render has to
+#: name what was actually taken off and a renderer that spelled the terms
+#: itself wrote a sentence that was true once: the deposits are a term and are
+#: rendered BELOW the line, so "the lines above" was wrong by exactly
+#: 24 000.00 PLN while every arithmetic test stayed green.
+#:
+#: ``cost_basis_open_acct`` is deliberately absent; see
+#: :attr:`CashBookTotals.residual_acct` for why a term in another scope is
+#: published as that term's offset.
+RESIDUAL_TERMS: tuple[str, ...] = (
+    "net_closed_acct",
+    "income_acct",
+    "unclassified_acct",
+    "deposits_acct",
+)
+
 #: The window could not be answered at all. One of these, never a ``0.0``.
 REFUSED_SIM_REPORTS_UNUSABLE = "sim_reports_unusable"
 REFUSED_BEFORE_FIRST_SWEEP = "before_first_sweep"
@@ -214,6 +232,7 @@ __all__ = [
     "REFUSED_NOTHING_SWEPT",
     "REFUSED_SIM_REPORTS_UNUSABLE",
     "REPORT_EXCLUSION_ORDER",
+    "RESIDUAL_TERMS",
     "TOTALS_REFUSALS",
     "UNDETECTED_PARTIAL_ENTRY",
     "Basis",
@@ -584,6 +603,11 @@ class CashBookTotals:
             "coverage": self.coverage.to_jsonable(),
             "cost_basis_open_asof": self.cost_basis_open_asof,
             "cost_basis_open_excluded": self.cost_basis_open_excluded,
+            # The names the residual subtracted, so a consumer -- the prose
+            # renderer first of all -- can say what was taken off instead of
+            # describing it from memory. Published off the one tuple the
+            # subtraction itself reads, so the two cannot come apart.
+            "residual_terms": list(RESIDUAL_TERMS),
             "buckets": [bucket.to_jsonable() for bucket in self.buckets],
             "balance_checks": [check.to_jsonable() for check in self.balance_checks],
         }
@@ -1056,9 +1080,21 @@ def build_totals(*, env: str, since: dt.date, until: dt.date) -> CashBookTotals:
     # ``cost_basis_open`` is NOT one of them: it is as-of the store's
     # watermark and every other term here is the window's (see
     # :attr:`CashBookTotals.residual_acct`).
+    #
+    # Over :data:`RESIDUAL_TERMS` rather than over a tuple written here,
+    # because that tuple is also what the record PUBLISHES as the subtraction
+    # (``residual_terms``). A term added to or taken out of the subtraction
+    # therefore changes what every consumer is told was subtracted, including
+    # the prose label that used to say "the lines above".
+    window_scoped = {
+        "net_closed_acct": net_closed,
+        "income_acct": income,
+        "unclassified_acct": unclassified,
+        "deposits_acct": deposits,
+    }
     residual = cash_book_sum
-    for line in (net_closed, income, unclassified, deposits):
-        residual = acct_difference(residual, line)
+    for name in RESIDUAL_TERMS:
+        residual = acct_difference(residual, window_scoped[name])
     # It rests on the whole window, not on a subset of it: the named lines
     # live in two row spaces (booking rows for the buckets, trades rows for
     # the episodes), so no set of booking rows is the residual's own.

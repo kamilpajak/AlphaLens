@@ -104,6 +104,7 @@ _PUBLISHED_TOP_LEVEL_KEYS = (
     "coverage",
     "cost_basis_open_asof",
     "cost_basis_open_excluded",
+    "residual_terms",
     "buckets",
     "balance_checks",
     "net_closed_acct",
@@ -385,6 +386,11 @@ def _requirement(path: str, payload: dict) -> tuple[str, str | None]:
         return "coverage", parts[1]
     if head in _COST_BASIS_SCALARS:
         return f"money:{_COST_BASIS_LABEL}", None
+    # Every term the residual subtracted, on the residual's own line: that note
+    # is the only place the report says WHAT was subtracted, and one of the
+    # terms is rendered below the line.
+    if head == "residual_terms":
+        return f"money:{_RESIDUAL_LABEL}", None
     if head == "buckets":
         return f"bucket:{payload['buckets'][int(parts[1])]['name']}", None
     if head == "balance_checks":
@@ -1069,6 +1075,98 @@ class TheFiveLoadBearingPropertiesOfTheRender(_CashbookTotalsCase):
         why the two cases both exist.
         """
         self.assertEqual(len(_money_cell_ends(self.totals, self.lines)), 1, self.human)
+
+
+class TheResidualsProseNamesTheTermsItSubtracted(_CashbookTotalsCase):
+    """The one money line whose own label used to describe a different number.
+
+    The record subtracts FOUR window-scoped lines, and the deposits are one of
+    them -- rendered BELOW the residual, because 24 000 PLN of funding is the
+    easiest number in this repo to misread as profit. While the label read
+    "residual not explained above" and the note "cash the lines above do not
+    explain", a reader who followed either one computed 20 405.14 PLN on the
+    real capture against a line printing -3 594.86: wrong by exactly the
+    deposits. Every arithmetic test passed through it, because the arithmetic
+    was right and only the prose lied.
+
+    So the terms are named, and they are named FROM THE RECORD: the last test
+    is the one that makes that structural rather than a sentence somebody
+    happened to write correctly once.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.seed()
+        self.payload = _strict_json(self.totals("--format", "json").stdout)
+        self.human = self.totals().stdout
+        self.lines = _collapsed_lines(self.human)
+        self.line = self.lines[_line_index(self.lines, _RESIDUAL_LABEL)]
+
+    def test_the_premise_is_a_term_this_render_puts_below_the_residual(self) -> None:
+        """Positive control: without a term rendered below it, "above" would
+        have been true and this whole class says nothing."""
+        self.assertIn("deposits_acct", self.payload["residual_terms"])
+        self.assertGreater(
+            _line_index(self.lines, _DEPOSITS_LABEL),
+            _line_index(self.lines, _RESIDUAL_LABEL),
+        )
+
+    def test_the_lines_rendered_above_it_do_not_explain_the_number(self) -> None:
+        """The measurement F1 rests on, as an assertion: the three money lines
+        above the residual leave 20 405.14 PLN of the cash book sum, and the
+        line prints -3 594.86. The gap is the deposits."""
+        above = [
+            field
+            for field, _label in _ADDED_LINES[
+                : _ADDED_LINES.index(("residual_acct", _RESIDUAL_LABEL))
+            ]
+        ]
+        self.assertEqual(above, ["net_closed_acct", "income_acct", "unclassified_acct"])
+
+        left = self.payload["cash_book_sum_acct"]["value"] - sum(
+            self.payload[field]["value"] for field in above
+        )
+
+        self.assertAlmostEqual(left, 20405.14, places=2)
+        self.assertAlmostEqual(self.payload["residual_acct"]["value"], -3594.86, places=2)
+        self.assertAlmostEqual(left - self.payload["residual_acct"]["value"], 24000.00, places=2)
+
+    def test_neither_the_label_nor_the_note_claims_the_lines_above(self) -> None:
+        """**Mutation it catches:** the old wording, in either half of the row."""
+        self.assertNotIn("above", self.line)
+
+    def test_the_note_names_every_term_the_record_subtracted(self) -> None:
+        for term in self.payload["residual_terms"]:
+            with self.subTest(term=term):
+                self.assertIn(f" {term} ", f" {self.line} ")
+
+    def test_the_note_names_no_line_the_residual_did_not_subtract(self) -> None:
+        """The other half, and the one a hand-written sentence fails: a note
+        that listed the open cost basis, or the subtotal, would describe a
+        subtraction the record never made."""
+        for field, _label in _MONEY_LINES:
+            if field == "residual_acct" or field in self.payload["residual_terms"]:
+                continue
+            with self.subTest(field=field):
+                self.assertNotIn(field, self.line)
+
+    def test_a_term_the_record_stops_subtracting_leaves_the_note(self) -> None:
+        """**Mutation it catches:** the four names spelled in the renderer.
+
+        Spelled there, they are a sentence that was true when it was written --
+        which is what the old label was. Here the record's own term list loses
+        the deposits, so the residual becomes the 20 405.14 PLN a reader of
+        that label computed, and the note has to stop naming a term nothing
+        subtracted.
+        """
+        shorter = tuple(name for name in report.RESIDUAL_TERMS if name != "deposits_acct")
+        with mock.patch.object(report, "RESIDUAL_TERMS", shorter):
+            lines = _collapsed_lines(self.totals().stdout)
+
+        line = lines[_line_index(lines, _RESIDUAL_LABEL)]
+
+        self.assertNotIn(" deposits_acct ", f" {line} ")
+        self.assertIn(" 20405.14 PLN ", f" {line} ")
 
 
 class ALineWithNoNumberPrintsItsReasonAndKeepsTheColumn(_CashbookTotalsCase):
