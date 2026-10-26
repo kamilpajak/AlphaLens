@@ -254,6 +254,19 @@ class TheGoldenLiveWindow(IsolatedHomeTestCase):
         self.assertEqual(self.totals.coverage.gaps, ())
         self.assertEqual(self.totals.coverage.cannot_detect, (report.UNDETECTED_PARTIAL_ENTRY,))
 
+    def test_the_full_span_residual_is_exactly_zero(self) -> None:
+        """This class's own docstring rests on it -- "the residual is
+        indistinguishable from its absent version here" is only true at 0.00
+        -- and nothing asserted it, so the sentence was load-bearing prose.
+
+        It is also the number most exposed to a change in how rows are placed
+        in the window: the residual is the window's cash movement the five
+        named lines do not explain, so a row moved in or out of the window
+        moves it.
+        """
+        self.assertEqual(self.totals.residual_acct.value, 0.0)
+        self.assertEqual(self.totals.residual_acct.rows, ALL_ROWS)
+
     def test_the_whole_record_renders_as_one_strict_json_value(self) -> None:
         """``allow_nan=False`` is the CLI's rule; a body that cannot satisfy it
         turns a report into a refusal, so it is checked where the body is
