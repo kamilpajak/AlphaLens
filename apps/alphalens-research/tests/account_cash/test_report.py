@@ -39,7 +39,13 @@ from alphalens_pipeline.account_cash.money import BALANCE_TOLERANCE_ACCT
 from alphalens_pipeline.brokers.account_cash import AccountCashRead
 from alphalens_pipeline.brokers.fill_history import ReadWindow
 
-from tests.account_cash.cashbook_fixture import BALANCE, BOOKINGS, TRADES
+from tests.account_cash.cashbook_fixture import (
+    BALANCE,
+    BOOKINGS,
+    TRADES,
+    synthetic_clipped_partial,
+    synthetic_clipped_sell_only,
+)
 from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
 
 _LIVE = "live"
@@ -414,6 +420,40 @@ class TheIdentitiesAreCheckedAndNotDescribed(IsolatedHomeTestCase):
             basis.fills_assigned + sum(basis.fills_unassigned.values()), basis.fills_read
         )
         self.assertEqual(sorted(basis.fills_unassigned), sorted(episodes.UNASSIGNED_REASONS))
+
+    def test_the_coverage_partition_holds_when_something_is_unassigned(self) -> None:
+        """The real capture leaves 0 fills unassigned, so every count in
+        ``basis.fills_unassigned`` is zero there -- a fixture uniform in the
+        column under test cannot tell a read from a constant.
+
+        The two synthetic clip cases add one fill each that no episode can
+        hold: a lone sell (nothing to close) and a sell larger than its buy.
+
+        **Mutation it catches:** ``_unassigned_by_reason`` returning its
+        all-zero template without counting, which is invisible on the real
+        rows and would publish "nothing unaccounted for" over two fills that
+        are.
+        """
+        _seed(
+            read=_read(
+                trades=(
+                    *TRADES,
+                    *synthetic_clipped_sell_only(),
+                    *synthetic_clipped_partial(),
+                )
+            ),
+            now=_SWEPT_AT + dt.timedelta(days=1),
+        )
+
+        basis = report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=_SWEPT_UNTIL).basis
+
+        self.assertEqual(basis.fills_read, FILLS + 3)
+        self.assertEqual(basis.fills_unassigned[episodes.UNASSIGNED_NO_OPEN], 2)
+        self.assertEqual(sum(basis.fills_unassigned.values()), 2)
+        self.assertEqual(
+            basis.fills_assigned + sum(basis.fills_unassigned.values()), basis.fills_read
+        )
+        self.assertEqual(basis.exclusions[episodes.STATE_WINDOW_CLIPPED], 1)
 
     def test_the_bucket_identity_holds_over_the_windows_rows(self) -> None:
         totals = report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=CUT)
