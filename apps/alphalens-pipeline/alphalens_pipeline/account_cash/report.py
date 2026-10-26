@@ -46,8 +46,8 @@ on a window that happens to contain every episode whole.
 **Four partitions are checked, not described.** The bucket identity (the
 buckets add back to the rows they were given), the fill coverage partition
 (assigned + unassigned == the fills read), the row partition (window + outside
-+ undated == the store's rows) and the classification count (every row handed
-to the classifier was counted by it). Each raises
++ undated + unparseable == the store's rows) and the classification count
+(every row handed to the classifier was counted by it). Each raises
 :class:`CashBookIdentityError` on its own rather than publishing a number
 beside a broken identity, which is the one thing they exist to prevent. The
 episode partition -- summed + excluded == episodes -- is held by construction
@@ -370,6 +370,11 @@ class Basis:
     rows (the executions). ``episodes_*`` count derived spans. A count in one
     space printed beside a threshold in another is this repo's own named
     defect.
+
+    The row partition has FOUR terms, not three: a row can leave the window by
+    falling outside it, by carrying no date, or by carrying one the parse
+    refuses -- and the last two are separate counters because they name
+    different vendor behaviour.
     """
 
     currency: str | None
@@ -386,6 +391,13 @@ class Basis:
     #: COUNTED: excluding them cannot inflate a total, and this count is what
     #: says it happened.
     rows_undated: int
+    #: Booking rows carrying a ``Date`` the parse REFUSES. Its own counter, and
+    #: not folded into ``rows_undated``: the codec stores the field as free
+    #: text, so a vendor change to a datetime-shaped string decodes, moves
+    #: every row out of every window, and would publish "the rows carry no
+    #: date" -- naming the vendor's nulls instead of the format. The same
+    #: distinction the journals make for a line they cannot read.
+    rows_date_malformed: int
     rows_classified: int
     fills_read: int
     fills_assigned: int
@@ -406,6 +418,7 @@ class Basis:
             "rows_read": self.rows_read,
             "rows_outside_window": self.rows_outside_window,
             "rows_undated": self.rows_undated,
+            "rows_date_malformed": self.rows_date_malformed,
             "rows_classified": self.rows_classified,
             "fills_read": self.fills_read,
             "fills_assigned": self.fills_assigned,
@@ -498,33 +511,67 @@ class _EventWindow:
     inside: tuple[CashEvent, ...]
     outside: int
     undated: int
+    #: Rows carrying a ``Date`` the parse REFUSES, counted apart from the ones
+    #: carrying none. See :attr:`Basis.rows_date_malformed`.
+    date_malformed: int
+
+    @property
+    def unplaceable(self) -> int:
+        """Rows no window could hold, by either cause."""
+        return self.undated + self.date_malformed
 
 
 def _split_by_window(
     events: Sequence[CashEvent], *, since: dt.date, until: dt.date
 ) -> _EventWindow:
-    """Booking rows inside the window, and counts for the two ways out.
+    """Booking rows inside the window, and counts for the three ways out.
 
     The date basis is the vendor's ``Date``, which carries the TRADE date on
     every row (memo section 1.7 P9): the settlement crosses midnight UTC, so
     ``ValueDate`` is the next day and the two agree on only 5 of 104 rows.
+
+    **An absent date and an unreadable one are two facts and two counters.**
+    The parse answers ``None`` for both, and the codec stores ``date`` as free
+    text, so a vendor change to a datetime-shaped string (``2026-09-04T00:00:00``)
+    decodes and arrives here. Every row then falls out of every window -- sum
+    0.00, every bucket 0.00, 104 rows unplaceable -- and one counter for both
+    causes publishes that as "the rows carry no date", which points an operator
+    at the vendor's nulls instead of at the format. Counted the way the
+    journals count a malformed line.
     """
     inside: list[CashEvent] = []
     outside = 0
     undated = 0
+    date_malformed = 0
     for event in events:
+        if event.date is None:
+            undated += 1
+            continue
         stamped = _as_date(event.date)
         if stamped is None:
-            undated += 1
+            date_malformed += 1
         elif since <= stamped <= until:
             inside.append(event)
         else:
             outside += 1
-    return _EventWindow(inside=tuple(inside), outside=outside, undated=undated)
+    return _EventWindow(
+        inside=tuple(inside),
+        outside=outside,
+        undated=undated,
+        date_malformed=date_malformed,
+    )
 
 
 def _as_date(value: str | None) -> dt.date | None:
-    """One vendor date string as a date, or ``None`` when it will not parse."""
+    """One vendor date string as a date, or ``None`` when it will not parse.
+
+    ``None`` in answers ``None`` out, so a caller that must tell an absent
+    date from an unreadable one checks the input FIRST -- see
+    :func:`_split_by_window`, which does, because the two are different facts
+    about the vendor. A caller with nothing different to do with the two (an
+    episode's closing date, which is either inside the window or not) may read
+    this answer alone.
+    """
     if value is None:
         return None
     try:
@@ -676,9 +723,10 @@ def _check_identities(
     )
     _hold(
         "row",
-        len(window.inside) + window.outside + window.undated == rows_in_store,
+        len(window.inside) + window.outside + window.unplaceable == rows_in_store,
         f"{len(window.inside)} in the window + {window.outside} outside + "
-        f"{window.undated} undated against {rows_in_store} in the store",
+        f"{window.undated} undated + {window.date_malformed} unparseable "
+        f"against {rows_in_store} in the store",
     )
     _hold(
         "bucket row count",
@@ -877,6 +925,7 @@ def build_totals(*, env: str, since: dt.date, until: dt.date) -> CashBookTotals:
             rows_read=len(window.inside),
             rows_outside_window=window.outside,
             rows_undated=window.undated,
+            rows_date_malformed=window.date_malformed,
             rows_classified=bucket_fold.rows,
             fills_read=episode_fold.fills_read,
             fills_assigned=episode_fold.fills_assigned,

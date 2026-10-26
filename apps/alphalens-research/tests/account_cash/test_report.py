@@ -1026,11 +1026,110 @@ class TheBasisReportsWhatTheReadCouldNotAccountFor(IsolatedHomeTestCase):
         basis = report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=_SWEPT_UNTIL).basis
 
         self.assertEqual(basis.rows_undated, 1)
+        self.assertEqual(basis.rows_date_malformed, 0)
         self.assertEqual(basis.rows_read, ALL_ROWS - 1)
         self.assertEqual(
-            basis.rows_read + basis.rows_outside_window + basis.rows_undated,
+            basis.rows_read
+            + basis.rows_outside_window
+            + basis.rows_undated
+            + basis.rows_date_malformed,
             basis.rows_in_store,
         )
+
+
+#: A ``Date`` the vendor could start sending instead of a plain ISO day: the
+#: same instant, datetime-shaped. ``dt.date.fromisoformat`` refuses it, the
+#: codec stores ``date`` as free text, so it reaches the window split intact.
+DATETIME_SHAPED_DATE = "2026-09-04T00:00:00"
+
+
+class ADateThatWillNotParseIsItsOwnFact(IsolatedHomeTestCase):
+    """F7: the parser answers ``None`` for an absent date AND for one it
+    refuses, and the two were counted together as ``rows_undated``.
+
+    The codec stores ``date`` as free text, so a vendor change to a
+    datetime-shaped string decodes and reaches this layer. Every row then
+    falls out of every window -- sum 0.00, every bucket 0.00 -- while the
+    published basis said the rows carried no date at all, which points an
+    operator at the vendor's nulls instead of at the format.
+    """
+
+    def test_the_premise_is_that_the_shape_decodes_and_will_not_parse(self) -> None:
+        """Stated rather than assumed: if the string parsed, or if the codec
+        refused it, this whole class would be about nothing."""
+        with self.assertRaises(ValueError):
+            dt.date.fromisoformat(DATETIME_SHAPED_DATE)
+        self.assertEqual(replace(BOOKINGS[0], date=DATETIME_SHAPED_DATE).date, DATETIME_SHAPED_DATE)
+
+    def test_one_unparseable_date_is_counted_apart_from_the_undated_rows(self) -> None:
+        """**Mutation it catches:** folding it into ``rows_undated``, which
+        names the wrong cause on the only line that says what happened."""
+        _seed(read=_read(events=(replace(BOOKINGS[0], date=DATETIME_SHAPED_DATE), *BOOKINGS[1:])))
+
+        basis = report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=_SWEPT_UNTIL).basis
+
+        self.assertEqual(basis.rows_date_malformed, 1)
+        self.assertEqual(basis.rows_undated, 0)
+        self.assertEqual(basis.rows_read, ALL_ROWS - 1)
+
+    def test_both_causes_at_once_stay_separately_counted(self) -> None:
+        """The discriminator between two counters and one: a fixture holding
+        only one of the two cannot tell them apart."""
+        _seed(
+            read=_read(
+                events=(
+                    replace(BOOKINGS[0], date=None),
+                    replace(BOOKINGS[1], date=DATETIME_SHAPED_DATE),
+                    *BOOKINGS[2:],
+                )
+            )
+        )
+
+        basis = report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=_SWEPT_UNTIL).basis
+
+        self.assertEqual(basis.rows_undated, 1)
+        self.assertEqual(basis.rows_date_malformed, 1)
+        self.assertEqual(basis.rows_read, ALL_ROWS - 2)
+        self.assertEqual(
+            basis.rows_read
+            + basis.rows_outside_window
+            + basis.rows_undated
+            + basis.rows_date_malformed,
+            basis.rows_in_store,
+        )
+
+    def test_a_vendor_format_change_says_the_FORMAT_and_not_the_absence(self) -> None:
+        """The loud case, and the one that matters: every row at once.
+
+        The sum is 0.00 over 0 rows and every bucket is 0.00 -- a report that
+        looks like a quiet account. What tells an operator which of the two it
+        is, is which counter holds the 104.
+
+        **Mutation it catches:** one counter for both causes, which publishes
+        ``rows_undated: 104`` and says the vendor stopped sending dates.
+        """
+        _seed(
+            read=_read(
+                events=tuple(replace(event, date=DATETIME_SHAPED_DATE) for event in BOOKINGS)
+            )
+        )
+
+        totals = report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=_SWEPT_UNTIL)
+
+        self.assertEqual(totals.basis.rows_date_malformed, ALL_ROWS)
+        self.assertEqual(totals.basis.rows_undated, 0)
+        self.assertEqual(totals.basis.rows_read, 0)
+        self.assertEqual(totals.cash_book_sum_acct.value, 0.0)
+        self.assertEqual(totals.basis.rows_in_store, ALL_ROWS)
+
+    def test_the_counter_reaches_the_wire_form(self) -> None:
+        """A counter the record does not publish is one no consumer can read."""
+        _seed(read=_read(events=(replace(BOOKINGS[0], date=DATETIME_SHAPED_DATE), *BOOKINGS[1:])))
+
+        body = report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=_SWEPT_UNTIL).to_jsonable()
+
+        self.assertEqual(body["basis"]["rows_date_malformed"], 1)
+        self.assertEqual(body["basis"]["rows_undated"], 0)
 
 
 class AWindowTheStoreCannotAnswerIsRefused(IsolatedHomeTestCase):
