@@ -65,7 +65,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from alphalens_pipeline.account_cash import buckets, episodes, paths, store
+from alphalens_pipeline.account_cash import balance_check, buckets, episodes, paths, store
 from alphalens_pipeline.account_cash.codec import SweepRecord
 from alphalens_pipeline.account_cash.money import (
     BALANCE_TOLERANCE_ACCT,
@@ -404,6 +404,10 @@ class CashBookTotals:
     deposits_acct: AcctAmount
     cash_book_sum_acct: AcctAmount
     buckets: tuple[buckets.Bucket, ...]
+    #: Both versions, cumulative first. The cumulative one carries
+    #: ``detects_restatement: False`` on its face, so "reconciles" can never
+    #: be read as proof the history is intact (memo section 5(c)).
+    balance_checks: tuple[balance_check.BalanceCheck, ...]
 
     def lines(self) -> dict[str, AcctAmount]:
         """Every published money line by name, in render order."""
@@ -425,6 +429,7 @@ class CashBookTotals:
             "coverage": self.coverage.to_jsonable(),
             "cost_basis_open_asof": self.cost_basis_open_asof,
             "buckets": [bucket.to_jsonable() for bucket in self.buckets],
+            "balance_checks": [check.to_jsonable() for check in self.balance_checks],
         }
         body.update({name: line.to_jsonable() for name, line in self.lines().items()})
         return body
@@ -770,6 +775,20 @@ def build_totals(*, env: str, since: dt.date, until: dt.date) -> CashBookTotals:
         deposits_acct=deposits,
         cash_book_sum_acct=cash_book_sum,
         buckets=bucket_fold.buckets,
+        balance_checks=(
+            # Over EVERY stored row, with the store's own watermarks as its
+            # basis: this check is store-wide by definition and the balance it
+            # is compared against reflects every row, not the window's.
+            balance_check.cumulative_check(
+                events_fold.events,
+                latest,
+                since=coverage.history_begins,
+                until=coverage.swept_through,
+            ),
+            balance_check.incremental_check(
+                events_fold.events, snapshots=balances.snapshots, sweeps=sweeps
+            ),
+        ),
     )
 
 

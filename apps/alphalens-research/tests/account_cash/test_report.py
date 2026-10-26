@@ -26,7 +26,14 @@ from dataclasses import replace
 from typing import Any
 from unittest import mock
 
-from alphalens_pipeline.account_cash import buckets, episodes, paths, report, sweep
+from alphalens_pipeline.account_cash import (
+    balance_check,
+    buckets,
+    episodes,
+    paths,
+    report,
+    sweep,
+)
 from alphalens_pipeline.account_cash.codec import SweepRecord
 from alphalens_pipeline.account_cash.money import BALANCE_TOLERANCE_ACCT
 from alphalens_pipeline.brokers.account_cash import AccountCashRead
@@ -385,6 +392,83 @@ class TheIdentitiesAreCheckedAndNotDescribed(IsolatedHomeTestCase):
                 report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=_SWEPT_UNTIL)
 
         self.assertIn("fill", str(ctx.exception))
+
+
+class TheTwoBalanceChecksReachThePublishedTotal(IsolatedHomeTestCase):
+    """Both versions ship on every total, and the weaker one says so.
+
+    The arithmetic of each is ``test_balance_check.py``'s subject; what these
+    assert is that the report carries both, which half is which, and that the
+    cumulative one's basis is its OWN and not the window's (amendment W1).
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        _seed()
+        self.totals = report.build_totals(env=_LIVE, since=LATE_SINCE, until=_SWEPT_UNTIL)
+        self.checks = {check.kind: check for check in self.totals.balance_checks}
+
+    def test_both_kinds_are_published_in_order(self) -> None:
+        self.assertEqual(
+            [check.kind for check in self.totals.balance_checks],
+            [balance_check.CHECK_CUMULATIVE, balance_check.CHECK_INCREMENTAL],
+        )
+
+    def test_the_cumulative_check_reconciles_against_the_accounts_own_balance(self) -> None:
+        """Both sides real: the 104-row store-wide sum and the committed
+        ``CashBalance`` of 20 738.68 (memo section 1.6 P1)."""
+        check = self.checks[balance_check.CHECK_CUMULATIVE]
+
+        self.assertEqual(check.verdict, balance_check.VERDICT_RECONCILES)
+        self.assertEqual(check.expected.value, ALL_ROWS_TOTAL_PLN)
+        self.assertEqual(check.observed.value, ALL_ROWS_TOTAL_PLN)
+        self.assertIs(check.detects_restatement, False)
+
+    def test_the_cumulative_check_carries_its_own_basis_and_not_the_windows(self) -> None:
+        """Amendment W1. The window asked for starts 2026-09-01 and holds 72
+        rows worth +11 755.34; this check is store-wide and says so.
+
+        **Mutation it catches:** handing it the window's rows, which turns a
+        store-wide identity into a windowed one that cannot hold -- the
+        balance reflects every row, not the window's.
+        """
+        check = self.checks[balance_check.CHECK_CUMULATIVE]
+
+        self.assertEqual(check.rows, ALL_ROWS)
+        self.assertEqual(check.since, self.totals.coverage.history_begins)
+        self.assertEqual(check.until, self.totals.coverage.swept_through)
+        self.assertNotEqual(check.since, self.totals.basis.window_since)
+        self.assertNotEqual(check.rows, self.totals.basis.rows_read)
+
+    def test_one_sweep_leaves_the_incremental_check_not_checkable(self) -> None:
+        """A store with one sweep has one snapshot, and a change needs two."""
+        check = self.checks[balance_check.CHECK_INCREMENTAL]
+
+        self.assertEqual(check.verdict, balance_check.VERDICT_NOT_CHECKABLE)
+        self.assertEqual(check.null_reason, balance_check.NULL_ONE_SNAPSHOT_ONLY)
+        self.assertIs(check.detects_restatement, True)
+
+    def test_a_second_sweep_makes_the_incremental_check_answerable(self) -> None:
+        """The negative control for the test above: without it, an
+        implementation that always answers ``not_checkable`` passes."""
+        _seed(since=_SWEPT_SINCE, until=_SWEPT_UNTIL, now=_SWEPT_AT + dt.timedelta(days=1))
+
+        totals = report.build_totals(env=_LIVE, since=LATE_SINCE, until=_SWEPT_UNTIL)
+        check = next(
+            one for one in totals.balance_checks if one.kind == balance_check.CHECK_INCREMENTAL
+        )
+
+        self.assertNotEqual(check.null_reason, balance_check.NULL_ONE_SNAPSHOT_ONLY)
+        self.assertIsNotNone(check.since)
+
+    def test_the_checks_survive_the_strict_json_render(self) -> None:
+        body = json.loads(json.dumps(self.totals.to_jsonable(), allow_nan=False, sort_keys=True))
+
+        self.assertEqual(
+            [check["kind"] for check in body["balance_checks"]],
+            [balance_check.CHECK_CUMULATIVE, balance_check.CHECK_INCREMENTAL],
+        )
+        self.assertIs(body["balance_checks"][0]["detects_restatement"], False)
 
 
 class TheBasisReportsWhatTheReadCouldNotAccountFor(IsolatedHomeTestCase):
