@@ -1491,6 +1491,29 @@ class AWindowTheStoreCannotAnswerIsRefused(IsolatedHomeTestCase):
         self.assertEqual(totals.basis.window_until, "2026-11-30")
         self.assertEqual(totals.coverage.swept_through, _SWEPT_UNTIL.isoformat())
 
+    def test_a_single_day_the_sweep_asked_for_is_answered_on_each_edge(self) -> None:
+        """Both ends of the overlap predicate, which is two comparisons.
+
+        A one-day window is where the two reduce to the same date, so each
+        comparison has to be inclusive. Measured: the seeded sweep asks
+        2026-08-01..2026-10-03, so both single days below were read and both
+        must answer.
+
+        **Mutation it catches:** tightening EITHER comparison from ``<=`` to
+        ``<``. The left one refuses the window on the sweep's own first day,
+        the right one on its last. Neither showed in any other test: every
+        window elsewhere spans more than a day, so the two dates differ and a
+        strict comparison still holds.
+        """
+        _seed()
+
+        for day in (_SWEPT_SINCE, _SWEPT_UNTIL):
+            with self.subTest(day=day):
+                totals = report.build_totals(env=_LIVE, since=day, until=day)
+
+                self.assertEqual(totals.basis.window_since, day.isoformat())
+                self.assertEqual(totals.basis.window_until, day.isoformat())
+
     def test_overlap_is_against_every_asked_window_and_not_the_watermark(self) -> None:
         """Two sweeps with a hole: ``swept_through`` stops at the end of the
         FIRST run, so a window inside the SECOND run is past the watermark and

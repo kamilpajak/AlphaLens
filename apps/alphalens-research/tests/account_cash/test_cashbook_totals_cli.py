@@ -1205,13 +1205,20 @@ class TheResidualsProseNamesTheTermsItSubtracted(_CashbookTotalsCase):
                 self.assertNotIn(field, self.line)
 
     def test_a_term_the_record_stops_subtracting_leaves_the_note(self) -> None:
-        """**Mutation it catches:** the four names spelled in the renderer.
+        """**Mutation it catches:** a note that keeps naming a term the record
+        has stopped subtracting.
 
-        Spelled there, they are a sentence that was true when it was written --
-        which is what the old label was. Here the record's own term list loses
-        the deposits, so the residual becomes the 20 405.14 PLN a reader of
-        that label computed, and the note has to stop naming a term nothing
-        subtracted.
+        Here the record's own term list loses the deposits, so the residual
+        becomes the 20 405.14 PLN a reader of the OLD label computed, and the
+        note has to stop naming a term nothing subtracted.
+
+        What it does NOT catch, stated because the first version of this
+        docstring claimed it did: reverting the note to the four names spelled
+        in the renderer. Under that mutation the note happens to name the same
+        four terms this record still subtracts, so it reads correctly here.
+        The hand-written form is caught by the test above, which asserts the
+        note carries every term the record publishes and no other money field
+        -- a sentence can only stay true by being derived.
         """
         shorter = tuple(name for name in report.RESIDUAL_TERMS if name != "deposits_acct")
         with mock.patch.object(report, "RESIDUAL_TERMS", shorter):
@@ -1474,6 +1481,50 @@ class AStoreLevelFailureIsARefusalAndNotATraceback(_CashbookTotalsCase):
         this same window answers -- so each test above measures its own cause
         and not a store that was broken all along."""
         self.assertEqual(self.totals().exit_code, 0)
+
+
+class TheTermNamingHelperReadsAsASentenceAtEveryLength(unittest.TestCase):
+    """The list-to-prose helper, at the lengths the render cannot reach today.
+
+    Four terms is what the record publishes, so the rendered note only ever
+    exercises that one branch. The shorter ones are reachable the moment
+    ``RESIDUAL_TERMS`` changes, and replacing their branch with a raise left
+    the whole CLI module green -- an unreached branch in the one helper whose
+    output is a published sentence.
+    """
+
+    def test_no_terms_name_nothing(self) -> None:
+        self.assertEqual(cashbook._named_terms([]), cashbook._joined([]))
+
+    def test_one_term_stands_alone_without_a_conjunction(self) -> None:
+        self.assertEqual(cashbook._named_terms(["net_closed_acct"]), "net_closed_acct")
+
+    def test_two_terms_are_joined_by_and_with_no_comma(self) -> None:
+        self.assertEqual(
+            cashbook._named_terms(["net_closed_acct", "income_acct"]),
+            "net_closed_acct and income_acct",
+        )
+
+    def test_more_than_two_take_commas_and_one_and(self) -> None:
+        self.assertEqual(
+            cashbook._named_terms(["a_acct", "b_acct", "c_acct"]),
+            "a_acct, b_acct and c_acct",
+        )
+
+    def test_every_name_stays_bounded_so_a_reader_finds_it_whole(self) -> None:
+        """The property the helper's docstring claims, at every length.
+
+        A reader looking for one line's name must not find it inside another
+        word, which is what a bare concatenation would produce.
+        """
+        for terms in ([], ["a_acct"], ["a_acct", "b_acct"], ["a_acct", "b_acct", "c_acct"]):
+            with self.subTest(terms=len(terms)):
+                rendered = f" {cashbook._named_terms(terms)} "
+                for term in terms:
+                    self.assertTrue(
+                        f" {term} " in rendered or f" {term}," in rendered,
+                        f"{term!r} is not bounded in {rendered!r}",
+                    )
 
 
 class ThePublishedRecoveryIsOneTheCallerCanFollow(_CashbookTotalsCase):
