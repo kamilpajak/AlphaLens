@@ -347,6 +347,116 @@ class TheNarrowWindowAtTheCut(IsolatedHomeTestCase):
         )
 
 
+# --- The window's own two edges, each on a day the capture is not empty on ---
+
+#: The capture's LAST booking date, and the day VST's episode closed. Every
+#: window tested above ends on an empty day -- 2026-10-03, 2026-09-12 and
+#: 2026-08-05 carry no booking row and no episode close -- so none of them can
+#: tell ``stamped <= until`` from ``stamped < until``.
+LAST_BOOKED_DAY = dt.date(2026, 10, 1)
+#: What that day holds: 7 booking rows worth +1 967.73 and VST's +84.25.
+LAST_DAY_ROWS, LAST_DAY_TOTAL_PLN = 7, 1967.73
+#: What an EXCLUSIVE right edge would answer at that window instead.
+WITHOUT_LAST_DAY_ROWS, WITHOUT_LAST_DAY_TOTAL_PLN = 97, 18770.95
+WITHOUT_VST_SUMMED, WITHOUT_VST_NET_CLOSED_PLN = 15, 245.24
+
+#: AMBA's episode opened and closed on 2026-09-04, and the day carries 5
+#: booking rows worth +86.47 -- its two share legs, its fees and its income.
+#: The late window above starts 2026-09-01, an empty day, so it cannot tell
+#: ``since <= stamped`` from ``since < stamped`` either.
+FIRST_BOOKED_DAY = dt.date(2026, 9, 4)
+FROM_AMBA_ROWS, FROM_AMBA_TOTAL_PLN = 67, -2108.19
+FROM_AMBA_SUMMED, FROM_AMBA_NET_CLOSED_PLN = 10, 346.15
+#: What an EXCLUSIVE left edge would answer at that window instead.
+WITHOUT_AMBA_ROWS, WITHOUT_AMBA_TOTAL_PLN = 62, -2194.66
+WITHOUT_AMBA_SUMMED, WITHOUT_AMBA_NET_CLOSED_PLN = 9, 259.68
+
+
+class TheWindowsLastDayIsInsideIt(IsolatedHomeTestCase):
+    """2026-08-01..2026-10-01, a window ending on a day that books rows.
+
+    Both edges of both windows are inclusive, and until now nothing said so:
+    every ``until`` any other class asks for falls on an empty day, so an
+    exclusive right edge silently dropped nothing and stayed green. Here it
+    would drop 7 booking rows worth +1 967.73 and VST's closed episode.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        _seed()
+        self.totals = report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=LAST_BOOKED_DAY)
+
+    def test_the_premise_is_that_the_last_day_of_this_window_books_rows(self) -> None:
+        """Stated rather than assumed: on an empty day the two tests below
+        assert the same thing as the golden window and prove nothing."""
+        booked = [event for event in BOOKINGS if event.date == LAST_BOOKED_DAY.isoformat()]
+
+        self.assertEqual(len(booked), LAST_DAY_ROWS)
+        self.assertEqual(max(event.date or "" for event in BOOKINGS), LAST_BOOKED_DAY.isoformat())
+
+    def test_a_row_booked_on_the_windows_last_day_is_inside_the_cash_book_sum(self) -> None:
+        """**Mutation it catches:** ``since <= stamped < until``. Measured
+        2026-10-26: green before this test, and 1 967.73 PLN of the cash book
+        sum short."""
+        self.assertEqual(self.totals.cash_book_sum_acct.rows, ALL_ROWS)
+        self.assertEqual(self.totals.cash_book_sum_acct.value, ALL_ROWS_TOTAL_PLN)
+        self.assertEqual(self.totals.basis.rows_outside_window, 0)
+        self.assertNotEqual(self.totals.cash_book_sum_acct.rows, WITHOUT_LAST_DAY_ROWS)
+        self.assertNotEqual(self.totals.cash_book_sum_acct.value, WITHOUT_LAST_DAY_TOTAL_PLN)
+
+    def test_an_episode_closing_on_the_windows_last_day_is_summed(self) -> None:
+        """The episode edge is a second claim and gets its own case: VST
+        closed 2026-10-01 for +84.25.
+
+        **Mutation it catches:** ``since <= closed < until`` in the exclusion
+        walk, which answers 15 episodes and +245.24.
+        """
+        self.assertEqual(self.totals.basis.episodes_summed, CLOSED_EPISODES)
+        self.assertEqual(self.totals.net_closed_acct.value, NET_CLOSED_PLN)
+        self.assertNotEqual(self.totals.basis.episodes_summed, WITHOUT_VST_SUMMED)
+        self.assertNotEqual(self.totals.net_closed_acct.value, WITHOUT_VST_NET_CLOSED_PLN)
+
+
+class TheWindowsFirstDayIsInsideIt(IsolatedHomeTestCase):
+    """2026-09-04..2026-10-03, a window starting on a day that books rows.
+
+    The other edge, and the same hole: the narrow windows above all START on
+    an empty day, so an exclusive left edge was green too.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        _seed()
+        self.totals = report.build_totals(env=_LIVE, since=FIRST_BOOKED_DAY, until=_SWEPT_UNTIL)
+
+    def test_the_premise_is_that_the_first_day_of_this_window_books_rows(self) -> None:
+        booked = [event for event in BOOKINGS if event.date == FIRST_BOOKED_DAY.isoformat()]
+
+        self.assertEqual(len(booked), FROM_AMBA_ROWS - WITHOUT_AMBA_ROWS)
+        self.assertEqual(len(booked), 5)
+
+    def test_a_row_booked_on_the_windows_first_day_is_inside_the_cash_book_sum(self) -> None:
+        """**Mutation it catches:** ``since < stamped <= until``, which drops
+        AMBA's five rows and 86.47 PLN with them."""
+        self.assertEqual(self.totals.cash_book_sum_acct.rows, FROM_AMBA_ROWS)
+        self.assertEqual(self.totals.cash_book_sum_acct.value, FROM_AMBA_TOTAL_PLN)
+        self.assertNotEqual(self.totals.cash_book_sum_acct.rows, WITHOUT_AMBA_ROWS)
+        self.assertNotEqual(self.totals.cash_book_sum_acct.value, WITHOUT_AMBA_TOTAL_PLN)
+
+    def test_an_episode_closing_on_the_windows_first_day_is_summed(self) -> None:
+        """AMBA opened and closed 2026-09-04 for +86.47.
+
+        **Mutation it catches:** ``since < closed <= until`` in the exclusion
+        walk, which answers 9 episodes and +259.68. With this case and the one
+        above, all three readings of the W1 episode window -- ``[since,
+        until]``, ``[since, until)`` and ``(since, until]`` -- are told apart.
+        """
+        self.assertEqual(self.totals.basis.episodes_summed, FROM_AMBA_SUMMED)
+        self.assertEqual(self.totals.net_closed_acct.value, FROM_AMBA_NET_CLOSED_PLN)
+        self.assertNotEqual(self.totals.basis.episodes_summed, WITHOUT_AMBA_SUMMED)
+        self.assertNotEqual(self.totals.net_closed_acct.value, WITHOUT_AMBA_NET_CLOSED_PLN)
+
+
 #: 2026-08-01..2026-08-05: inside the swept range and BEFORE the first booking
 #: row, which the capture stamps 2026-08-06. Reachable on any account with a
 #: quiet stretch, so it is not an edge case.
