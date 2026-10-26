@@ -61,12 +61,21 @@ from __future__ import annotations
 
 import datetime as dt
 import itertools
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from alphalens_pipeline.account_cash import buckets, episodes, paths, store
 from alphalens_pipeline.account_cash.codec import SweepRecord
-from alphalens_pipeline.account_cash.money import AcctAmount
+from alphalens_pipeline.account_cash.money import (
+    BALANCE_TOLERANCE_ACCT,
+    NULL_NEVER_OPENED,
+    AcctAmount,
+    acct_difference,
+    acct_null,
+    acct_sum,
+)
+from alphalens_pipeline.brokers.account_cash import CashEvent
 
 #: What this source cannot detect, published on every total rather than left in
 #: a memo (amendment W8). An episode whose entry is PARTLY before the store --
@@ -84,13 +93,89 @@ UNDETECTED_PARTIAL_ENTRY = "entry_partly_before_history"
 #: episodes_excluded == len(episodes)`` addable.
 EXCLUSION_CLOSED_OUTSIDE_WINDOW = "closed_outside_window"
 
+#: Every reason an episode can be left out of the summed figure, in render
+#: order. The first three are :mod:`episodes`' own, stamped by its first-hit
+#: rule; the fourth is this module's. The counts therefore ADD UP to
+#: ``episodes_excluded``.
+REPORT_EXCLUSION_ORDER: tuple[str, ...] = (
+    *episodes.EXCLUSION_ORDER,
+    EXCLUSION_CLOSED_OUTSIDE_WINDOW,
+)
+
+#: The window could not be answered at all. One of these, never a ``0.0``.
+REFUSED_SIM_REPORTS_UNUSABLE = "sim_reports_unusable"
+REFUSED_BEFORE_FIRST_SWEEP = "before_first_sweep"
+REFUSED_NOTHING_SWEPT = "nothing_swept"
+TOTALS_REFUSALS: tuple[str, ...] = (
+    REFUSED_SIM_REPORTS_UNUSABLE,
+    REFUSED_BEFORE_FIRST_SWEEP,
+    REFUSED_NOTHING_SWEPT,
+)
+
+#: The journals whose ``malformed`` and ``restated`` counters reach the basis.
+#: ``sweeps.jsonl`` is NOT among them: ``store.read_sweeps`` does not publish
+#: its counters, so a sweeps line that will not decode is invisible here -- the
+#: record simply does not exist, and :func:`coverage_of` reports its window as
+#: a gap. That is the safe direction, because a ``--since`` inside a gap earlier
+#: than ``history_begins`` refuses rather than answering smaller, but the CAUSE
+#: is not named. Widening that reader is a separate change with 22 call sites
+#: and no consumer asking for it yet.
+JOURNAL_CASH_EVENTS = "cash_events"
+JOURNAL_TRADE_ROWS = "trade_rows"
+JOURNAL_BALANCES = "balances"
+JOURNALS: tuple[str, ...] = (JOURNAL_CASH_EVENTS, JOURNAL_TRADE_ROWS, JOURNAL_BALANCES)
+
+#: How far two sides of an ARITHMETIC identity may differ. Six orders of
+#: magnitude under :data:`BALANCE_TOLERANCE_ACCT`, and a different claim from
+#: it: the grosz tolerance is the width of agreement between two independently
+#: computed money figures (the cash book and the broker's own balance), while
+#: this is the residual between a ``Decimal`` accumulation and its ``float``
+#: publication, measured below 1e-9 on the real 104 rows. Using the grosz here
+#: would let a dropped half-grosz row satisfy an identity.
+_IDENTITY_EPSILON_ACCT = 1e-9
+
 __all__ = [
+    "BALANCE_TOLERANCE_ACCT",
     "EXCLUSION_CLOSED_OUTSIDE_WINDOW",
+    "JOURNALS",
+    "JOURNAL_BALANCES",
+    "JOURNAL_CASH_EVENTS",
+    "JOURNAL_TRADE_ROWS",
+    "REFUSED_BEFORE_FIRST_SWEEP",
+    "REFUSED_NOTHING_SWEPT",
+    "REFUSED_SIM_REPORTS_UNUSABLE",
+    "REPORT_EXCLUSION_ORDER",
+    "TOTALS_REFUSALS",
     "UNDETECTED_PARTIAL_ENTRY",
+    "Basis",
+    "CashBookIdentityError",
+    "CashBookTotals",
+    "CashBookTotalsRefusedError",
     "Coverage",
+    "build_totals",
     "coverage_of",
     "history_begins",
 ]
+
+
+class CashBookTotalsRefusedError(Exception):
+    """The window cannot be answered. ``reason`` is one of :data:`TOTALS_REFUSALS`."""
+
+    def __init__(self, reason: str, env: str) -> None:
+        super().__init__(f"the account cash book will not answer this window on {env}: {reason}")
+        self.reason = reason
+        self.env = env
+
+
+class CashBookIdentityError(AssertionError):
+    """A published identity does not hold, so no number is published at all.
+
+    A raise rather than a flag on the body, and that is the whole design of
+    memo section 5: a dropped row does not vanish, it makes an identity fail.
+    Publishing a total beside a broken identity is the one outcome the three
+    identities exist to prevent -- the reader would see a number and a
+    footnote, and would read the number.
+    """
 
 
 def _as_pairs(amounts: Sequence[AcctAmount]) -> list[tuple[float | None, str | None]]:
@@ -227,3 +312,475 @@ def coverage_of(sweeps: Sequence[SweepRecord]) -> Coverage:
         malformed_windows=malformed,
         cannot_detect=(UNDETECTED_PARTIAL_ENTRY,),
     )
+
+
+# --- The published record ----------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Basis:
+    """What every total on this report rests on (memo section 5(d)).
+
+    ``basis`` is structurally inseparable from the numbers: it is an object,
+    not prose, and the human render prints it ABOVE the figures. Four
+    partitions in here are checked rather than described -- the rows, the
+    fills, the episodes, and the buckets against the rows.
+
+    The row counts are in two spaces on purpose and the names say which:
+    ``rows_*`` count BOOKING rows (the cash book), ``fills_*`` count TRADES
+    rows (the executions). ``episodes_*`` count derived spans. A count in one
+    space printed beside a threshold in another is this repo's own named
+    defect.
+    """
+
+    currency: str | None
+    window_since: str
+    window_until: str
+    episodes: int
+    episodes_summed: int
+    episodes_excluded: int
+    exclusions: Mapping[str, int]
+    rows_in_store: int
+    rows_read: int
+    rows_outside_window: int
+    #: Booking rows carrying no ``Date`` at all. Excluded from the window and
+    #: COUNTED: excluding them cannot inflate a total, and this count is what
+    #: says it happened.
+    rows_undated: int
+    rows_classified: int
+    fills_read: int
+    fills_assigned: int
+    fills_unassigned: Mapping[str, int]
+    restated: Mapping[str, int]
+    malformed: Mapping[str, int]
+
+    def to_jsonable(self) -> dict[str, Any]:
+        return {
+            "currency": self.currency,
+            "window_since": self.window_since,
+            "window_until": self.window_until,
+            "episodes": self.episodes,
+            "episodes_summed": self.episodes_summed,
+            "episodes_excluded": self.episodes_excluded,
+            "exclusions": dict(self.exclusions),
+            "rows_in_store": self.rows_in_store,
+            "rows_read": self.rows_read,
+            "rows_outside_window": self.rows_outside_window,
+            "rows_undated": self.rows_undated,
+            "rows_classified": self.rows_classified,
+            "fills_read": self.fills_read,
+            "fills_assigned": self.fills_assigned,
+            "fills_unassigned": dict(self.fills_unassigned),
+            "restated": dict(self.restated),
+            "malformed": dict(self.malformed),
+        }
+
+
+@dataclass(frozen=True)
+class CashBookTotals:
+    """One window's answer: the lines, the basis they rest on, the coverage.
+
+    The render order of the money lines is memo section 6's: the realized net,
+    the cost basis of what is still open, income, unclassified, the residual,
+    then the SUBTOTAL, then the deposits BELOW it labelled not P&L, then the
+    cash book sum. Deposits sit below the subtotal because 24 000 PLN of
+    funding is the easiest number in this repo to misread as profit.
+    """
+
+    env: str
+    basis: Basis
+    coverage: Coverage
+    net_closed_acct: AcctAmount
+    cost_basis_open_acct: AcctAmount
+    #: The as-of of the line above, which is NOT the window's end. The cost of
+    #: a position that is still open is as-of the last day the store can speak
+    #: for; clipping it to the window's end publishes a fraction of the money
+    #: at risk as if it were all of it (amendment W1).
+    cost_basis_open_asof: str | None
+    income_acct: AcctAmount
+    unclassified_acct: AcctAmount
+    residual_acct: AcctAmount
+    subtotal_acct: AcctAmount
+    deposits_acct: AcctAmount
+    cash_book_sum_acct: AcctAmount
+    buckets: tuple[buckets.Bucket, ...]
+
+    def lines(self) -> dict[str, AcctAmount]:
+        """Every published money line by name, in render order."""
+        return {
+            "net_closed_acct": self.net_closed_acct,
+            "cost_basis_open_acct": self.cost_basis_open_acct,
+            "income_acct": self.income_acct,
+            "unclassified_acct": self.unclassified_acct,
+            "residual_acct": self.residual_acct,
+            "subtotal_acct": self.subtotal_acct,
+            "deposits_acct": self.deposits_acct,
+            "cash_book_sum_acct": self.cash_book_sum_acct,
+        }
+
+    def to_jsonable(self) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "env": self.env,
+            "basis": self.basis.to_jsonable(),
+            "coverage": self.coverage.to_jsonable(),
+            "cost_basis_open_asof": self.cost_basis_open_asof,
+            "buckets": [bucket.to_jsonable() for bucket in self.buckets],
+        }
+        body.update({name: line.to_jsonable() for name, line in self.lines().items()})
+        return body
+
+
+# --- The window ---------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _EventWindow:
+    """The store's booking rows split by the window, with nothing dropped."""
+
+    inside: tuple[CashEvent, ...]
+    outside: int
+    undated: int
+
+
+def _split_by_window(
+    events: Sequence[CashEvent], *, since: dt.date, until: dt.date
+) -> _EventWindow:
+    """Booking rows inside the window, and counts for the two ways out.
+
+    The date basis is the vendor's ``Date``, which carries the TRADE date on
+    every row (memo section 1.7 P9): the settlement crosses midnight UTC, so
+    ``ValueDate`` is the next day and the two agree on only 5 of 104 rows.
+    """
+    inside: list[CashEvent] = []
+    outside = 0
+    undated = 0
+    for event in events:
+        stamped = _as_date(event.date)
+        if stamped is None:
+            undated += 1
+        elif since <= stamped <= until:
+            inside.append(event)
+        else:
+            outside += 1
+    return _EventWindow(inside=tuple(inside), outside=outside, undated=undated)
+
+
+def _as_date(value: str | None) -> dt.date | None:
+    """One vendor date string as a date, or ``None`` when it will not parse."""
+    if value is None:
+        return None
+    try:
+        return dt.date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _account_currency(events: Sequence[CashEvent], latest: store.BalanceAt | None) -> str | None:
+    """The account's one currency, from the STORE's rows or the balance body.
+
+    Read over every stored row rather than over the window's, so a window with
+    no booking rows in it still names the account's currency -- which is what
+    :func:`~.buckets.classify_buckets` says is the caller's job, since it can
+    only read what it was handed. The balance snapshot is the fallback for an
+    empty store, and the two disagreeing answers ``None``, which makes every
+    sum refuse with ``currency_mixed`` on its own rather than picking one.
+    """
+    stated = {event.account_currency for event in events if event.account_currency is not None}
+    if len(stated) == 1:
+        return next(iter(stated))
+    if stated:
+        return None
+    return latest.snapshot.currency if latest is not None else None
+
+
+def _resting_on(amount: AcctAmount, rows: int) -> AcctAmount:
+    """``amount`` with the row count the published line actually rests on.
+
+    :func:`~.money.acct_difference` adds both sides' counts, which is right
+    for a difference of two independent sums and wrong for a line like the
+    residual, computed by subtracting five lines from one total: the counts
+    would add to six times the window. Re-stated once, HERE, rather than by
+    letting each caller build its own ``AcctAmount`` -- the value and the null
+    reason still come from the one summer.
+
+    Written as a constructor call rather than ``dataclasses.replace``: the
+    package's own anti-compaction gate
+    (``tests/account_cash/test_no_compactor_reaches_the_cash_book.py``) refuses
+    any ``.replace`` attribute call in this package by NAME, because
+    ``os.replace`` is how a compactor arrives and a name-keyed gate cannot
+    tell the two apart. Naming the four fields is also the more readable form
+    here: it shows that only the count changes.
+    """
+    return AcctAmount(
+        value=amount.value,
+        currency=amount.currency,
+        rows=rows,
+        null_reason=amount.null_reason,
+    )
+
+
+# --- The identities, checked ---------------------------------------------------
+
+
+def _agree(left: AcctAmount, right: AcctAmount) -> bool:
+    """True when two money records say the same thing.
+
+    Compared on the null reason and the VALUE, not on the currency: an empty
+    bucket publishes a unit-less zero by design (``acct_sum`` has nothing to
+    read a currency from), and a currency disagreement already refuses on its
+    own with ``currency_mixed`` on both sides.
+    """
+    if (left.null_reason is not None) or (right.null_reason is not None):
+        return left.null_reason == right.null_reason
+    assert left.value is not None and right.value is not None  # the dataclass invariant
+    return abs(left.value - right.value) <= _IDENTITY_EPSILON_ACCT
+
+
+def _hold(name: str, held: bool, detail: str) -> None:
+    if not held:
+        raise CashBookIdentityError(
+            f"the {name} identity does not hold ({detail}); no total is published, "
+            f"because a number beside a broken identity is read as the number"
+        )
+
+
+def _check_identities(
+    *,
+    bucket_fold: buckets.BucketFold,
+    episode_fold: episodes.EpisodeFold,
+    window: _EventWindow,
+    rows_in_store: int,
+) -> None:
+    """The four partitions, in the order a dropped row would break them.
+
+    Each one is a separate claim and each raises on its own, so none of them
+    can be satisfied by another holding.
+    """
+    summed_buckets = acct_sum(
+        _as_pairs([bucket.total for bucket in bucket_fold.buckets]),
+        rows=bucket_fold.rows,
+    )
+    _hold(
+        "bucket",
+        _agree(summed_buckets, bucket_fold.all_rows),
+        f"buckets {summed_buckets.rendered} against rows {bucket_fold.all_rows.rendered}",
+    )
+    _hold(
+        "fill coverage",
+        episode_fold.fills_assigned + len(episode_fold.unassigned) == episode_fold.fills_read,
+        f"{episode_fold.fills_assigned} assigned + {len(episode_fold.unassigned)} "
+        f"unassigned against {episode_fold.fills_read} read",
+    )
+    _hold(
+        "row",
+        len(window.inside) + window.outside + window.undated == rows_in_store,
+        f"{len(window.inside)} in the window + {window.outside} outside + "
+        f"{window.undated} undated against {rows_in_store} in the store",
+    )
+    _hold(
+        "bucket row count",
+        bucket_fold.rows == len(window.inside),
+        f"{bucket_fold.rows} classified against {len(window.inside)} given",
+    )
+
+
+def _exclusions_of(
+    found: Sequence[episodes.CashEpisode], *, since: dt.date, until: dt.date
+) -> tuple[tuple[episodes.CashEpisode, ...], dict[str, int]]:
+    """The episodes summed, and the counts by reason for the rest.
+
+    An episode is summed when its CLOSING date falls in the window. One that
+    closed outside it is excluded under this module's own reason rather than
+    by any of :mod:`episodes`' three, which is what keeps the counts addable;
+    one with no readable closing date is outside EVERY window and is counted
+    there too -- it cannot inflate a total, and the reason says where it went.
+    """
+    counts = dict.fromkeys(REPORT_EXCLUSION_ORDER, 0)
+    summed: list[episodes.CashEpisode] = []
+    for episode in found:
+        if episode.exclusion_reason is not None:
+            counts[episode.exclusion_reason] += 1
+            continue
+        closed = _as_date(episode.closed_date)
+        if closed is not None and since <= closed <= until:
+            summed.append(episode)
+        else:
+            counts[EXCLUSION_CLOSED_OUTSIDE_WINDOW] += 1
+    return tuple(summed), counts
+
+
+def _cost_basis_open(found: Sequence[episodes.CashEpisode], currency: str | None) -> AcctAmount:
+    """The FULL cost of every open episode, or a named absence.
+
+    Not window-clipped (amendment W1): the cost of a position that is still
+    open is as-of the last day the store can speak for, and a clipped one
+    answers -466.98 of the -3 594.86 actually at risk on the real capture at
+    ``until=2026-09-12``.
+
+    With no open episode the line is ``never_opened``, never ``0.00``: a zero
+    reads as "nothing at risk", which is the same sentence and a different
+    fact.
+    """
+    still_open = [episode for episode in found if episode.state == episodes.STATE_OPEN]
+    if not still_open:
+        return acct_null(NULL_NEVER_OPENED, currency, rows=0)
+    return acct_sum(
+        _as_pairs([episode.cost_basis_acct for episode in still_open]),
+        rows=len(still_open),
+        currency=currency,
+    )
+
+
+# --- The answer ----------------------------------------------------------------
+
+
+def _refuse_unanswerable_window(env: str, sweeps: Sequence[SweepRecord], since: dt.date) -> str:
+    """Refuse before any sum, in this order, or return ``history_begins``.
+
+    ``env`` first, because the store's READERS do not refuse on SIM -- only
+    the appenders do -- and ``_iter_payloads`` returns silently on a missing
+    path, so on SIM a naive sum answers ``0.0`` for an account whose report
+    endpoints serve other accounts' rows. Then "nothing swept", because a
+    store with no sweep record cannot say what window it covers. Then the
+    window itself.
+    """
+    if paths.validate_environment(env) != paths.ENV_LIVE:
+        raise CashBookTotalsRefusedError(REFUSED_SIM_REPORTS_UNUSABLE, env)
+    begins = history_begins(sweeps)
+    if begins is None:
+        raise CashBookTotalsRefusedError(REFUSED_NOTHING_SWEPT, env)
+    if since < dt.date.fromisoformat(begins):
+        raise CashBookTotalsRefusedError(REFUSED_BEFORE_FIRST_SWEEP, env)
+    return begins
+
+
+def build_totals(*, env: str, since: dt.date, until: dt.date) -> CashBookTotals:
+    """The cash book's answer for one window of one environment.
+
+    Reads the store once per journal, composes the two pure derivations, and
+    checks the four partitions before publishing anything.
+
+    The window is scoped as amendment W1 settles it: the booking rows and the
+    cash book sum are the WINDOW's, the episodes are summed by their CLOSING
+    date, the open cost basis is full and carries its own as-of, and the
+    cumulative balance check is store-wide and says so on its own line.
+
+    An ``until`` beyond ``swept_through`` is NOT refused. The store can be
+    asked about a day nobody swept and answers that it holds nothing for it,
+    which is honest as long as the coverage block is published beside the
+    number -- and it is. A ``since`` before ``history_begins`` is different and
+    does refuse: there the store holds rows whose own entries may predate it,
+    and a smaller number would read as a complete answer (memo section 5's
+    table, amendment W8).
+    """
+    if since > until:
+        raise ValueError(f"a cash-book window must not end before it starts ({since} .. {until})")
+    paths.validate_environment(env)
+    sweeps = store.read_sweeps(env=env)
+    _refuse_unanswerable_window(env, sweeps, since)
+
+    coverage = coverage_of(sweeps)
+    events_fold = store.read_cash_events(env=env)
+    trades_fold = store.read_trade_rows(env=env)
+    balances = store.read_balances(env=env)
+    latest = balances.snapshots[-1] if balances.snapshots else None
+    currency = _account_currency(events_fold.events, latest)
+
+    window = _split_by_window(events_fold.events, since=since, until=until)
+    bucket_fold = buckets.classify_buckets(window.inside)
+    # Over EVERY stored fill, never the window's: an episode clipped by a
+    # presentation window is indistinguishable from one clipped by the store,
+    # and only the second is a real incompleteness.
+    episode_fold = episodes.derive_episodes(trades_fold.rows)
+    _check_identities(
+        bucket_fold=bucket_fold,
+        episode_fold=episode_fold,
+        window=window,
+        rows_in_store=len(events_fold.events),
+    )
+
+    summed, exclusions = _exclusions_of(episode_fold.episodes, since=since, until=until)
+    net_closed = acct_sum(
+        _as_pairs([episode.net_acct for episode in summed]),
+        rows=len(summed),
+        currency=currency,
+    )
+    cost_basis_open = _cost_basis_open(episode_fold.episodes, currency)
+    by_name = {bucket.name: bucket for bucket in bucket_fold.buckets}
+    income = by_name[buckets.BUCKET_INCOME].total
+    unclassified = by_name[buckets.BUCKET_UNCLASSIFIED].total
+    deposits = by_name[buckets.BUCKET_DEPOSITS].total
+    cash_book_sum = bucket_fold.all_rows
+
+    # The residual is the window's cash movement that the five named lines do
+    # not explain -- a dividend after a close, withholding tax, financing, a
+    # deposit, and the entry legs of an episode that closed outside the
+    # window. Memo section 4: episodes are summable and their sum is NOT the
+    # period total, and the difference is real money.
+    residual = cash_book_sum
+    for line in (net_closed, cost_basis_open, income, unclassified, deposits):
+        residual = acct_difference(residual, line)
+    # It rests on the whole window, not on a subset of it: the named lines
+    # live in two row spaces (booking rows for the buckets, trades rows for
+    # the episodes), so no set of booking rows is the residual's own.
+    residual = _resting_on(residual, len(window.inside))
+
+    subtotal = acct_sum(
+        _as_pairs([net_closed, cost_basis_open, income, unclassified, residual]),
+        rows=len(window.inside) - deposits.rows,
+        currency=currency,
+    )
+    return CashBookTotals(
+        env=env,
+        basis=Basis(
+            currency=currency,
+            window_since=since.isoformat(),
+            window_until=until.isoformat(),
+            episodes=len(episode_fold.episodes),
+            episodes_summed=len(summed),
+            episodes_excluded=sum(exclusions.values()),
+            exclusions=exclusions,
+            rows_in_store=len(events_fold.events),
+            rows_read=len(window.inside),
+            rows_outside_window=window.outside,
+            rows_undated=window.undated,
+            rows_classified=bucket_fold.rows,
+            fills_read=episode_fold.fills_read,
+            fills_assigned=episode_fold.fills_assigned,
+            fills_unassigned=_unassigned_by_reason(episode_fold),
+            restated={
+                JOURNAL_CASH_EVENTS: events_fold.restated,
+                JOURNAL_TRADE_ROWS: trades_fold.restated,
+                JOURNAL_BALANCES: balances.restated,
+            },
+            malformed={
+                JOURNAL_CASH_EVENTS: events_fold.malformed,
+                JOURNAL_TRADE_ROWS: trades_fold.malformed,
+                JOURNAL_BALANCES: balances.malformed,
+            },
+        ),
+        coverage=coverage,
+        net_closed_acct=net_closed,
+        cost_basis_open_acct=cost_basis_open,
+        cost_basis_open_asof=coverage.swept_through,
+        income_acct=income,
+        unclassified_acct=unclassified,
+        residual_acct=residual,
+        subtotal_acct=subtotal,
+        deposits_acct=deposits,
+        cash_book_sum_acct=cash_book_sum,
+        buckets=bucket_fold.buckets,
+    )
+
+
+def _unassigned_by_reason(fold: episodes.EpisodeFold) -> dict[str, int]:
+    """Counts by reason over every registered one, zeros included.
+
+    A reason at zero is printed for the same argument ``unclassified`` is: a
+    non-zero one then reads as a CHANGED number rather than as a new row
+    appearing in a list the reader has stopped scanning.
+    """
+    counts = dict.fromkeys(episodes.UNASSIGNED_REASONS, 0)
+    for fill in fold.unassigned:
+        counts[fill.reason] += 1
+    return counts
