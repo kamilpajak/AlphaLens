@@ -61,7 +61,10 @@ changes. ``balance_check`` imports one thing more, ``store.BalanceAt``, the
 record that pairs a balance snapshot with the sweep whose window produced it;
 it is a TYPE and the alternative would be declaring the pairing record twice.
 A parse of an already-decoded record and a dataclass open no file, so all
-three still take rows or records, resolve no home and know no ``env``.
+three still take rows or records and resolve no home. Two of them know no
+``env`` either; :mod:`refusals` takes one as a NAME -- the first parameter of
+both its public functions, validated against the vocabulary and named in the
+refusal it raises -- which is a string it checks, never a store it opens.
 They are deliberately NOT re-exported here: nothing imports the
 package for its own sake, and a re-export would make every reader of one
 module pay for all of them.

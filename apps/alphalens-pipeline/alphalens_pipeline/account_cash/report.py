@@ -1,11 +1,13 @@
 """The cash book's answer: one window, one set of published lines (#1689).
 
 Memo: ``docs/research/account_cashbook_design_2026_10_05.md`` sections 4, 5
-and 6. This is the ONLY module in the package that reads the store, so it is
-the only one that knows an ``env`` is a store on disk; :mod:`money`,
+and 6. This module reads the store to ANSWER a window: it is handed an ``env``,
+folds the four journals and composes the pure modules over what came back.
+:mod:`sweep` reads the store too, to fold what it is about to append, so
+"only one reads it" would be false -- the package docstring holds the edge map
+and is the one place that states which module reads what. :mod:`money`,
 :mod:`buckets`, :mod:`episodes`, :mod:`balance_check`, :mod:`coverage` and
-:mod:`record` are pure over the rows and records they are handed, and this
-composes them.
+:mod:`record` open no file at all, and this composes them.
 
 :mod:`refusals` is pure in the same sense and takes an environment NAME on top
 of them: ``env`` is the first parameter of both its public functions, it is
@@ -110,7 +112,11 @@ from alphalens_pipeline.account_cash import (
 # failure-reason gate and the suite. ``__all__`` below is what keeps them so,
 # and what tells the linter they are not unused imports.
 #
-# Each name here HAS such a consumer; two that did not are deliberately absent.
+# Each name here HAS such a consumer; three that did not are deliberately
+# absent. Basis is the third: build_totals constructs it, so the import
+# below stays, but nothing outside this package ever named report.Basis --
+# and an __all__ entry is a PROMISE to a caller, not a note that the file
+# uses the name.
 # ``Coverage`` was re-exported with nothing anywhere reading it, and a name no
 # caller reads is not a surface. ``RESIDUAL_TERMS`` is the worse of the two:
 # reading or patching it through this module publishes a HALF-APPLIED mutation
@@ -197,7 +203,6 @@ __all__ = [
     "REPORT_EXCLUSION_ORDER",
     "TOTALS_REFUSALS",
     "UNDETECTED_PARTIAL_ENTRY",
-    "Basis",
     "CashBookIdentityError",
     "CashBookTotals",
     "CashBookTotalsRefusedError",

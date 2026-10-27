@@ -43,11 +43,17 @@ Two deliberate differences: the published order is sorted EXPLICITLY, because
 first-seen key order is the wrong order for a cash book, and ``restated``
 counts keys whose payload CHANGED, which is the signal the journal exists for.
 
-**One parser for a stored window**, :func:`sweep_window`. Two readers consume
-it and they must agree: :func:`~.coverage.coverage_of` decides whether a window
-EXISTS at all, and :func:`~.balance_check.incremental_check` decides which
-interval to sum. Each held a verbatim copy, which behaves identically on the day
-it is written and drifts on the day the rule changes.
+**One parser for a stored window**, :func:`sweep_window`. Its callers must all
+agree about the same record, and they ask different things of it:
+:func:`~.coverage.coverage_of` whether a window EXISTS at all,
+:func:`~.refusals.refuse_an_unanswerable_window` whether this one overlaps any
+asked window, and :func:`~.balance_check.incremental_check` which interval to
+sum. Two of them held a verbatim copy, which behaves identically on the day it
+is written and drifts on the day the rule changes. **The count lives in the
+gate, not here:** ``tests/account_cash/test_store.py``'s
+``TheSweepWindowIsParsedInExactlyOnePlace`` reads the callers off the source,
+so a number written in this sentence would be the one thing nothing checks --
+and it was wrong here for exactly as long as #1805 took to add the third.
 """
 
 from __future__ import annotations
@@ -141,11 +147,14 @@ def folded_records(fold: CashEventFold | TradeRowFold | BalanceFold) -> int:
 def sweep_window(record: codec.SweepRecord) -> tuple[dt.date, dt.date] | None:
     """The record's asked window as dates, or ``None`` when it is not one.
 
-    ONE parse of a stored window, for both of its readers:
-    :func:`~.coverage.coverage_of` asks whether the window exists at all, and
-    :func:`~.balance_check.incremental_check` asks which interval to sum. They
-    must answer the same thing about the same record, so they share this
-    function rather than a copy each.
+    ONE parse of a stored window, for every caller that needs one:
+    :func:`~.coverage.coverage_of` asks whether the window exists at all,
+    :func:`~.refusals.refuse_an_unanswerable_window` whether a request overlaps
+    any window a sweep asked for, and
+    :func:`~.balance_check.incremental_check` which interval to sum. They must
+    answer the same thing about the same record, so they share this function
+    rather than a copy each. The module docstring says why the count is the
+    gate's to state and not this docstring's.
 
     One parse at the BOUNDARY, because the three date vocabularies in this
     layer are different types: ``SweepRecord.since`` / ``.until`` are ISO
