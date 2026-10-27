@@ -659,16 +659,12 @@ def build_totals(*, env: str, since: dt.date, until: dt.date) -> CashBookTotals:
     # failure object can ask an answerable window.
     #
     # Through the MODULE that owns the question, like the refusals above: this
-    # call is a SEAM. A test substitutes it to drive a coverage the fixture
-    # cannot produce -- a hole, a later ``history_begins`` -- and a patch aimed
-    # at :mod:`coverage` would silently not reach a call bound to the name
-    # re-exported here, leaving a test that passes without exercising
-    # anything. Measured: patching ``coverage.coverage_of`` to a history
-    # beginning 2026-09-01 left the full span ANSWERING, and the same patch on
-    # ``report`` refused ``before_first_sweep``. The record's two shapes below
-    # are constructed by name because they are not a seam -- substituting a
-    # dataclass does not drive the composition anywhere, so its two bindings
-    # cannot be told apart.
+    # call is a SEAM, and binding it to the name re-exported here would put it
+    # out of reach of a patch aimed at :mod:`coverage`. What that costs is
+    # encoded by ``test_report.TheCoverageCallIsASeamATestCanDrive`` rather
+    # than described here. The record's two shapes below are constructed by
+    # name because they are not a seam -- substituting a dataclass does not
+    # drive the composition anywhere, so its two bindings cannot be told apart.
     watermarks = coverage.coverage_of(sweeps)
     refusals.refuse_an_unanswerable_window(env, watermarks, sweeps, since=since, until=until)
 

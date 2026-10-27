@@ -35,6 +35,7 @@ from unittest import mock
 from alphalens_pipeline.account_cash import (
     balance_check,
     buckets,
+    coverage,
     episodes,
     money,
     paths,
@@ -1576,6 +1577,47 @@ class AWindowTheStoreCannotAnswerIsRefused(IsolatedHomeTestCase):
             report.build_totals(env="prod", since=_SWEPT_SINCE, until=_SWEPT_UNTIL)
 
         self.assertIn("prod", str(ctx.exception))
+
+
+class TheCoverageCallIsASeamATestCanDrive(IsolatedHomeTestCase):
+    """``build_totals`` calls ``coverage.coverage_of`` through the MODULE.
+
+    The fixture cannot produce a history that begins later than the sweep it
+    seeds -- the watermark is derived from the stored window -- so the only way
+    to drive the report onto the ``before_first_sweep`` branch from a store
+    that answers is to substitute the coverage itself.
+
+    **Mutation it catches:** binding that call to the name ``report``
+    re-exports (``watermarks = coverage_of(sweeps)``). A function reads a
+    global from the module that DEFINES it, so the patch below would then not
+    reach the call at all and the full span would keep ANSWERING -- a test that
+    passes while exercising nothing. Measured before this test existed, and it
+    is the reason the call is written through the module.
+    """
+
+    def test_a_substituted_history_that_begins_later_refuses_the_full_span(self) -> None:
+        _seed()
+        # The negative control is the same window, unpatched: the seeded sweep
+        # asks for the whole capture, so this window is answerable and the
+        # refusal below is the patch's doing and not the fixture's.
+        answered = report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=_SWEPT_UNTIL)
+        self.assertEqual(answered.coverage.history_begins, _SWEPT_SINCE.isoformat())
+
+        later = coverage.Coverage(
+            history_begins=LATE_SINCE.isoformat(),
+            swept_through=_SWEPT_UNTIL.isoformat(),
+            gaps=(),
+            sweeps=1,
+            malformed_windows=0,
+            cannot_detect=(coverage.UNDETECTED_PARTIAL_ENTRY,),
+        )
+        with mock.patch.object(coverage, "coverage_of", return_value=later) as patched:
+            with self.assertRaises(report.CashBookTotalsRefusedError) as ctx:
+                report.build_totals(env=_LIVE, since=_SWEPT_SINCE, until=_SWEPT_UNTIL)
+
+        self.assertTrue(patched.called)
+        self.assertEqual(ctx.exception.reason, report.REFUSED_BEFORE_FIRST_SWEEP)
+        self.assertEqual(ctx.exception.details, {"history_begins": LATE_SINCE.isoformat()})
 
 
 #: The capture's trade rows with the three still-open instruments removed.
