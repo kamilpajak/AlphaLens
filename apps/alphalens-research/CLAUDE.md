@@ -46,8 +46,7 @@ A package whose `__status__` is `CLOSED` or `ARCHIVED` must also declare:
 - `__closed_date__` is convention only — no test reads it. Write it anyway.
 
 What each of the seven gates measures, and its acceptance threshold:
-[`docs/research/kill_verdict_checklist.md`](../../docs/research/kill_verdict_checklist.md). Its
-code references use pre-split `alphalens/...` paths — read them as `alphalens_research/...`.
+[`docs/research/kill_verdict_checklist.md`](../../docs/research/kill_verdict_checklist.md).
 
 ## Run the gate
 
@@ -56,6 +55,7 @@ cd apps/alphalens-research && ../../.venv/bin/python -m unittest tests.test_laye
 ```
 
 `test_discovery_is_non_empty` is a positive control with two floors: more than 10 required
-packages, and strictly MORE status-declaring packages than required ones. Deleting pipeline-side
-`__status__` markers therefore turns this gate red even though nothing on the research side
-changed. Measured 2026-10-14: 19 required, 40 declaring, 5 tests green.
+packages, and strictly MORE status-declaring packages than required ones. It guards against
+discovery breaking, not against a single deleted marker: measured 2026-10-27, 19 packages are
+required and 40 declare a status, 21 of them research-side, so even deleting EVERY pipeline-side
+marker leaves the second floor satisfied. 5 tests green.

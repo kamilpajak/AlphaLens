@@ -171,10 +171,10 @@ def _resolved_pipeline_modules() -> set[str]:
 _DEFERRED_PARENT_TYPES: tuple[type, ...] = (
     ast.Try,
     # Function-body imports are the documented "lazy CLI" exception in
-    # CLAUDE.md (`apps/alphalens-pipeline/alphalens_cli/commands/{audit,
-    # preaudit,preregister}.py` import phase-robust-backtesting +
-    # alphalens_research inside command bodies). They never execute at
-    # startup so absence in the slim Docker image is benign.
+    # `apps/alphalens-pipeline/CLAUDE.md`. Inside command bodies,
+    # `commands/{audit,doctrine,preaudit}.py` import alphalens_research and
+    # `commands/{audit,preregister}.py` import phase-robust-backtesting. They
+    # never execute at startup so absence in the slim Docker image is benign.
     ast.FunctionDef,
     ast.AsyncFunctionDef,
 )
