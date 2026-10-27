@@ -1,6 +1,10 @@
 """Polygon.io HTTP client — single canonical entry point for every Polygon REST call.
 
-Polygon Starter tier ($29/mo) caps requests at 5 req/min globally per API key.
+Polygon Stocks Basic, the free tier this project is on, caps requests at 5 req/min
+globally per API key (measured 2026-05-30, see
+``docs/research/polygon_quota_6x_per_day_2026_05_30.md``). Starter ($29/mo) is
+unlimited; this client is not on it.
+
 Any uncoordinated shadow client eats budget from every other consumer in the
 process — a single forgotten ``urlopen("https://api.polygon.io/...")`` can
 drain the window before the daily thematic pipeline gets its first page.
