@@ -89,6 +89,7 @@ from broker_contract.constants import QTY_PRECISION
 from alphalens_pipeline.account_cash import (
     balance_check,
     buckets,
+    coverage,
     episodes,
     record,
     refusals,
@@ -650,8 +651,20 @@ def build_totals(*, env: str, since: dt.date, until: dt.date) -> CashBookTotals:
     # the three are about where the window sits against these watermarks, and
     # they publish them on the refusal so a caller holding nothing but the
     # failure object can ask an answerable window.
-    coverage = coverage_of(sweeps)
-    refusals.refuse_an_unanswerable_window(env, coverage, sweeps, since=since, until=until)
+    #
+    # Through the MODULE that owns the question, like the refusals above: this
+    # call is a SEAM. A test substitutes it to drive a coverage the fixture
+    # cannot produce -- a hole, a later ``history_begins`` -- and a patch aimed
+    # at :mod:`coverage` would silently not reach a call bound to the name
+    # re-exported here, leaving a test that passes without exercising
+    # anything. Measured: patching ``coverage.coverage_of`` to a history
+    # beginning 2026-09-01 left the full span ANSWERING, and the same patch on
+    # ``report`` refused ``before_first_sweep``. The record's two shapes below
+    # are constructed by name because they are not a seam -- substituting a
+    # dataclass does not drive the composition anywhere, so its two bindings
+    # cannot be told apart.
+    watermarks = coverage.coverage_of(sweeps)
+    refusals.refuse_an_unanswerable_window(env, watermarks, sweeps, since=since, until=until)
 
     events_fold = store.read_cash_events(env=env)
     trades_fold = store.read_trade_rows(env=env)
@@ -782,10 +795,10 @@ def build_totals(*, env: str, since: dt.date, until: dt.date) -> CashBookTotals:
                 JOURNAL_BALANCES: balances.malformed,
             },
         ),
-        coverage=coverage,
+        coverage=watermarks,
         net_closed_acct=net_closed,
         cost_basis_open_acct=cost_basis_open,
-        cost_basis_open_asof=coverage.swept_through,
+        cost_basis_open_asof=watermarks.swept_through,
         cost_basis_open_excluded=_held_but_not_on_the_line(episode_fold.episodes),
         income_acct=income,
         unclassified_acct=unclassified,
