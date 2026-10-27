@@ -109,9 +109,19 @@ class Basis:
     """What every total on this report rests on (memo section 5(d)).
 
     ``basis`` is structurally inseparable from the numbers: it is an object,
-    not prose, and the human render prints it ABOVE the figures. Four
-    partitions in here are checked rather than described -- the rows, the
-    fills, the episodes, and the buckets against the rows.
+    not prose, and the human render prints it ABOVE the figures. Three of the
+    counts in here are the two sides of a partition that is CHECKED rather
+    than described -- the fills, the rows against the journal's own count of
+    what it folded, and the classified rows against the published bucket
+    counts -- and the file that checks them is :mod:`report`
+    (:func:`~.report._check_identities`), not this one. The fourth checked
+    partition is arithmetic over the buckets' amounts and reads no count in
+    here.
+
+    The episode counts are the exception: ``episodes_summed +
+    episodes_excluded == episodes`` is held by construction, because each
+    episode is stamped exactly once, so it is described here and checked
+    nowhere.
 
     The row counts are in two spaces on purpose and the names say which:
     ``rows_*`` count BOOKING rows (the cash book), ``fills_*`` count TRADES
