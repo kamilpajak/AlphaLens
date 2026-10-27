@@ -41,7 +41,7 @@ from typing import Any
 from unittest import mock
 
 from alphalens_cli.commands import cashbook
-from alphalens_pipeline.account_cash import buckets, money, paths, report, sweep
+from alphalens_pipeline.account_cash import buckets, money, paths, record, report, sweep
 from alphalens_pipeline.brokers.account_cash import AccountCashRead
 from alphalens_pipeline.brokers.fill_history import ReadWindow
 from typer.testing import CliRunner
@@ -1219,9 +1219,17 @@ class TheResidualsProseNamesTheTermsItSubtracted(_CashbookTotalsCase):
         The hand-written form is caught by the test above, which asserts the
         note carries every term the record publishes and no other money field
         -- a sentence can only stay true by being derived.
+
+        Patched on ``record``, which DEFINES the tuple, and not on ``report``,
+        which re-exports it (#1805). A function reads a global from its
+        defining module, so patching the re-export would drive only the
+        subtraction and leave ``CashBookTotals.to_jsonable`` publishing the
+        four original names -- the mutation would then be half-applied and the
+        test would pass for the wrong reason. ``build_totals`` reads
+        ``record.RESIDUAL_TERMS`` through the module for the same reason.
         """
-        shorter = tuple(name for name in report.RESIDUAL_TERMS if name != "deposits_acct")
-        with mock.patch.object(report, "RESIDUAL_TERMS", shorter):
+        shorter = tuple(name for name in record.RESIDUAL_TERMS if name != "deposits_acct")
+        with mock.patch.object(record, "RESIDUAL_TERMS", shorter):
             lines = _collapsed_lines(self.totals().stdout)
 
         line = lines[_line_index(lines, _RESIDUAL_LABEL)]
