@@ -2,9 +2,17 @@
 
 Memo: ``docs/research/account_cashbook_design_2026_10_05.md`` sections 4, 5
 and 6. This is the ONLY module in the package that reads the store, so it is
-the only one that knows ``env``; :mod:`money`, :mod:`buckets`, :mod:`episodes`,
-:mod:`balance_check`, :mod:`coverage`, :mod:`refusals` and :mod:`record` are
-pure over what they are handed, and this composes them.
+the only one that knows an ``env`` is a store on disk; :mod:`money`,
+:mod:`buckets`, :mod:`episodes`, :mod:`balance_check`, :mod:`coverage` and
+:mod:`record` are pure over the rows and records they are handed, and this
+composes them.
+
+:mod:`refusals` is pure in the same sense and takes an environment NAME on top
+of them: ``env`` is the first parameter of both its public functions, it is
+validated against the vocabulary, stored on the error and named in the
+message, and no path is resolved with it. The difference that matters here is
+the one this module owns -- turning that name into a store on disk and reading
+it -- not whether the name is mentioned.
 
 Three questions this file used to answer are answered beside it since #1805,
 and their prose went with them. What the store can speak for is
