@@ -1108,14 +1108,19 @@ class TheFoldAccountsForEveryLineItRead(IsolatedHomeTestCase):
 
 
 class TheSweepWindowIsParsedInExactlyOnePlace(unittest.TestCase):
-    """One parser for both readers of a stored window (F8).
+    """One parser for every reader of a stored window (F8).
 
-    ``report.coverage_of`` decides whether a window EXISTS at all and
-    ``balance_check.incremental_check`` decides which interval to SUM, so the
-    two must answer the same thing about the same record. They held two
-    verbatim copies of the same function, which behave identically on the day
-    they are written and drift on the day the rule changes -- the argument
+    ``coverage.coverage_of`` decides whether a window EXISTS at all,
+    ``refusals`` asks whether any asked window overlaps the one being reported,
+    and ``balance_check.incremental_check`` decides which interval to SUM, so
+    all three must answer the same thing about the same record. Two of them
+    held verbatim copies of the same function, which behave identically on the
+    day they are written and drift on the day the rule changes -- the argument
     ``store.assert_writable`` already makes about the write guard.
+
+    The readers were two and in two modules until #1805 split
+    ``account_cash/report.py``; they are three now, and ``report`` parses no
+    stored window at all.
 
     A plain ``TestCase``: this resolves no path and reads no store.
     """
