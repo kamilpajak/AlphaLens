@@ -41,7 +41,7 @@ from alphalens_pipeline.account_cash.codec import SweepRecord
 #: never takes the quantity walk negative, so it reads as a complete round trip
 #: with half the position and no ``window_clipped`` can fire. The containment
 #: is :func:`coverage_of`'s watermarks plus the
-#: :data:`~.report.REFUSED_BEFORE_FIRST_SWEEP` refusal, never a smaller number.
+#: :data:`~.refusals.REFUSED_BEFORE_FIRST_SWEEP` refusal, never a smaller number.
 UNDETECTED_PARTIAL_ENTRY = "entry_partly_before_history"
 
 __all__ = [

@@ -1149,25 +1149,37 @@ class TheSweepWindowIsParsedInExactlyOnePlace(unittest.TestCase):
 
         The name both copies carried is gated because that is how the two came
         to exist; the parse itself is gated because a rename would carry the
-        duplication past a name-only check. Both modules must instead reach
-        the shared parser.
+        duplication past a name-only check. Every module that reads a stored
+        window must instead reach the shared parser.
 
-        **Mutation it catches:** re-adding a private window parser to either
-        module, under its old name or a new one.
+        **Mutation it catches:** re-adding a private window parser to any of
+        them, under its old name or a new one.
+
+        The readers MOVED in #1805: ``report``'s two call sites went to
+        ``coverage`` (which merges the asked windows) and ``refusals`` (which
+        asks whether any sweep overlaps this one), so ``report`` parses no
+        window of its own any more and carries only the half that must stay
+        absent.
         """
-        from alphalens_pipeline.account_cash import balance_check, report
+        from alphalens_pipeline.account_cash import balance_check, coverage, refusals, report
 
         # The "reaches it" half is spelled per module, not as a bare
         # ``"sweep_window" in source``: ``balance_check`` declares
         # ``NULL_SWEEP_WINDOW_NOT_FOUND = "sweep_window_not_found"``, so that
         # substring is present there whether or not the helper is ever called.
-        reaches_it = {report: "store.sweep_window", balance_check: "sweep_window(record)"}
-        for module, call in reaches_it.items():
+        reaches_it = {
+            coverage: "store.sweep_window",
+            refusals: "store.sweep_window",
+            balance_check: "sweep_window(record)",
+        }
+        for module in (*reaches_it, report):
             with self.subTest(module=module.__name__):
                 source = inspect.getsource(module)
                 self.assertNotIn("def _window_of", source)
                 self.assertNotIn("fromisoformat(record.", source)
-                self.assertIn(call, source)
+        for module, call in reaches_it.items():
+            with self.subTest(module=module.__name__, call=call):
+                self.assertIn(call, inspect.getsource(module))
 
 
 if __name__ == "__main__":

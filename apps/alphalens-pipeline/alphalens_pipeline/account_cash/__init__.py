@@ -26,25 +26,26 @@ compacted is not one. ``tests/account_cash/test_no_compactor_reaches_the_cash_bo
 holds that structurally rather than as a sentence.
 
 **The derivation is pure and the store half is not.** ``money``, ``buckets``,
-``episodes``, ``balance_check`` and ``coverage`` take rows or records, take no
-``env`` and never resolve a home, so the answer they compute is a function of
-what was handed in and nothing else -- the #1714 shape, where the replay engine
-states every run value and reads no deployment state. ``report`` is the ONE
-module that reads the store, and therefore the only one that knows ``env``: it
-composes the pure five. That is also what keeps the home-isolation guard's set
-of builders at one (``paths._alphalens_home``) -- a second module resolving a
-root would be red in ``tests/brokers/automanager/test_home_isolation_gate.py``
-first.
+``episodes``, ``balance_check``, ``coverage`` and ``refusals`` take rows,
+records or an environment NAME, open no file and never resolve a home, so
+the answer they compute is a function of what was handed in and nothing else --
+the #1714 shape, where the replay engine states every run value and reads no
+deployment state. ``report`` is the ONE module that calls a reader, and
+therefore the only one that knows an ``env`` is a store on disk: it composes the
+pure ones. That is also what keeps the home-isolation guard's set of builders at
+one (``paths._alphalens_home``) -- a second module resolving a root would be red
+in ``tests/brokers/automanager/test_home_isolation_gate.py`` first.
 
 The modules are ``paths`` (where the journals are), ``codec`` (the wire form),
 ``store`` (the appends and the folds), ``sweep`` (plan then apply), ``money``
 (the summing vocabulary), ``buckets`` (every booking row in one bucket),
 ``episodes`` (flat to flat per instrument), ``balance_check`` (does the cash
-book account for the cash), ``coverage`` (which days the store can speak for)
-and ``report`` (one window's published answer). The
+book account for the cash), ``coverage`` (which days the store can speak for),
+``refusals`` (which windows get no answer at all) and ``report`` (one window's
+published answer). The
 DAG is ``paths -> codec -> store -> sweep`` on the store side, ``money ->
-{buckets, episodes, balance_check}`` plus ``store -> coverage`` on the
-derivation side, and ``report``
+{buckets, episodes, balance_check}`` plus ``store -> coverage -> refusals`` on
+the derivation side, and ``report``
 above both. One edge crosses: ``balance_check`` imports ``store.BalanceAt``,
 the record that pairs a balance snapshot with the sweep whose window produced
 it. It is a TYPE and nothing else -- ``balance_check`` calls no reader and
