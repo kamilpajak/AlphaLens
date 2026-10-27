@@ -10,6 +10,12 @@ assert the watermarks that bound it instead.
 Pure over :class:`SweepRecord` values -- no store, no isolated home. The
 refusal a ``--since`` before ``history_begins`` answers is the store-reading
 half and lives in ``test_report.py`` beside the rest of ``build_totals``.
+
+Reached through :mod:`~alphalens_pipeline.account_cash.coverage`, which owns
+the answer since #1805, and not through the ``report`` re-export: a module
+whose only tests arrive by way of another module's published surface has no
+test of its own, and the surface it does have is held by the single test at
+the bottom of this file.
 """
 
 from __future__ import annotations
@@ -17,7 +23,7 @@ from __future__ import annotations
 import datetime as dt
 import unittest
 
-from alphalens_pipeline.account_cash import report
+from alphalens_pipeline.account_cash import coverage, report
 from alphalens_pipeline.account_cash.codec import SweepRecord
 
 from tests.account_cash.cashbook_fixture import BOOKINGS
@@ -65,12 +71,12 @@ class TheHistoryWatermark(unittest.TestCase):
         """
         self.assertEqual(min(event.date or "" for event in BOOKINGS), "2026-08-06")
 
-        begins = report.history_begins([_sweep("2026-08-01", "2026-10-03")])
+        begins = coverage.history_begins([_sweep("2026-08-01", "2026-10-03")])
 
         self.assertEqual(begins, "2026-08-01")
 
     def test_no_sweep_has_no_history_at_all(self) -> None:
-        self.assertIsNone(report.history_begins([]))
+        self.assertIsNone(coverage.history_begins([]))
 
     def test_the_earliest_window_wins_whichever_sweep_ran_first(self) -> None:
         """**Mutation it catches:** reading the FIRST record's ``since``.
@@ -78,7 +84,7 @@ class TheHistoryWatermark(unittest.TestCase):
         The records are published oldest-by-``swept_at``, and a backfill asked
         for an earlier window than the daily sweep that preceded it.
         """
-        begins = report.history_begins(
+        begins = coverage.history_begins(
             [_sweep("2026-09-01", "2026-09-30"), _sweep("2026-08-01", "2026-08-31")]
         )
 
@@ -89,60 +95,60 @@ class TheSweptThroughWatermarkIsTheContiguousRunNotTheLatestEnd(unittest.TestCas
     def test_two_sweeps_with_a_hole_do_not_claim_the_later_end(self) -> None:
         """**Mutation it catches:** ``max(record.until)``, which claims
         coverage through 09-10 over a 21-day hole."""
-        coverage = report.coverage_of(
+        watermarks = coverage.coverage_of(
             [_sweep("2026-08-01", "2026-08-10"), _sweep("2026-09-01", "2026-09-10")]
         )
 
-        self.assertEqual(coverage.history_begins, "2026-08-01")
-        self.assertEqual(coverage.swept_through, "2026-08-10")
-        self.assertEqual(coverage.gaps, (("2026-08-11", "2026-08-31"),))
-        self.assertEqual(coverage.sweeps, 2)
+        self.assertEqual(watermarks.history_begins, "2026-08-01")
+        self.assertEqual(watermarks.swept_through, "2026-08-10")
+        self.assertEqual(watermarks.gaps, (("2026-08-11", "2026-08-31"),))
+        self.assertEqual(watermarks.sweeps, 2)
 
     def test_adjacent_sweeps_are_one_run(self) -> None:
         """**Mutation it catches:** a contiguity test using
         ``next.since <= prev.until`` instead of ``<= prev.until + 1 day``,
         which reports a one-day gap between every pair of back-to-back
         sweeps."""
-        coverage = report.coverage_of(
+        watermarks = coverage.coverage_of(
             [_sweep("2026-08-01", "2026-08-10"), _sweep("2026-08-11", "2026-08-20")]
         )
 
-        self.assertEqual(coverage.swept_through, "2026-08-20")
-        self.assertEqual(coverage.gaps, ())
+        self.assertEqual(watermarks.swept_through, "2026-08-20")
+        self.assertEqual(watermarks.gaps, ())
 
     def test_an_overlapping_sweep_is_one_run(self) -> None:
-        coverage = report.coverage_of(
+        watermarks = coverage.coverage_of(
             [_sweep("2026-08-01", "2026-08-15"), _sweep("2026-08-10", "2026-08-20")]
         )
 
-        self.assertEqual(coverage.swept_through, "2026-08-20")
-        self.assertEqual(coverage.gaps, ())
+        self.assertEqual(watermarks.swept_through, "2026-08-20")
+        self.assertEqual(watermarks.gaps, ())
 
     def test_a_sweep_wholly_inside_another_extends_nothing(self) -> None:
         """A re-sweep of a window already covered. **Mutation:**
         ``cur_end = next.until`` without the ``max``, which would SHRINK the
         run back to 08-05 and invent a gap that is covered."""
-        coverage = report.coverage_of(
+        watermarks = coverage.coverage_of(
             [_sweep("2026-08-01", "2026-08-20"), _sweep("2026-08-01", "2026-08-05")]
         )
 
-        self.assertEqual(coverage.swept_through, "2026-08-20")
-        self.assertEqual(coverage.gaps, ())
+        self.assertEqual(watermarks.swept_through, "2026-08-20")
+        self.assertEqual(watermarks.gaps, ())
 
     def test_the_windows_are_compared_as_dates_and_not_as_strings(self) -> None:
         """**Mutation it catches:** string arithmetic on the ISO bounds, which
         cannot add a day across a month boundary."""
-        coverage = report.coverage_of(
+        watermarks = coverage.coverage_of(
             [_sweep("2026-08-25", "2026-08-31"), _sweep("2026-09-01", "2026-09-20")]
         )
 
-        self.assertEqual(coverage.swept_through, "2026-09-20")
-        self.assertEqual(coverage.gaps, ())
+        self.assertEqual(watermarks.swept_through, "2026-09-20")
+        self.assertEqual(watermarks.gaps, ())
 
     def test_every_hole_is_published_not_only_the_first(self) -> None:
         """Three runs and two holes. **Mutation:** returning after the first
         gap, which publishes a shorter list that reads as fuller coverage."""
-        coverage = report.coverage_of(
+        watermarks = coverage.coverage_of(
             [
                 _sweep("2026-08-01", "2026-08-10"),
                 _sweep("2026-08-20", "2026-08-25"),
@@ -150,19 +156,19 @@ class TheSweptThroughWatermarkIsTheContiguousRunNotTheLatestEnd(unittest.TestCas
             ]
         )
 
-        self.assertEqual(coverage.swept_through, "2026-08-10")
+        self.assertEqual(watermarks.swept_through, "2026-08-10")
         self.assertEqual(
-            coverage.gaps,
+            watermarks.gaps,
             (("2026-08-11", "2026-08-19"), ("2026-08-26", "2026-09-09")),
         )
 
     def test_no_sweep_is_no_coverage_rather_than_a_zero_length_run(self) -> None:
-        coverage = report.coverage_of([])
+        watermarks = coverage.coverage_of([])
 
-        self.assertIsNone(coverage.history_begins)
-        self.assertIsNone(coverage.swept_through)
-        self.assertEqual(coverage.gaps, ())
-        self.assertEqual(coverage.sweeps, 0)
+        self.assertIsNone(watermarks.history_begins)
+        self.assertIsNone(watermarks.swept_through)
+        self.assertEqual(watermarks.gaps, ())
+        self.assertEqual(watermarks.sweeps, 0)
 
     def test_a_record_whose_window_will_not_parse_is_counted_and_not_dropped(self) -> None:
         """A hand-edited journal line is the reachable case: the codec takes
@@ -172,13 +178,13 @@ class TheSweptThroughWatermarkIsTheContiguousRunNotTheLatestEnd(unittest.TestCas
         coverage without saying so -- the store-reading shape of the rule that
         a dropped row must make an identity fail, not vanish.
         """
-        coverage = report.coverage_of(
+        watermarks = coverage.coverage_of(
             [_sweep("2026-08-01", "2026-08-10"), _sweep("last tuesday", "whenever")]
         )
 
-        self.assertEqual(coverage.sweeps, 2)
-        self.assertEqual(coverage.malformed_windows, 1)
-        self.assertEqual(coverage.swept_through, "2026-08-10")
+        self.assertEqual(watermarks.sweeps, 2)
+        self.assertEqual(watermarks.malformed_windows, 1)
+        self.assertEqual(watermarks.swept_through, "2026-08-10")
 
     def test_a_refused_sweep_leaves_no_record_so_coverage_cannot_count_one(self) -> None:
         """``refused_reason`` is ``None`` on every record that reaches disk.
@@ -189,7 +195,7 @@ class TheSweptThroughWatermarkIsTheContiguousRunNotTheLatestEnd(unittest.TestCas
         refused sweep is a window with no record at all -- which coverage
         reports as a gap, not as a refusal.
         """
-        covered = report.coverage_of([_sweep("2026-08-01", "2026-08-10")])
+        covered = coverage.coverage_of([_sweep("2026-08-01", "2026-08-10")])
 
         self.assertEqual(covered.gaps, ())
         self.assertIsNone(_sweep("2026-08-01", "2026-08-10").refused_reason)
@@ -205,10 +211,34 @@ class TheLimitTheWatermarksContain(unittest.TestCase):
         plus the ``before_first_sweep`` refusal, and a reader of the published
         total has to be able to see that the limit exists.
         """
-        coverage = report.coverage_of([_sweep("2026-08-01", "2026-08-10")])
+        watermarks = coverage.coverage_of([_sweep("2026-08-01", "2026-08-10")])
 
-        self.assertEqual(coverage.cannot_detect, (report.UNDETECTED_PARTIAL_ENTRY,))
-        self.assertIn("entry", report.UNDETECTED_PARTIAL_ENTRY)
+        self.assertEqual(watermarks.cannot_detect, (coverage.UNDETECTED_PARTIAL_ENTRY,))
+        self.assertIn("entry", coverage.UNDETECTED_PARTIAL_ENTRY)
+
+
+class TheReportStillPublishesTheseNames(unittest.TestCase):
+    """The one test that holds the ``report`` re-export, deliberately alone.
+
+    The watermark names stay importable from
+    :mod:`~alphalens_pipeline.account_cash.report` because that is the module
+    the CLI imports, and a published surface with no test at all is one a
+    later cleanup drops without a red run. One test rather than a second copy
+    of everything above: a behavioural duplicate would assert the same
+    arithmetic twice and still never say that the two paths are the same
+    function.
+
+    **Mutation it catches:** dropping either name from ``report``'s re-export
+    block, or from its ``__all__`` -- which is what keeps the re-export from
+    reading as an unused import.
+    """
+
+    def test_the_watermark_names_are_the_same_objects_report_publishes(self) -> None:
+        self.assertIs(report.coverage_of, coverage.coverage_of)
+        self.assertIs(report.history_begins, coverage.history_begins)
+        self.assertEqual(report.UNDETECTED_PARTIAL_ENTRY, coverage.UNDETECTED_PARTIAL_ENTRY)
+        for name in ("coverage_of", "history_begins", "UNDETECTED_PARTIAL_ENTRY"):
+            self.assertIn(name, report.__all__)
 
 
 if __name__ == "__main__":

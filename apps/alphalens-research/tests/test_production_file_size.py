@@ -49,8 +49,11 @@ from pathlib import Path
 WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
 
 # A file above this many lines must carry a baseline entry below. 1 000 is the
-# point at which a module stops fitting in one reading; 17 of the 527
-# production files are above it today.
+# point at which a module stops fitting in one reading; 17 of the 544
+# production files are above it today (measured 2026-10-27). The corpus half of
+# that pair was stale at 527 before #1805 and the count half was 18: splitting
+# `account_cash/report.py` took one file off the list and put three small ones
+# into the corpus.
 CEILING = 1000
 
 # How far below its entry a file may sit before the entry is stale. A file that
@@ -119,78 +122,6 @@ BASELINE: dict[str, int] = {
     # of someone else's explanation, which is how a ratchet gets gamed.
     "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3168,
     "apps/alphalens-pipeline/alphalens_cli/commands/thematic.py": 1708,
-    # First entry, from 940, for the eight review findings on #1689's P4-b.
-    # Asked for rather than taken, and it is asked for ONCE: the file should be
-    # split, and this records that it was not split here.
-    #
-    # What the 162 lines bought: a fourth row-partition term and its counter
-    # (an unparseable date was counted as no date at all), a second count beside
-    # the open cost basis (a held position under a `window_clipped` or
-    # `imbalanced` flag left the line reading as flat), two partitions rewritten
-    # from tautologies into checks that can refute, and the docstring
-    # corrections that say so -- the module docstring had claimed four checked
-    # partitions while two could not produce a disproving observation, and
-    # `_agree` named one of those two as the control behind its own relaxation.
-    # 129 of the 162 are docstring or comment; the file holds 410 lines of code
-    # against 422 of docstring.
-    #
-    # Why no split in this PR, measured rather than asserted. The seam the
-    # review asked about -- `Coverage`, `coverage_of`, `history_begins` and
-    # `UNDETECTED_PARTIAL_ENTRY` -- is 93 lines, which lands the file at ~1009
-    # and still over `CEILING`. Getting under it needs that seam PLUS one more
-    # (the identities, 116 lines, or the published record shapes, 150), and a
-    # two-seam module split riding along at the end of a review-fix PR is how a
-    # published money number moves without anyone reviewing the move. The split
-    # is its own PR; this entry is what keeps it visible until then.
-    #
-    # Raised from 1102 to 1170, measured with `wc -l` after `ruff format`, for
-    # taking the open cost basis OUT of the residual's and the subtotal's term
-    # lists. ALL 68 are docstring or comment, measured on the diff: 97 lines
-    # added and 29 removed, of which exactly two on each side are code -- the
-    # loop's tuple and the subtotal's list, each a replacement that drops one
-    # term, so the code did not grow at all.
-    #
-    # What the 68 lines buy: the old text SAID the residual is the cash book
-    # sum minus five named lines and that it is "zero only by accident", and
-    # both halves became false in the same change. The two derived fields now
-    # carry their own term lists, the scope rule that keeps the basis out of
-    # them, and the measurement that forced it (+3594.86 of "residual not
-    # explained above" over a window holding no booking row). The
-    # `_cost_basis_open` note lost its propagation argument to the same change
-    # and had to say which argument is left standing.
-    #
-    # Lowered from that 1170 to 1145: `_resting_on` moved to `money.py` as
-    # `acct_resting_on` when the balance check became its second user, and
-    # took its 25 lines with it. Lowered rather than kept as slack, which is
-    # what this table asks for when a file shrinks.
-    #
-    # Raised from 1145 to 1181 for the P4-c review findings. 36 lines, of which
-    # 25 are comment: the residual's term list became a named constant the
-    # subtraction reads and the record PUBLISHES (`residual_terms`), because the
-    # prose label said "the lines above" while one of the terms -- the deposits
-    # -- is rendered below the line, so the label was wrong by exactly
-    # 24 000.00 PLN and no arithmetic test could see it.
-    #
-    # Raised again, from 1181 to 1252, for the second of those findings: a
-    # window with no day in common with any sweep now refuses
-    # (`window_never_swept`) instead of answering 0.00 over 0 rows beside a
-    # reconciling balance check. 71 lines, 52 of them comment, and the
-    # expensive half to explain is why the overlap is measured against every
-    # ASKED window rather than against `swept_through` -- the watermark stops
-    # at the first contiguous run, so the two readings disagree on a store with
-    # a hole, which is where one of them refuses days the store holds rows for.
-    #
-    # Raised again, by 7 to 1259, for the third: the `before_first_sweep`
-    # refusal carries the earliest answerable `--since`. All 7 are comment bar
-    # the two-line raise -- the published recovery told an operator to read
-    # `coverage.history_begins` off a report that refuses, so the note says why
-    # the watermark cannot be anywhere but on the refusal.
-    #
-    # Raised again, by 10 to 1269, for the fourth: `CashBookIdentityError` now
-    # carries the NAME of the partition that broke, so the command reporting it
-    # (`cashbook_identity_broken`) does not have to parse the prose to say more
-    # than "something broke". The message itself is unchanged.
-    "apps/alphalens-pipeline/alphalens_pipeline/account_cash/report.py": 1269,
     # Raised again, by 8, to say that the raise page's ticker fallback is
     # unreachable by construction. It sits beside the stop-PLACED page's
     # fallback, which looks identical and IS reachable and tested, so without

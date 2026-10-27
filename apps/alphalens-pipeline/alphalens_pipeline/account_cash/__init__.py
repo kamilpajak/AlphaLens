@@ -26,27 +26,46 @@ compacted is not one. ``tests/account_cash/test_no_compactor_reaches_the_cash_bo
 holds that structurally rather than as a sentence.
 
 **The derivation is pure and the store half is not.** ``money``, ``buckets``,
-``episodes`` and ``balance_check`` take rows, take no ``env`` and never resolve
-a home, so the answer they compute is a function of what was handed in and
-nothing else -- the #1714 shape, where the replay engine states every run value
-and reads no deployment state. ``report`` is the ONE module that reads the
-store, and therefore the only one that knows ``env``: it composes the pure
-four. That is also what keeps the home-isolation guard's set of builders at
-one (``paths._alphalens_home``) -- a second module resolving a root would be
-red in ``tests/brokers/automanager/test_home_isolation_gate.py`` first.
+``episodes``, ``balance_check``, ``coverage``, ``refusals`` and ``record`` take
+rows, records or an environment NAME, open no file and never resolve a home, so
+the answer they compute is a function of what was handed in and nothing else --
+the #1714 shape, where the replay engine states every run value and reads no
+deployment state. ``report`` is the ONE module that calls a reader, and
+therefore the only one that knows an ``env`` is a store on disk: it composes the
+pure ones. That is also what keeps the home-isolation guard's set of builders at
+one (``paths._alphalens_home``) -- a second module resolving a root would be red
+in ``tests/brokers/automanager/test_home_isolation_gate.py`` first.
 
 The modules are ``paths`` (where the journals are), ``codec`` (the wire form),
 ``store`` (the appends and the folds), ``sweep`` (plan then apply), ``money``
 (the summing vocabulary), ``buckets`` (every booking row in one bucket),
 ``episodes`` (flat to flat per instrument), ``balance_check`` (does the cash
-book account for the cash) and ``report`` (one window's published answer). The
+book account for the cash), ``coverage`` (which days the store can speak for),
+``refusals`` (which windows get no answer at all), ``record`` (what one answer
+publishes and what each line rests on) and ``report`` (the composition that
+reads the store and fills the record). The
 DAG is ``paths -> codec -> store -> sweep`` on the store side, ``money ->
-{buckets, episodes, balance_check}`` on the derivation side, and ``report``
-above both. One edge crosses: ``balance_check`` imports ``store.BalanceAt``,
-the record that pairs a balance snapshot with the sweep whose window produced
-it. It is a TYPE and nothing else -- ``balance_check`` calls no reader and
-knows no ``env`` -- and the alternative would be declaring the pairing record
-twice. They are deliberately NOT re-exported here: nothing imports the
+{buckets, episodes, balance_check}`` plus ``store -> {coverage, refusals,
+balance_check}``, ``coverage -> refusals`` and
+``{coverage, buckets, balance_check, money} -> record`` on the derivation side,
+and ``report``
+above both. **Three edges cross into ``store``, and none of them is a read.**
+``coverage``, ``refusals`` and ``balance_check`` all call
+``store.sweep_window``, the ONE parse of a stored window's two free-text
+bounds: the three answer, in order, whether a window exists at all, whether
+any asked window overlaps the one being reported, and which interval to SUM,
+so they have to answer the same thing about the same record -- held by
+``tests/account_cash/test_store.py::TheSweepWindowIsParsedInExactlyOnePlace``,
+after two of them held verbatim copies that would drift on the day the rule
+changes. ``balance_check`` imports one thing more, ``store.BalanceAt``, the
+record that pairs a balance snapshot with the sweep whose window produced it;
+it is a TYPE and the alternative would be declaring the pairing record twice.
+A parse of an already-decoded record and a dataclass open no file, so all
+three still take rows or records and resolve no home. Two of them know no
+``env`` either; :mod:`refusals` takes one as a NAME -- the first parameter of
+both its public functions, validated against the vocabulary and named in the
+refusal it raises -- which is a string it checks, never a store it opens.
+They are deliberately NOT re-exported here: nothing imports the
 package for its own sake, and a re-export would make every reader of one
 module pay for all of them.
 """

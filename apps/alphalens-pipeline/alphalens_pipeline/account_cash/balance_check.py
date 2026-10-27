@@ -359,7 +359,7 @@ def _span_of(events: Sequence[CashEvent]) -> tuple[str | None, str | None]:
     """The first and last date the rows THEMSELVES carry, as ISO strings.
 
     The basis of a sum is read off what was summed, never handed in. The
-    caller used to pass :func:`~.report.coverage_of`'s watermarks, and those
+    caller used to pass :func:`~.coverage.coverage_of`'s watermarks, and those
     answer a different question: that function stops at the end of the FIRST
     contiguous run so that a hole cannot be claimed as covered, while this
     check is handed EVERY stored row. With sweeps of 08-01..08-10 and
