@@ -98,12 +98,21 @@ from alphalens_pipeline.account_cash import (
 
 # RE-EXPORTED, not merely used. These names moved to their own modules when
 # this file was split (#1805), and they stay importable FROM here because
-# ``report`` is the published surface every consumer reads -- the CLI, the
+# ``report`` is the published surface their consumers read -- the CLI, the
 # failure-reason gate and the suite. ``__all__`` below is what keeps them so,
 # and what tells the linter they are not unused imports.
+#
+# Each name here HAS such a consumer; two that did not are deliberately absent.
+# ``Coverage`` was re-exported with nothing anywhere reading it, and a name no
+# caller reads is not a surface. ``RESIDUAL_TERMS`` is the worse of the two:
+# reading or patching it through this module publishes a HALF-APPLIED mutation
+# -- the subtraction below would change while ``record.to_jsonable`` keeps
+# publishing the original names -- so advertising it here named the one binding
+# that must not be used (see the loop in :func:`build_totals`). Both are
+# imported from :mod:`coverage` and :mod:`record` by the one caller each has:
+# this file, through the module.
 from alphalens_pipeline.account_cash.coverage import (
     UNDETECTED_PARTIAL_ENTRY,
-    Coverage,
     coverage_of,
     history_begins,
 )
@@ -115,7 +124,6 @@ from alphalens_pipeline.account_cash.money import (
     acct_sum,
 )
 from alphalens_pipeline.account_cash.record import (
-    RESIDUAL_TERMS,
     Basis,
     CashBookTotals,
 )
@@ -179,14 +187,12 @@ __all__ = [
     "REFUSED_SIM_REPORTS_UNUSABLE",
     "REFUSED_WINDOW_NEVER_SWEPT",
     "REPORT_EXCLUSION_ORDER",
-    "RESIDUAL_TERMS",
     "TOTALS_REFUSALS",
     "UNDETECTED_PARTIAL_ENTRY",
     "Basis",
     "CashBookIdentityError",
     "CashBookTotals",
     "CashBookTotalsRefusedError",
-    "Coverage",
     "build_totals",
     "coverage_of",
     "history_begins",
