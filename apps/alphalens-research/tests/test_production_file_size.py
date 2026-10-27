@@ -190,7 +190,11 @@ BASELINE: dict[str, int] = {
     # carries the NAME of the partition that broke, so the command reporting it
     # (`cashbook_identity_broken`) does not have to parse the prose to say more
     # than "something broke". The message itself is unchanged.
-    "apps/alphalens-pipeline/alphalens_pipeline/account_cash/report.py": 1269,
+    #
+    # Lowered from 1269 to 1183: the coverage watermarks are their own module
+    # now (`account_cash/coverage.py`, #1805), the first of the seams the note
+    # above named. Counted with `wc -l` on the file, not from the diff.
+    "apps/alphalens-pipeline/alphalens_pipeline/account_cash/report.py": 1183,
     # Raised again, by 8, to say that the raise page's ticker fallback is
     # unreachable by construction. It sits beside the stop-PLACED page's
     # fallback, which looks identical and IS reachable and tested, so without

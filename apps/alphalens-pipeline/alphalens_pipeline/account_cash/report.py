@@ -3,8 +3,12 @@
 Memo: ``docs/research/account_cashbook_design_2026_10_05.md`` sections 4, 5
 and 6. This is the ONLY module in the package that reads the store, so it is
 the only one that knows ``env``; :mod:`money`, :mod:`buckets`,
-:mod:`episodes` and :mod:`balance_check` are pure over what they are handed,
-and this composes them.
+:mod:`episodes`, :mod:`balance_check` and :mod:`coverage` are pure over what
+they are handed, and this composes them.
+
+What the store can speak for is :mod:`coverage`'s question and is answered
+there (#1805). It is read here, handed to the refusals and published beside
+every number, but nothing about merging the asked windows lives in this file.
 
 Five rules carry the published numbers, and a change must not break any of
 them.
@@ -16,10 +20,11 @@ store-wide total is a number that lies about its own basis. The CUMULATIVE
 balance check is store-wide by definition -- the whole stored cash book against
 the latest balance snapshot -- so it publishes its OWN row count and its own
 since/until on its own line and can never be read as the window's figure. That
-since/until is the span of the rows it SUMMED and NOT the coverage watermarks
-below: ``swept_through`` stops at the end of the first contiguous run so a hole
-cannot be claimed as covered, which is the right answer to "what can the store
-speak for" and the wrong one to "what does this number rest on".
+since/until is the span of the rows it SUMMED and NOT
+:attr:`~.coverage.Coverage.swept_through`, which stops at the end of the first
+contiguous run so a hole cannot be claimed as covered -- the right answer to
+"what can the store speak for" and the wrong one to "what does this number
+rest on".
 ``cost_basis_open_acct`` is the third case: it keeps the
 FULL cost of every open episode and publishes its own as-of, because the cost
 of a still-open position is as-of now and not as-of the window's end. On the
@@ -128,7 +133,6 @@ later phase and changes no number.
 from __future__ import annotations
 
 import datetime as dt
-import itertools
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -137,6 +141,18 @@ from broker_contract.constants import QTY_PRECISION
 
 from alphalens_pipeline.account_cash import balance_check, buckets, episodes, paths, store
 from alphalens_pipeline.account_cash.codec import SweepRecord
+
+# RE-EXPORTED, not merely used. The coverage watermarks moved to their own
+# module when this file was split (#1805), and these names stay importable FROM
+# here because ``report`` is the published surface every consumer reads -- the
+# CLI, the failure-reason gate and the suite. ``__all__`` below is what keeps
+# them so, and what tells the linter they are not unused imports.
+from alphalens_pipeline.account_cash.coverage import (
+    UNDETECTED_PARTIAL_ENTRY,
+    Coverage,
+    coverage_of,
+    history_begins,
+)
 from alphalens_pipeline.account_cash.money import (
     BALANCE_TOLERANCE_ACCT,
     AcctAmount,
@@ -145,15 +161,6 @@ from alphalens_pipeline.account_cash.money import (
     acct_sum,
 )
 from alphalens_pipeline.brokers.account_cash import CashEvent
-
-#: What this source cannot detect, published on every total rather than left in
-#: a memo (amendment W8). An episode whose entry is PARTLY before the store --
-#: bought 10 before the first sweep, bought 10 inside it, sold 10 inside --
-#: never takes the quantity walk negative, so it reads as a complete round trip
-#: with half the position and no ``window_clipped`` can fire. The containment
-#: is :func:`coverage_of`'s watermarks plus the
-#: :data:`REFUSED_BEFORE_FIRST_SWEEP` refusal, never a smaller number.
-UNDETECTED_PARTIAL_ENTRY = "entry_partly_before_history"
 
 #: A closed episode whose closing date falls OUTSIDE the window. The fourth
 #: exclusion reason, owned here rather than by :mod:`episodes`, because it is a
@@ -359,99 +366,6 @@ def _in_account_currency(amount: AcctAmount, currency: str | None) -> AcctAmount
     if amount.null_reason is not None or amount.currency is not None:
         return amount
     return AcctAmount(value=amount.value, currency=currency, rows=amount.rows, null_reason=None)
-
-
-# --- Coverage: what the store can speak for ----------------------------------
-
-
-@dataclass(frozen=True)
-class Coverage:
-    """The window the store can answer for, and where it cannot.
-
-    ``swept_through`` is the end of the CONTIGUOUS run that starts at
-    ``history_begins``, never ``max(until)``: two sweeps over 08-01..08-10 and
-    09-01..09-10 leave a 21-day hole, and ``max(until)`` claims coverage
-    through 09-10 across it.
-
-    ``history_begins`` is the earliest window ASKED for, not the earliest row
-    stored. The store can speak for a day it read and found empty; it cannot
-    speak for a day nobody asked about. On the real capture the two differ by
-    five days (asked 2026-08-01, earliest booking 2026-08-06).
-    """
-
-    history_begins: str | None
-    swept_through: str | None
-    #: ``(first uncovered, last uncovered)`` ISO date pairs, every hole between
-    #: the runs, not only the first -- a shorter list reads as fuller coverage.
-    gaps: tuple[tuple[str, str], ...]
-    sweeps: int
-    #: Records whose ``since`` / ``until`` would not parse as dates. Counted
-    #: rather than skipped: the codec takes both as free text, so a hand-edited
-    #: line decodes, and dropping it would shrink the coverage silently.
-    malformed_windows: int
-    #: Named incompleteness this source cannot detect at all.
-    cannot_detect: tuple[str, ...]
-
-    def to_jsonable(self) -> dict[str, Any]:
-        return {
-            "history_begins": self.history_begins,
-            "swept_through": self.swept_through,
-            "gaps": [list(gap) for gap in self.gaps],
-            "sweeps": self.sweeps,
-            "malformed_windows": self.malformed_windows,
-            "cannot_detect": list(self.cannot_detect),
-        }
-
-
-def history_begins(sweeps: Sequence[SweepRecord]) -> str | None:
-    """The earliest window any sweep ASKED for, or ``None`` if none did."""
-    windows = [window for window in map(store.sweep_window, sweeps) if window is not None]
-    return min(since for since, _ in windows).isoformat() if windows else None
-
-
-def coverage_of(sweeps: Sequence[SweepRecord]) -> Coverage:
-    """Merge the asked windows into contiguous runs and publish the watermarks.
-
-    Two windows are one run when the second starts no later than the day AFTER
-    the first ends: back-to-back sweeps of 08-01..08-10 and 08-11..08-20 cover
-    08-01..08-20 with no hole, and a contiguity test written ``next.since <=
-    prev.until`` reports a one-day gap between every such pair.
-    """
-    windows = sorted(window for window in map(store.sweep_window, sweeps) if window is not None)
-    malformed = len(sweeps) - len(windows)
-    if not windows:
-        return Coverage(
-            history_begins=None,
-            swept_through=None,
-            gaps=(),
-            sweeps=len(sweeps),
-            malformed_windows=malformed,
-            cannot_detect=(UNDETECTED_PARTIAL_ENTRY,),
-        )
-
-    runs: list[list[dt.date]] = [[*windows[0]]]
-    for since, until in windows[1:]:
-        if since <= runs[-1][1] + dt.timedelta(days=1):
-            runs[-1][1] = max(runs[-1][1], until)
-        else:
-            runs.append([since, until])
-
-    gaps = tuple(
-        (
-            (earlier[1] + dt.timedelta(days=1)).isoformat(),
-            (later[0] - dt.timedelta(days=1)).isoformat(),
-        )
-        for earlier, later in itertools.pairwise(runs)
-    )
-    return Coverage(
-        history_begins=runs[0][0].isoformat(),
-        # The end of the FIRST run, so a hole cannot be claimed as covered.
-        swept_through=runs[0][1].isoformat(),
-        gaps=gaps,
-        sweeps=len(sweeps),
-        malformed_windows=malformed,
-        cannot_detect=(UNDETECTED_PARTIAL_ENTRY,),
-    )
 
 
 # --- The published record ----------------------------------------------------
