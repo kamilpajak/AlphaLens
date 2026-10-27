@@ -42,6 +42,12 @@ module may not import (dependency rule 2) -- the shape is mirrored, not reused.
 Two deliberate differences: the published order is sorted EXPLICITLY, because
 first-seen key order is the wrong order for a cash book, and ``restated``
 counts keys whose payload CHANGED, which is the signal the journal exists for.
+
+**One parser for a stored window**, :func:`sweep_window`. Two readers consume
+it and they must agree: :func:`~.report.coverage_of` decides whether a window
+EXISTS at all, and :func:`~.balance_check.incremental_check` decides which
+interval to sum. Each held a verbatim copy, which behaves identically on the day
+it is written and drifts on the day the rule changes.
 """
 
 from __future__ import annotations
@@ -91,6 +97,8 @@ _UNREADABLE_ROW: tuple[type[BaseException], ...] = (codec.CashBookDecodeError, O
 
 __all__ = [
     "SIM_STORE_REFUSED",
+    "BalanceAt",
+    "BalanceFold",
     "CashEventFold",
     "SimCashBookRefusedError",
     "TradeRowFold",
@@ -99,11 +107,64 @@ __all__ = [
     "append_sweep",
     "append_trade_rows",
     "assert_writable",
+    "folded_records",
     "read_balances",
     "read_cash_events",
     "read_sweeps",
     "read_trade_rows",
+    "sweep_window",
 ]
+
+
+def folded_records(fold: CashEventFold | TradeRowFold | BalanceFold) -> int:
+    """How many records this fold's journal held, from its COUNTERS.
+
+    ``lines - malformed - duplicate_lines``. Every line the read saw is
+    accounted for by exactly one of three terms, each incremented while the
+    file was read -- on statements separate from the one that puts a record in
+    the published list. So this is a second path to the same number, and a
+    record lost between the counters and the list makes the two disagree.
+
+    That is the whole point: the report's row partition splits the published
+    list by the window and compares the parts against THIS, not against the
+    length of the list it just split. A partition of a list against that same
+    list's length cannot produce the observation that would refute it.
+
+    It is a derivation and not a stored field so there is no third number to
+    keep in step; the arithmetic is pinned by
+    ``tests/account_cash/test_store.py``'s
+    ``TheFoldAccountsForEveryLineItRead``.
+    """
+    return fold.lines - fold.malformed - fold.duplicate_lines
+
+
+def sweep_window(record: codec.SweepRecord) -> tuple[dt.date, dt.date] | None:
+    """The record's asked window as dates, or ``None`` when it is not one.
+
+    ONE parse of a stored window, for both of its readers:
+    :func:`~.report.coverage_of` asks whether the window exists at all, and
+    :func:`~.balance_check.incremental_check` asks which interval to sum. They
+    must answer the same thing about the same record, so they share this
+    function rather than a copy each.
+
+    One parse at the BOUNDARY, because the three date vocabularies in this
+    layer are different types: ``SweepRecord.since`` / ``.until`` are ISO
+    strings, ``SweepPlan.since`` / ``.until`` are ``dt.date``, and
+    ``CashEvent.date`` is a raw vendor string. Comparing them unparsed either
+    raises or sorts lexically.
+
+    A window that ends BEFORE it starts is refused the same way one that will
+    not parse is: the codec takes both bounds as free text, so a hand-edited
+    line decodes, and neither reader has anything to say about an interval
+    that runs backwards. A one-day window -- ``since == until``, the ordinary
+    daily shape -- is a window.
+    """
+    try:
+        since = dt.date.fromisoformat(record.since)
+        until = dt.date.fromisoformat(record.until)
+    except ValueError:
+        return None
+    return (since, until) if since <= until else None
 
 
 class SimCashBookRefusedError(Exception):
@@ -179,16 +240,68 @@ class CashEventFold:
     events: list[CashEvent]
     malformed: int
     restated: int
+    #: Lines that DECODED onto a key already seen -- an identical re-append or
+    #: a restatement. The term that completes ``len(events) + malformed +
+    #: duplicate_lines == lines``, and ``restated`` could not serve as it:
+    #: that counts KEYS, so one key corrected twice is one restatement over
+    #: two duplicate lines.
+    #:
+    #: Its consumer is the report's row partition. That partition splits the
+    #: FOLDED records by the window and used to compare the parts against
+    #: ``len(events)`` -- a partition of one list against that same list's
+    #: length, which no dropped row can refute. These three counters are
+    #: incremented while the journal is READ, on statements separate from the
+    #: one that puts a record in the list, so they are a second path to the
+    #: same number and a record lost between the two breaks the identity.
+    duplicate_lines: int
     lines: int
 
 
 @dataclass(frozen=True)
 class TradeRowFold:
-    """Latest-per-``TradeId`` rows, with the same three counters."""
+    """Latest-per-``TradeId`` rows, with the same four counters."""
 
     rows: list[TradeRow]
     malformed: int
     restated: int
+    duplicate_lines: int
+    lines: int
+
+
+@dataclass(frozen=True)
+class BalanceAt:
+    """One sweep's balance snapshot, WITH the sweep it belongs to.
+
+    The key was popped by the decode and dropped by the read, so a snapshot
+    arrived with no way to say which window produced it. The incremental
+    balance cross-check needs exactly that: a cash event carries a trade DATE
+    and no timestamp, while the settlement batch fires at about 23:48 UTC
+    (memo section 1.7 P5, measured to a 51-second intersection across two
+    nights). So the interval between two snapshots is in TRADE DATES taken
+    from ``SweepRecord.since`` / ``.until``, never in ``asof`` instants -- the
+    settlement crosses midnight UTC, and a reader inferring the basis from the
+    observation instant gets the next day (section 1.7 P9). This record is
+    what the join is made on.
+    """
+
+    sweep_id: str
+    snapshot: BalanceSnapshot
+
+
+@dataclass(frozen=True)
+class BalanceFold:
+    """Oldest-first snapshots, each with its sweep key, plus the four counters.
+
+    Before this the read threw ``malformed``, ``restated`` and ``lines`` into
+    ``_, _, _``, so a corrupt balance line was invisible to every later reader
+    and a rewritten snapshot was a correction nothing could report -- in the
+    one journal of the four whose only consumer is a money cross-check.
+    """
+
+    snapshots: list[BalanceAt]
+    malformed: int
+    restated: int
+    duplicate_lines: int
     lines: int
 
 
@@ -227,8 +340,8 @@ def _fold_by_key(
     decode: Callable[[Any], Any],
     key_of: Callable[[Any], str],
     row: str,
-) -> tuple[dict[str, Any], int, int, int]:
-    """``(latest per key, malformed, restated, lines)`` over one journal.
+) -> tuple[dict[str, Any], int, int, int, int]:
+    """``(latest per key, malformed, restated, duplicate_lines, lines)``.
 
     A malformed line is COUNTED, never dropped silently: a reader of a money
     store must be able to say how much of the journal it could not account for.
@@ -242,6 +355,7 @@ def _fold_by_key(
     rendered: dict[str, Any] = {}
     restated_keys: set[str] = set()
     malformed = 0
+    duplicate_lines = 0
     lines = 0
     for index, payload in _iter_payloads(path):
         lines += 1
@@ -256,11 +370,16 @@ def _fold_by_key(
             logger.warning("%s line %d is not a readable %s row: %s", path, index + 1, row, exc)
             continue
         key = key_of(record)
-        if key in latest and rendered[key] != payload:
-            restated_keys.add(key)
+        if key in latest:
+            # Counted per LINE, not per key: this is the term that makes
+            # `len(latest) + malformed + duplicate_lines == lines` hold, and
+            # `restated_keys` below is a set on purpose.
+            duplicate_lines += 1
+            if rendered[key] != payload:
+                restated_keys.add(key)
         latest[key] = record
         rendered[key] = payload
-    return latest, malformed, len(restated_keys), lines
+    return latest, malformed, len(restated_keys), duplicate_lines, lines
 
 
 # --- Appenders ---------------------------------------------------------------
@@ -335,59 +454,78 @@ def read_cash_events(*, env: str) -> CashEventFold:
     vendor row, so the sort key substitutes ``""`` rather than comparing
     ``None`` with a string, which raises.
     """
-    latest, malformed, restated, lines = _fold_by_key(
+    latest, malformed, restated, duplicates, lines = _fold_by_key(
         paths.cash_events_path(env),
         decode=codec.cash_event_from_jsonable,
         key_of=lambda event: event.bk_amount_id,
         row="cash_events",
     )
     events = sorted(latest.values(), key=lambda event: (event.date or "", event.bk_amount_id))
-    return CashEventFold(events=events, malformed=malformed, restated=restated, lines=lines)
+    return CashEventFold(
+        events=events,
+        malformed=malformed,
+        restated=restated,
+        duplicate_lines=duplicates,
+        lines=lines,
+    )
 
 
 def read_trade_rows(*, env: str) -> TradeRowFold:
     """Fold ``trade_rows.jsonl`` to one row per ``TradeId``, sorted by
     ``(trade_date, trade_id)``."""
-    latest, malformed, restated, lines = _fold_by_key(
+    latest, malformed, restated, duplicates, lines = _fold_by_key(
         paths.trade_rows_path(env),
         decode=codec.trade_row_from_jsonable,
         key_of=lambda row: row.trade_id,
         row="trade_rows",
     )
     rows = sorted(latest.values(), key=lambda row: (row.trade_date or "", row.trade_id))
-    return TradeRowFold(rows=rows, malformed=malformed, restated=restated, lines=lines)
+    return TradeRowFold(
+        rows=rows,
+        malformed=malformed,
+        restated=restated,
+        duplicate_lines=duplicates,
+        lines=lines,
+    )
 
 
-def read_balances(*, env: str) -> list[BalanceSnapshot]:
+def read_balances(*, env: str) -> BalanceFold:
     """Every sweep's balance snapshot, one per ``sweep_id``, oldest first.
 
-    A malformed line is logged rather than counted into a returned field: this
-    journal has no identity to fold a broken line onto. Phase 4 reads these
-    for the balance cross-check, and it will want a count -- the shape to
-    widen then is this return type, not the log.
+    Each snapshot is published WITH the ``sweep_id`` it was stored under (see
+    :class:`BalanceAt`), and the three counters the fold already computes are
+    published too, because this journal's one consumer is a money cross-check.
 
-    **Until it does, a log line is the ONLY channel**, and the sweep record
-    cannot carry it either: ``SweepPlan.malformed`` and ``SweepRecord.malformed``
-    both hold ``cash_events`` and ``trade_rows`` only, because the plan folds
-    just the two keyed journals. So a corrupt balance line is today invisible
-    to every later reader of the store. Deliberately not fixed here rather than
-    merely unnoticed: a third ``malformed`` key is a change to the
-    ``sweeps.jsonl`` wire form, and the codec's count maps are key-agnostic in
-    both directions so it stays additive -- it belongs with the Phase 4
-    consumer that gives it a meaning, not with a counter nothing reads.
+    Until Phase 4 both were dropped, and the sweep record could not carry the
+    malformed count either: ``SweepPlan.malformed`` and
+    ``SweepRecord.malformed`` hold ``cash_events`` and ``trade_rows`` only,
+    because the plan folds just the two keyed journals. So a corrupt balance
+    line was invisible to every later reader. It is reported HERE rather than
+    as a third ``sweeps.jsonl`` key: the report's ``basis.malformed``
+    ["balances"] is the place that gives the number a meaning, and the wire
+    form of a stored sweep record stays unchanged.
     """
-    latest, _, _, _ = _fold_by_key(
+    latest, malformed, restated, duplicates, lines = _fold_by_key(
         paths.balances_path(env),
         decode=_balance_line_from_jsonable,
         key_of=lambda pair: pair[0],
         row="balances",
     )
-    return [snapshot for _, snapshot in sorted(latest.values(), key=_balance_sort_key)]
+    return BalanceFold(
+        snapshots=[
+            BalanceAt(sweep_id=sweep_id, snapshot=snapshot)
+            for sweep_id, snapshot in sorted(latest.values(), key=_balance_sort_key)
+        ],
+        malformed=malformed,
+        restated=restated,
+        duplicate_lines=duplicates,
+        lines=lines,
+    )
 
 
 def read_sweeps(*, env: str) -> list[codec.SweepRecord]:
     """Every sweep record, one per ``sweep_id``, oldest first."""
-    latest, _, _, _ = _fold_by_key(
+    latest, _, _, _, _ = _fold_by_key(
         paths.sweeps_path(env),
         decode=codec.sweep_from_jsonable,
         key_of=lambda record: record.sweep_id,

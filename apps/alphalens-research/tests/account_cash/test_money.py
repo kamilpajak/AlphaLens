@@ -25,8 +25,9 @@ import math
 import unittest
 from dataclasses import dataclass, fields
 from decimal import Decimal
+from pathlib import Path
 
-from alphalens_pipeline.account_cash import buckets, episodes, money
+from alphalens_pipeline.account_cash import balance_check, buckets, episodes, money, report
 from alphalens_pipeline.account_cash.money import (
     BALANCE_TOLERANCE_ACCT,
     NULL_ACCT_AMOUNT_NOT_REPORTED,
@@ -549,6 +550,53 @@ _PAIR_OUTSIDE_A_CALL = (
 _PAIR_THAT_IS_NOT_MONEY = "def key(event):\n    return (event.uic, event.instrument_symbol)\n"
 
 
+#: Every module of the package that builds a money total. Walked by both
+#: guards below. ``report`` and ``balance_check`` joined when they landed
+#: (#1689, Phase 4's store-side half); the anti-rot test below is what makes
+#: forgetting the next one red rather than silent.
+_SUMMING_MODULES = (money, buckets, episodes, balance_check, report)
+
+#: The four that CONSUME the summer. ``money`` declares it and calls it
+#: nowhere, so it is walked -- its own helpers could still point a pair at the
+#: FX field -- but exempt from the per-module non-vacuity floor.
+_SUMMING_CONSUMERS = tuple(module for module in _SUMMING_MODULES if module is not money)
+
+
+class TheWalkedSetIsEveryModuleThatSums(unittest.TestCase):
+    """Anti-rot. The guards below are only as complete as this list.
+
+    Read off the package's own source rather than maintained by hand: a sixth
+    module calling :func:`acct_sum` would otherwise be unwalked and green,
+    which is how a guard comes to claim a reach it does not have.
+    """
+
+    def _modules_that_sum(self) -> set[str]:
+        package = Path(money.__file__).resolve().parent
+        found: set[str] = set()
+        for source in sorted(package.rglob("*.py")):
+            sites = _cash_event_fields_reaching_money(source.read_text(encoding="utf-8"))
+            if sites.calls:
+                found.add(f"alphalens_pipeline.account_cash.{source.stem}")
+        return found
+
+    def test_every_module_that_calls_the_summer_is_walked(self) -> None:
+        """The direction that matters: a module that builds a total and is NOT
+        walked would be unguarded. ``money`` is walked without calling the
+        summer, because it declares it."""
+        self.assertLessEqual(
+            self._modules_that_sum(), {module.__name__ for module in _SUMMING_MODULES}
+        )
+        self.assertEqual(
+            self._modules_that_sum(), {module.__name__ for module in _SUMMING_CONSUMERS}
+        )
+        self.assertIn(money, _SUMMING_MODULES)
+
+    def test_the_scan_is_not_vacuous(self) -> None:
+        """The positive control for the scan itself: a package it could not
+        read would return an empty set and satisfy nothing."""
+        self.assertGreaterEqual(len(self._modules_that_sum()), 4)
+
+
 class TheFxDisclosureIsNeverSummedIntoAnyTotal(unittest.TestCase):
     """``ConversionRateAccountCurrency`` is a DISCLOSURE, not a cash movement.
 
@@ -562,12 +610,24 @@ class TheFxDisclosureIsNeverSummedIntoAnyTotal(unittest.TestCase):
     ``(amount, currency)`` pair, wherever it is built. The second half is what
     reaches ``episodes.py``, which builds its pairs in the accumulator and in
     the unassigned helper and sums them later from an attribute.
+
+    **The per-module floor is a reach check, not a coverage measure**, and
+    ``report.py`` is the case that shows the difference. Measured 2026-10-26:
+    ``buckets`` reads ``{account_currency, amount_account_currency}``,
+    ``episodes`` and ``balance_check`` read theirs, and ``report`` reads
+    NOTHING with ``calls=6, pairs=0`` -- it sums already-published
+    :class:`AcctAmount` totals, and ``_as_pairs`` puts a bare name in the
+    second slot, which the pair detector does not recognise as a money pair.
+    So ``report.py`` satisfies ``calls + pairs >= 1`` on its call count alone.
+    What shows the guard really reaches it is the injected positive control
+    below, not the floor; a ``pairs >= 1`` floor would not hold for this
+    module at all.
     """
 
     def test_the_fx_disclosure_is_never_summed_into_any_total(self) -> None:
         measured = {
             module.__name__: _cash_event_fields_reaching_money(inspect.getsource(module))
-            for module in (money, buckets, episodes)
+            for module in _SUMMING_MODULES
         }
         # Accumulated BEFORE asserting: a failing subTest skips the rest of
         # its block, so counting inside the loop made the two floors below
@@ -580,6 +640,12 @@ class TheFxDisclosureIsNeverSummedIntoAnyTotal(unittest.TestCase):
         for name, sites in measured.items():
             with self.subTest(module=name):
                 self.assertNotIn("conversion_cost_account_currency", sites.read)
+                # Per MODULE, not only over the union: a module added to the
+                # walked set that builds no total through the one summer is
+                # walked vacuously, and the union's floors below cannot see
+                # it because the other modules satisfy them.
+                if name != money.__name__:
+                    self.assertGreaterEqual(sites.calls + sites.pairs, 1, name)
 
         self.assertEqual(read, set(_SUMMABLE_CASH_EVENT_FIELDS))
         self.assertGreaterEqual(
@@ -653,7 +719,7 @@ class TheFxDisclosureIsNeverSummedIntoAnyTotal(unittest.TestCase):
 class TheSumIsNeverPointedAtTheInstrumentCurrency(unittest.TestCase):
     def test_no_production_sum_reads_the_instrument_currency_amount(self) -> None:
         """``amount`` and ``currency`` are the INSTRUMENT's (memo section 4)."""
-        for module in (money, buckets, episodes):
+        for module in _SUMMING_MODULES:
             with self.subTest(module=module.__name__):
                 read = _cash_event_fields_reaching_money(inspect.getsource(module)).read
                 self.assertNotIn("amount", read)

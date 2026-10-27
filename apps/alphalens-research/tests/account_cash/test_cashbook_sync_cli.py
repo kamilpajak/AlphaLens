@@ -875,7 +875,7 @@ class ARetryCanCarryThePreviousSweepsId(_CashbookCliCase):
         result = self._fail_the_sweep_record()
 
         self.assertEqual(result.exit_code, _EXIT_TRANSIENT)
-        self.assertEqual(len(store.read_balances(env="live")), 1)
+        self.assertEqual(len(store.read_balances(env="live").snapshots), 1)
         self.assertEqual(store.read_sweeps(env="live"), [])
 
     def test_a_plain_re_run_closes_the_rows_and_doubles_the_balance(self) -> None:
@@ -888,7 +888,7 @@ class ARetryCanCarryThePreviousSweepsId(_CashbookCliCase):
         second = self.sync("--format", "json")
 
         self.assertEqual(second.exit_code, 0, second.output)
-        self.assertEqual(len(store.read_balances(env="live")), 2)
+        self.assertEqual(len(store.read_balances(env="live").snapshots), 2)
         self.assertEqual(len(store.read_sweeps(env="live")), 1)
 
     def test_a_retry_under_the_same_id_folds_onto_one_balance_and_one_sweep(self) -> None:
@@ -898,7 +898,7 @@ class ARetryCanCarryThePreviousSweepsId(_CashbookCliCase):
         second = self.sync("--format", "json", "--sweep-id", orphan)
 
         self.assertEqual(second.exit_code, 0, second.output)
-        self.assertEqual(len(store.read_balances(env="live")), 1)
+        self.assertEqual(len(store.read_balances(env="live").snapshots), 1)
         records = store.read_sweeps(env="live")
         self.assertEqual([record.sweep_id for record in records], [orphan])
 
@@ -914,7 +914,7 @@ class ARetryCanCarryThePreviousSweepsId(_CashbookCliCase):
         second = self.sync("--format", "json", "--sweep-id", shifted.isoformat())
 
         self.assertEqual(second.exit_code, 0, second.output)
-        self.assertEqual(len(store.read_balances(env="live")), 1)
+        self.assertEqual(len(store.read_balances(env="live").snapshots), 1)
         self.assertEqual([r.sweep_id for r in store.read_sweeps(env="live")], [orphan])
 
     def test_absent_the_option_nothing_changes_for_a_first_sweep(self) -> None:

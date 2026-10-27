@@ -689,7 +689,7 @@ class AnUnusableSweepKeyIsRefusedBeforeItReachesTheJournal(IsolatedHomeTestCase)
         satisfy every assertion above."""
         store.append_balance(_balance(), env=_LIVE, sweep_id="s1")
         store.append_sweep(_sweep("s1"), env=_LIVE)
-        self.assertEqual(len(store.read_balances(env=_LIVE)), 1)
+        self.assertEqual(len(store.read_balances(env=_LIVE).snapshots), 1)
         self.assertEqual([record.sweep_id for record in store.read_sweeps(env=_LIVE)], ["s1"])
 
     def test_the_sim_refusal_stays_the_outer_gate(self) -> None:
@@ -748,7 +748,7 @@ class TheTradeRowFold(IsolatedHomeTestCase):
 
 class TheBalanceAndSweepJournalsDedupeOnTheSweepId(IsolatedHomeTestCase):
     def test_a_missing_journal_reads_empty(self) -> None:
-        self.assertEqual(store.read_balances(env=_LIVE), [])
+        self.assertEqual(store.read_balances(env=_LIVE).snapshots, [])
         self.assertEqual(store.read_sweeps(env=_LIVE), [])
 
     def test_one_balance_and_one_sweep_record_per_sweep_id(self) -> None:
@@ -760,7 +760,7 @@ class TheBalanceAndSweepJournalsDedupeOnTheSweepId(IsolatedHomeTestCase):
         store.append_balance(_balance(), env=_LIVE, sweep_id="s1")
         store.append_sweep(_sweep("s1"), env=_LIVE)
 
-        self.assertEqual(len(store.read_balances(env=_LIVE)), 1)
+        self.assertEqual(len(store.read_balances(env=_LIVE).snapshots), 1)
         self.assertEqual(len(store.read_sweeps(env=_LIVE)), 1)
         self.assertEqual(
             len(paths.sweeps_path(_LIVE).read_text(encoding="utf-8").strip().splitlines()), 2
@@ -787,7 +787,7 @@ class TheBalanceAndSweepJournalsDedupeOnTheSweepId(IsolatedHomeTestCase):
         store.append_balance(_balance(asof=oldest), env=_LIVE, sweep_id="s1")
 
         self.assertEqual(
-            [snapshot.asof for snapshot in store.read_balances(env=_LIVE)],
+            [at.snapshot.asof for at in store.read_balances(env=_LIVE).snapshots],
             [oldest, middle, newest],
         )
 
@@ -797,16 +797,16 @@ class TheBalanceAndSweepJournalsDedupeOnTheSweepId(IsolatedHomeTestCase):
         store.append_balance(_balance(), env=_LIVE, sweep_id="s2")
         store.append_balance(_balance(cash_balance=1.0), env=_LIVE, sweep_id="s1")
         self.assertEqual(
-            [snapshot.cash_balance for snapshot in store.read_balances(env=_LIVE)],
+            [at.snapshot.cash_balance for at in store.read_balances(env=_LIVE).snapshots],
             [1.0, 20738.68],
         )
 
     def test_a_restated_balance_for_one_sweep_keeps_the_latest(self) -> None:
         store.append_balance(_balance(cash_balance=1.0), env=_LIVE, sweep_id="s1")
         store.append_balance(_balance(cash_balance=2.0), env=_LIVE, sweep_id="s1")
-        balances = store.read_balances(env=_LIVE)
+        balances = store.read_balances(env=_LIVE).snapshots
         self.assertEqual(len(balances), 1)
-        self.assertEqual(balances[0].cash_balance, 2.0)
+        self.assertEqual(balances[0].snapshot.cash_balance, 2.0)
 
     def test_an_absent_balance_money_field_survives_the_journal_as_null(self) -> None:
         """The append path's half of the balance's absent-versus-zero rule. The
@@ -830,7 +830,7 @@ class TheBalanceAndSweepJournalsDedupeOnTheSweepId(IsolatedHomeTestCase):
         # The field memo section 1.7 P5 calls out: it parks a whole day's
         # trading, so a null read as 0.0 reads as "nothing unbooked".
         self.assertIsNone(line["transactions_not_booked"])
-        self.assertEqual(store.read_balances(env=_LIVE), [empty])
+        self.assertEqual([at.snapshot for at in store.read_balances(env=_LIVE).snapshots], [empty])
 
     def test_the_balance_line_carries_the_sweep_key_beside_the_snapshot(self) -> None:
         store.append_balance(_balance(), env=_LIVE, sweep_id="s1")
@@ -843,7 +843,7 @@ class TheBalanceAndSweepJournalsDedupeOnTheSweepId(IsolatedHomeTestCase):
         with paths.balances_path(_LIVE).open("a", encoding="utf-8") as fh:
             fh.write("{not json\n")
         with self.assertLogs("alphalens_pipeline.account_cash.store", level="WARNING"):
-            self.assertEqual(len(store.read_balances(env=_LIVE)), 1)
+            self.assertEqual(len(store.read_balances(env=_LIVE).snapshots), 1)
 
     def test_a_balance_line_whose_sweep_key_is_unusable_is_refused_on_read(self) -> None:
         """The READ side of the key rule, which the write-side guard hides.
@@ -877,9 +877,74 @@ class TheBalanceAndSweepJournalsDedupeOnTheSweepId(IsolatedHomeTestCase):
                 with self.assertLogs(
                     "alphalens_pipeline.account_cash.store", level="WARNING"
                 ) as caught:
-                    rows = store.read_balances(env=_LIVE)
+                    rows = store.read_balances(env=_LIVE).snapshots
                 self.assertEqual(len(rows), 1)
                 self.assertIn("sweep_id", "\n".join(caught.output))
+
+
+class TheBalanceFoldCarriesItsCountersAndTheSweepEachSnapshotBelongsTo(IsolatedHomeTestCase):
+    """``read_balances`` used to throw both away (#1689, Phase 4).
+
+    It returned ``list[BalanceSnapshot]``: the three counters the fold already
+    computed were discarded into ``_, _, _``, and the ``sweep_id`` the journal
+    is KEYED on was popped by the decode and dropped by the comprehension. Its
+    own docstring named Phase 4 as the consumer that would give the counters a
+    meaning, and the balance cross-check is that consumer -- so both halves are
+    published here.
+
+    Why the key matters, and not merely the snapshot: a cash event carries a
+    trade DATE and no timestamp, while the settlement batch fires at about
+    23:48 UTC (memo section 1.7 P5), so the interval between two snapshots is
+    in TRADE DATES taken from the sweep record each one belongs to, never in
+    ``asof`` instants. Without the key there is nothing to join a snapshot to
+    its window on.
+    """
+
+    def test_a_missing_journal_folds_empty_with_zero_counters(self) -> None:
+        fold = store.read_balances(env=_LIVE)
+        self.assertEqual(fold.snapshots, [])
+        self.assertEqual((fold.malformed, fold.restated, fold.lines), (0, 0, 0))
+
+    def test_a_snapshot_carries_the_sweep_it_belongs_to(self) -> None:
+        """**Mutation it catches:** dropping ``sweep_id`` again in the
+        comprehension, which leaves the incremental check unable to find the
+        trade-date interval its snapshots were read over."""
+        older = dt.datetime(2026, 10, 8, 0, 31, tzinfo=dt.UTC)
+        store.append_balance(_balance(asof=older), env=_LIVE, sweep_id="s1")
+        store.append_balance(_balance(cash_balance=1.0), env=_LIVE, sweep_id="s2")
+
+        fold = store.read_balances(env=_LIVE)
+        self.assertEqual([at.sweep_id for at in fold.snapshots], ["s1", "s2"])
+        self.assertEqual([at.snapshot.cash_balance for at in fold.snapshots], [20738.68, 1.0])
+
+    def test_a_corrupt_balance_line_is_now_counted_and_not_only_logged(self) -> None:
+        """**Mutation it catches:** the ``latest, _, _, _ =`` discard coming
+        back, which makes a corrupt balance line invisible to the cross-check
+        that is now its only consumer."""
+        store.append_balance(_balance(), env=_LIVE, sweep_id="s1")
+        with paths.balances_path(_LIVE).open("a", encoding="utf-8") as fh:
+            fh.write("{not json\n")
+
+        with self.assertLogs("alphalens_pipeline.account_cash.store", level="WARNING"):
+            fold = store.read_balances(env=_LIVE)
+
+        self.assertEqual(fold.malformed, 1)
+        self.assertEqual(fold.lines, 2)
+        self.assertEqual(len(fold.snapshots), 1)
+
+    def test_a_restated_balance_is_counted_as_one_correction(self) -> None:
+        """The counter the journal form exists for, on the third journal.
+
+        ``cash_events.jsonl`` and ``trade_rows.jsonl`` have reported
+        ``restated`` since Phase 3; ``balances.jsonl`` computed it and dropped
+        it, so a balance snapshot rewritten under one ``sweep_id`` was a
+        correction nothing could report."""
+        store.append_balance(_balance(cash_balance=1.0), env=_LIVE, sweep_id="s1")
+        store.append_balance(_balance(cash_balance=2.0), env=_LIVE, sweep_id="s1")
+
+        fold = store.read_balances(env=_LIVE)
+        self.assertEqual((fold.restated, fold.lines), (1, 2))
+        self.assertEqual([at.snapshot.cash_balance for at in fold.snapshots], [2.0])
 
 
 class ARestatementSurvivesEveryLaterRead(IsolatedHomeTestCase):
@@ -923,6 +988,186 @@ class AReadIsAllowedOnEveryEnvironment(IsolatedHomeTestCase):
                 with self.assertRaises(ValueError) as ctx:
                     reader(env="prod")
                 self.assertIn("prod", str(ctx.exception))
+
+
+class TheFoldAccountsForEveryLineItRead(IsolatedHomeTestCase):
+    """``lines == len(records) + malformed + duplicate_lines``, exactly (F3).
+
+    ``lines`` and ``restated`` could not be combined into that statement:
+    ``restated`` counts KEYS whose payload changed, so a key corrected twice
+    is one restatement over two duplicate lines, and an identical re-append is
+    a duplicate line that is no restatement at all. The missing term is
+    therefore its own counter.
+
+    What it is FOR: the report's row partition splits the folded records by the
+    window and used to compare the three parts against ``len(records)`` -- the
+    length of the very list it had just split, which no dropped row can
+    refute. The three counters here are incremented while the journal is READ,
+    on statements separate from the one that puts a record in the list, so
+    they are a second path to the same number and a record lost between the
+    two breaks the identity.
+    """
+
+    def _fold_with_every_shape(self) -> store.CashEventFold:
+        """One journal holding all four line shapes at once.
+
+        A fixture uniform in the column under test cannot tell a read from a
+        constant, and each shape moves a different counter.
+        """
+        store.append_cash_events([_event("1"), _event("2")], env=_LIVE)
+        store.append_cash_events([_event("1")], env=_LIVE)  # identical re-append
+        store.append_cash_events(
+            [_event("2", amount_account_currency=-99.99)], env=_LIVE
+        )  # restatement
+        with paths.cash_events_path(_LIVE).open("a", encoding="utf-8") as fh:
+            fh.write("not json at all\n")
+        return store.read_cash_events(env=_LIVE)
+
+    def test_a_missing_journal_accounts_for_nothing(self) -> None:
+        fold = store.read_cash_events(env=_LIVE)
+
+        self.assertEqual(fold.duplicate_lines, 0)
+        self.assertEqual(fold.lines, 0)
+
+    def test_distinct_keys_leave_no_duplicate_line(self) -> None:
+        """The negative control: a counter that answered ``lines`` would
+        satisfy every case below."""
+        store.append_cash_events([_event("1"), _event("2"), _event("3")], env=_LIVE)
+
+        fold = store.read_cash_events(env=_LIVE)
+
+        self.assertEqual(fold.duplicate_lines, 0)
+        self.assertEqual((fold.lines, len(fold.events)), (3, 3))
+
+    def test_an_identical_re_append_is_a_duplicate_line_and_no_restatement(self) -> None:
+        """The shape ``restated`` deliberately does NOT count."""
+        store.append_cash_events([_event("1")], env=_LIVE)
+        store.append_cash_events([_event("1")], env=_LIVE)
+
+        fold = store.read_cash_events(env=_LIVE)
+
+        self.assertEqual(fold.duplicate_lines, 1)
+        self.assertEqual(fold.restated, 0)
+        self.assertEqual((fold.lines, len(fold.events)), (2, 1))
+
+    def test_one_key_restated_twice_is_two_duplicate_lines_and_one_restatement(self) -> None:
+        """The discriminator between the two counters: ``restated`` counts
+        keys, this counts lines, and here they differ."""
+        for amount in (-51.49, -61.49, -71.49):
+            store.append_cash_events([_event("1", amount_account_currency=amount)], env=_LIVE)
+
+        fold = store.read_cash_events(env=_LIVE)
+
+        self.assertEqual(fold.duplicate_lines, 2)
+        self.assertEqual(fold.restated, 1)
+        self.assertEqual((fold.lines, len(fold.events)), (3, 1))
+
+    def test_a_malformed_line_is_not_a_duplicate(self) -> None:
+        """It never reached a key, so it belongs to the other term."""
+        store.append_cash_events([_event("1")], env=_LIVE)
+        with paths.cash_events_path(_LIVE).open("a", encoding="utf-8") as fh:
+            fh.write("not json at all\n")
+
+        fold = store.read_cash_events(env=_LIVE)
+
+        self.assertEqual((fold.malformed, fold.duplicate_lines), (1, 0))
+        self.assertEqual((fold.lines, len(fold.events)), (2, 1))
+
+    def test_the_identity_holds_over_a_journal_with_every_shape_in_it(self) -> None:
+        """5 lines: two new keys, one identical re-append, one restatement and
+        one line that is not JSON -- so 2 records, 1 malformed, 2 duplicates.
+
+        **Mutation it catches:** counting a malformed line as a duplicate, or
+        a restatement as not one. Both leave the three counters adding up to
+        something other than ``lines``.
+        """
+        fold = self._fold_with_every_shape()
+
+        self.assertEqual(fold.lines, 5)
+        self.assertEqual(len(fold.events), 2)
+        self.assertEqual(fold.malformed, 1)
+        self.assertEqual(fold.duplicate_lines, 2)
+        self.assertEqual(fold.restated, 1)
+        self.assertEqual(len(fold.events) + fold.malformed + fold.duplicate_lines, fold.lines)
+
+    def test_the_other_two_journals_account_for_their_lines_the_same_way(self) -> None:
+        """One fold function serves all three journals, so the term belongs to
+        all three: a counter on only the one journal a consumer reads today is
+        a counter that drifts when the next one gets a reader."""
+        store.append_trade_rows([_trade("1"), _trade("1")], env=_LIVE)
+        store.append_balance(_balance(), env=_LIVE, sweep_id="s1")
+        store.append_balance(_balance(), env=_LIVE, sweep_id="s1")
+
+        trades = store.read_trade_rows(env=_LIVE)
+        balances = store.read_balances(env=_LIVE)
+
+        self.assertEqual((trades.duplicate_lines, trades.lines, len(trades.rows)), (1, 2, 1))
+        self.assertEqual(
+            (balances.duplicate_lines, balances.lines, len(balances.snapshots)), (1, 2, 1)
+        )
+
+
+class TheSweepWindowIsParsedInExactlyOnePlace(unittest.TestCase):
+    """One parser for both readers of a stored window (F8).
+
+    ``report.coverage_of`` decides whether a window EXISTS at all and
+    ``balance_check.incremental_check`` decides which interval to SUM, so the
+    two must answer the same thing about the same record. They held two
+    verbatim copies of the same function, which behave identically on the day
+    they are written and drift on the day the rule changes -- the argument
+    ``store.assert_writable`` already makes about the write guard.
+
+    A plain ``TestCase``: this resolves no path and reads no store.
+    """
+
+    def test_a_well_formed_window_comes_back_as_two_dates(self) -> None:
+        self.assertEqual(
+            store.sweep_window(_sweep(since="2026-08-01", until="2026-08-10")),
+            (dt.date(2026, 8, 1), dt.date(2026, 8, 10)),
+        )
+
+    def test_a_window_that_will_not_parse_is_no_window(self) -> None:
+        """The codec takes ``since`` / ``until`` as free text, so a
+        hand-edited line decodes and only the parse can refuse it."""
+        self.assertIsNone(store.sweep_window(_sweep(since="last tuesday", until="whenever")))
+
+    def test_a_window_that_ends_before_it_starts_is_no_window(self) -> None:
+        """Both bounds parse and the pair is still not an interval."""
+        self.assertIsNone(store.sweep_window(_sweep(since="2026-08-10", until="2026-08-01")))
+
+    def test_a_single_day_window_is_a_window(self) -> None:
+        """The negative control for the test above: a refusal written ``since
+        < until`` would refuse every one-day sweep, which is the ordinary
+        daily shape."""
+        self.assertEqual(
+            store.sweep_window(_sweep(since="2026-08-10", until="2026-08-10")),
+            (dt.date(2026, 8, 10), dt.date(2026, 8, 10)),
+        )
+
+    def test_neither_reader_declares_a_window_parser_of_its_own(self) -> None:
+        """The duplication gate, keyed on the OPERATION and on the name.
+
+        The name both copies carried is gated because that is how the two came
+        to exist; the parse itself is gated because a rename would carry the
+        duplication past a name-only check. Both modules must instead reach
+        the shared parser.
+
+        **Mutation it catches:** re-adding a private window parser to either
+        module, under its old name or a new one.
+        """
+        from alphalens_pipeline.account_cash import balance_check, report
+
+        # The "reaches it" half is spelled per module, not as a bare
+        # ``"sweep_window" in source``: ``balance_check`` declares
+        # ``NULL_SWEEP_WINDOW_NOT_FOUND = "sweep_window_not_found"``, so that
+        # substring is present there whether or not the helper is ever called.
+        reaches_it = {report: "store.sweep_window", balance_check: "sweep_window(record)"}
+        for module, call in reaches_it.items():
+            with self.subTest(module=module.__name__):
+                source = inspect.getsource(module)
+                self.assertNotIn("def _window_of", source)
+                self.assertNotIn("fromisoformat(record.", source)
+                self.assertIn(call, source)
 
 
 if __name__ == "__main__":

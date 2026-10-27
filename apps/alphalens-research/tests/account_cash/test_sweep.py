@@ -269,7 +269,7 @@ class TheSweepRecordPublishesWhatTheVendorServed(IsolatedHomeTestCase):
     def test_a_read_that_carried_no_balance_appends_none(self) -> None:
         record = sweep.apply_sweep(_plan(_read(balance=None)), now=_NOW)
         self.assertEqual(record.appended["balances"], 0)
-        self.assertEqual(store.read_balances(env=_LIVE), [])
+        self.assertEqual(store.read_balances(env=_LIVE).snapshots, [])
 
 
 class OneInstantIsOneSweepWhateverOffsetItArrivesWith(IsolatedHomeTestCase):
@@ -303,7 +303,7 @@ class OneInstantIsOneSweepWhateverOffsetItArrivesWith(IsolatedHomeTestCase):
 
         records = store.read_sweeps(env=_LIVE)
         self.assertEqual([record.sweep_id for record in records], [_NOW.isoformat()])
-        self.assertEqual(len(store.read_balances(env=_LIVE)), 1)
+        self.assertEqual(len(store.read_balances(env=_LIVE).snapshots), 1)
 
     def test_the_id_is_the_utc_rendering_of_the_instant(self) -> None:
         """Asserted against a literal rather than against ``now.isoformat()``,
@@ -488,12 +488,12 @@ class ARetryAfterAPartialSweepLeavesOneRecordPerSweep(IsolatedHomeTestCase):
                 sweep.apply_sweep(_plan(), now=_NOW)
 
         self.assertEqual(store.read_sweeps(env=_LIVE), [])
-        self.assertEqual(len(store.read_balances(env=_LIVE)), 1)
+        self.assertEqual(len(store.read_balances(env=_LIVE).snapshots), 1)
 
         sweep.apply_sweep(_plan(), now=_NOW)
 
         self.assertEqual(len(store.read_sweeps(env=_LIVE)), 1)
-        self.assertEqual(len(store.read_balances(env=_LIVE)), 1)
+        self.assertEqual(len(store.read_balances(env=_LIVE).snapshots), 1)
         self.assertEqual(len(store.read_cash_events(env=_LIVE).events), len(_EVENTS))
 
     def test_the_balance_journal_holds_two_lines_and_one_record(self) -> None:
@@ -504,7 +504,7 @@ class ARetryAfterAPartialSweepLeavesOneRecordPerSweep(IsolatedHomeTestCase):
 
         lines = paths.balances_path(_LIVE).read_text(encoding="utf-8").strip().splitlines()
         self.assertEqual(len(lines), 2)
-        self.assertEqual(len(store.read_balances(env=_LIVE)), 1)
+        self.assertEqual(len(store.read_balances(env=_LIVE).snapshots), 1)
 
 
 class OnSimTheSweepRefusesAndWritesNothing(IsolatedHomeTestCase):

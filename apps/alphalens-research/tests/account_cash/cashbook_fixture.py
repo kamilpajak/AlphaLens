@@ -586,6 +586,44 @@ def synthetic_closes_nothing(*, amount: float, booked: float) -> tuple[TradeRow,
     )
 
 
+#: Buy 10, then a fill whose quantity cannot be read, and NO close. The span
+#: holds 10 real shares and also carries the sticky ``imbalanced`` flag, so
+#: :data:`~alphalens_pipeline.account_cash.episodes.EXCLUSION_ORDER`'s
+#: first-hit rule stamps it ``imbalanced`` rather than ``open``.
+#:
+#: Why the capture cannot settle this: its one null-amount fill (``MARA``
+#: 6827730144) sits inside a round trip that completes, so every episode there
+#: is either flat-and-imbalanced or non-flat-and-``open``, and none is both
+#: non-flat AND carrying a flag. That combination is the one the open
+#: cost-basis line drops while the position is still at risk.
+SYNTHETIC_HELD_BUT_IMBALANCED_UIC = 990017
+SYNTHETIC_HELD_BUT_IMBALANCED_COST_BASIS = -1000.00
+
+
+def synthetic_held_but_imbalanced() -> tuple[TradeRow, ...]:
+    return (
+        _synthetic_fill(
+            uic=SYNTHETIC_HELD_BUT_IMBALANCED_UIC,
+            symbol="HELDIMB:xnas",
+            trade_id="9900170001",
+            amount=10.0,
+            booked=SYNTHETIC_HELD_BUT_IMBALANCED_COST_BASIS,
+            minute=0,
+        ),
+        trade_like(
+            _synthetic_fill(
+                uic=SYNTHETIC_HELD_BUT_IMBALANCED_UIC,
+                symbol="HELDIMB:xnas",
+                trade_id="9900170002",
+                amount=0.0,
+                booked=-2.00,
+                minute=5,
+            ),
+            amount=None,
+        ),
+    )
+
+
 #: An opening fill the venue calls ``ToOpen`` while its ``Amount`` is NEGATIVE.
 #: On the capture the word and the sign agree on 41 of 41 rows, so only a row
 #: where they disagree can show which of the two the walk reads.
