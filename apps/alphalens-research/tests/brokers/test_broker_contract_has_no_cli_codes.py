@@ -43,7 +43,10 @@ CLI_OWNED_CODES = frozenset(
         "venue_unsupported",
         "stream_metrics_missing",
         "cashbook_sync_refused",
+        "cashbook_totals_refused",
         "cashbook_sweep_busy",
+        "cashbook_store_unreadable",
+        "cashbook_identity_broken",
         "unclassified",
     }
 )

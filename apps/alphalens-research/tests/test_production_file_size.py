@@ -163,7 +163,34 @@ BASELINE: dict[str, int] = {
     # `acct_resting_on` when the balance check became its second user, and
     # took its 25 lines with it. Lowered rather than kept as slack, which is
     # what this table asks for when a file shrinks.
-    "apps/alphalens-pipeline/alphalens_pipeline/account_cash/report.py": 1145,
+    #
+    # Raised from 1145 to 1181 for the P4-c review findings. 36 lines, of which
+    # 25 are comment: the residual's term list became a named constant the
+    # subtraction reads and the record PUBLISHES (`residual_terms`), because the
+    # prose label said "the lines above" while one of the terms -- the deposits
+    # -- is rendered below the line, so the label was wrong by exactly
+    # 24 000.00 PLN and no arithmetic test could see it.
+    #
+    # Raised again, from 1181 to 1252, for the second of those findings: a
+    # window with no day in common with any sweep now refuses
+    # (`window_never_swept`) instead of answering 0.00 over 0 rows beside a
+    # reconciling balance check. 71 lines, 52 of them comment, and the
+    # expensive half to explain is why the overlap is measured against every
+    # ASKED window rather than against `swept_through` -- the watermark stops
+    # at the first contiguous run, so the two readings disagree on a store with
+    # a hole, which is where one of them refuses days the store holds rows for.
+    #
+    # Raised again, by 7 to 1259, for the third: the `before_first_sweep`
+    # refusal carries the earliest answerable `--since`. All 7 are comment bar
+    # the two-line raise -- the published recovery told an operator to read
+    # `coverage.history_begins` off a report that refuses, so the note says why
+    # the watermark cannot be anywhere but on the refusal.
+    #
+    # Raised again, by 10 to 1269, for the fourth: `CashBookIdentityError` now
+    # carries the NAME of the partition that broke, so the command reporting it
+    # (`cashbook_identity_broken`) does not have to parse the prose to say more
+    # than "something broke". The message itself is unchanged.
+    "apps/alphalens-pipeline/alphalens_pipeline/account_cash/report.py": 1269,
     # Raised again, by 8, to say that the raise page's ticker fallback is
     # unreachable by construction. It sits beside the stop-PLACED page's
     # fallback, which looks identical and IS reachable and tested, so without

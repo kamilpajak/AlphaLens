@@ -35,6 +35,7 @@ BROKER_CLI = REPO_ROOT / "apps" / "alphalens-pipeline" / "alphalens_cli" / "comm
 
 _SECTION_START = "#### `intent_malformed` and `pick_not_writable` publish a `reason` too"
 _CASHBOOK_SECTION_START = "#### `cashbook_sync_refused` publishes a `reason` too"
+_TOTALS_SECTION_START = "#### `cashbook_totals_refused` publishes a `reason` too"
 _ROW_RE = re.compile(r"^\|\s*(?:`([a-z_]+)`)?\s*\|\s*`([a-z_]+)`\s*\|", re.MULTILINE)
 _NOT_WRITABLE = intent_door.NOT_WRITABLE
 
@@ -86,6 +87,21 @@ def cashbook_emitted_reasons() -> dict[str, set[str]]:
     return {"cashbook_sync_refused": {SIM_REPORTS_UNUSABLE, SIM_STORE_REFUSED}}
 
 
+def cashbook_totals_emitted_reasons() -> dict[str, set[str]]:
+    """The reasons the totals command can publish, off the report's own tuple.
+
+    A SECOND function rather than a third entry in the one above, because
+    :func:`published_reasons` slices from its section heading to the next
+    ``####`` -- one call can never return two sections, so one comparison can
+    never cover two. Read off ``TOTALS_REFUSALS`` because the command publishes
+    ``CashBookTotalsRefusedError.reason`` and spells no reason at its own call
+    site; a literal here would agree with a renamed constant.
+    """
+    from alphalens_pipeline.account_cash.report import TOTALS_REFUSALS
+
+    return {"cashbook_totals_refused": set(TOTALS_REFUSALS)}
+
+
 class TheReasonTableAndTheCodeAgree(unittest.TestCase):
     def test_the_table_was_parsed_at_all(self) -> None:
         """Positive control: an empty parse would make the comparison vacuous."""
@@ -110,6 +126,19 @@ class TheReasonTableAndTheCodeAgree(unittest.TestCase):
 
     def test_every_cashbook_reason_is_published_and_nothing_else_is(self) -> None:
         self.assertEqual(published_reasons(_CASHBOOK_SECTION_START), cashbook_emitted_reasons())
+
+    def test_the_totals_table_was_parsed_at_all(self) -> None:
+        """Positive control for the third section, which sits under its own
+        ``####`` heading and is therefore outside both slices above."""
+        published = published_reasons(_TOTALS_SECTION_START)
+
+        self.assertEqual(set(published), {"cashbook_totals_refused"})
+        self.assertEqual(len(published["cashbook_totals_refused"]), 4)
+
+    def test_every_totals_reason_is_published_and_nothing_else_is(self) -> None:
+        self.assertEqual(
+            published_reasons(_TOTALS_SECTION_START), cashbook_totals_emitted_reasons()
+        )
 
 
 if __name__ == "__main__":

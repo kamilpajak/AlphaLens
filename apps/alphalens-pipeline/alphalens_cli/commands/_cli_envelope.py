@@ -156,11 +156,43 @@ _CLI_FAILURE_CODES: Mapping[str, FailureCode] = {
             ),
         ),
         FailureCode(
+            name="cashbook_totals_refused",
+            retryable=False,
+            meaning=(
+                "The cash book will not answer this window: the instance is not LIVE, "
+                "no sweep has ever covered any window, or --since is earlier than the "
+                "first one that did. `details.reason` names which and `details.env` "
+                "names the instance. A refusal rather than a smaller number, which "
+                "would read as a complete answer."
+            ),
+        ),
+        FailureCode(
             name="cashbook_sweep_busy",
             retryable=True,
             meaning=(
                 "Another sweep holds this instance's cash-book lock. Nothing was "
                 "appended, so re-running is safe. `details.lock` names the file."
+            ),
+        ),
+        FailureCode(
+            name="cashbook_store_unreadable",
+            retryable=True,
+            meaning=(
+                "A cash-book journal, or the store root, could not be READ "
+                "(permissions, I/O). The reading commands write nothing, so the same "
+                "command answers once the cause clears. `details.journal` names the "
+                "file when the failure identified one."
+            ),
+        ),
+        FailureCode(
+            name="cashbook_identity_broken",
+            retryable=False,
+            meaning=(
+                "A published partition over the stored cash book does not hold, so no "
+                "number is published at all — a number beside a broken identity is read "
+                "as the number. `details.identity` names which partition. NOT retryable "
+                "although nothing was written: the same store answers the same way, so "
+                "a row is missing or doubled and somebody has to look."
             ),
         ),
         FailureCode(

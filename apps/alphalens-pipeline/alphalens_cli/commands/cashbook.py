@@ -1,38 +1,55 @@
-"""CLI: ``alphalens cashbook`` — the account's own cash book (#1689, memo Phase 3).
+"""CLI: ``alphalens cashbook`` — the account's own cash book (#1689, memo 3-4).
 
     alphalens cashbook sync --since D --until D [--env sim|live] [--dry-run]
         [--format human|json]  — read the account's bookings, trades and
         balance for a window, fold them against the store, and append what is
         new. ``--dry-run`` plans and echoes, and writes nothing.
 
+    alphalens cashbook totals --since D --until D [--env sim|live]
+        [--format human|json]  — what the money did over one window, off the
+        STORE alone. Reads no vendor, writes nothing.
+
 **What this group answers, and what it does not.** ``/edge`` asks whether the
 pipeline SELECTS well, over every candidate of every brief; ``broker trades``
 answers per PICK. Neither answers what the ACCOUNT's own money did, which is
-what this store is for. ``sync`` is the acquisition half only: it publishes
-SWEEP FACTS — the window asked for, the window the vendor served, rows read,
-rows appended, rows already present, restated, malformed — and no money total,
-no bucket and no profit-and-loss number. Those are memo Phase 4, and
-publishing one now inside ``alphalens.cashbook.sync/v1`` would mean changing
-the meaning of a published field inside a major version.
+what this store is for.
+
+**The two commands are the two halves, and each publishes only its own.**
+``sync`` is acquisition: SWEEP FACTS — the window asked for, the window the
+vendor served, rows read, appended, already present, restated, malformed — and
+no money total, no bucket and no profit-and-loss number, because publishing
+one inside ``alphalens.cashbook.sync/v1`` would mean changing the meaning of a
+published field inside a major version. ``totals`` is the answer: one set of
+money lines, each with the basis it rests on, rendered off the record
+:func:`~alphalens_pipeline.account_cash.report.build_totals` returns. It
+computes no money of its own, and it refuses a window the store cannot speak
+for rather than answering a smaller number.
 
 **The envelope and the failure contract are the broker group's** (#1379,
 #1389), shared through :mod:`alphalens_cli.commands._cli_envelope`: ``--format
 human|json``, exactly one strict JSON value on stdout or none at all, and a
-refusal as one JSON object on stderr with stdout empty. Two codes are this
-group's own, both CLI-owned (the contract package never learns a CLI concept,
-#1122): ``cashbook_sync_refused`` with a closed ``details.reason`` vocabulary,
-and ``cashbook_sweep_busy``, which is RETRYABLE because nothing was appended.
+refusal as one JSON object on stderr with stdout empty. Five codes are this
+group's own, all CLI-owned (the contract package never learns a CLI concept,
+#1122): ``cashbook_sync_refused`` and ``cashbook_totals_refused``, each with
+its own closed ``details.reason`` vocabulary; ``cashbook_sweep_busy``, which is
+RETRYABLE because nothing was appended; ``cashbook_store_unreadable``, also
+retryable, for a journal this process cannot read; and
+``cashbook_identity_broken``, which is not, because a store that contradicts
+itself answers the same way on every re-run.
 
 **The order of the body is load-bearing.** ``--format`` is settled first, so
 every refusal after it renders the way the caller asked; the window is parsed
-and bounded before a vendor is touched; and the JSON body is rendered BEFORE
-the append, so a body that cannot be rendered strictly is a refusal rather than
-a failure report for a write that already happened — the
+and bounded before a vendor is touched; and ``sync``'s JSON body is rendered
+BEFORE the append, so a body that cannot be rendered strictly is a refusal
+rather than a failure report for a write that already happened — the
 ``write_outcome_unknown`` shape.
 
-**This command places nothing.** It holds a broker only to READ it, and
+**Neither command places anything, and ``totals`` holds no broker at all.**
+``sync`` holds one only to READ it;
 ``tests/brokers/test_broker_cli_places_nothing.py`` walks this module to keep
-it so.
+it so, and ``tests/account_cash/test_cashbook_totals_cli.py`` pins that
+``totals`` builds none, because a window it cannot answer offline is a window
+it refuses.
 
 Heavy imports stay inside the command body (lazy-CLI doctrine, see
 ``apps/alphalens-pipeline/CLAUDE.md``): the 15-minute edgar-detect timer pays
@@ -51,6 +68,7 @@ from alphalens_cli.commands._cli_envelope import (
     _FORMAT_JSON,
     _FORMAT_OPTION,
     _OUTPUT_FORMAT,
+    _emit_json,
     _envelope,
     _fail_from_broker_error,
     _fail_with,
@@ -59,13 +77,16 @@ from alphalens_cli.commands._cli_envelope import (
 )
 
 _SYNC_SCHEMA = "alphalens.cashbook.sync/v1"
+_TOTALS_SCHEMA = "alphalens.cashbook.totals/v1"
 
 cashbook_app = typer.Typer(
     name="cashbook",
     help=(
-        "The account's own cash book — what the money did (#1689). Reads LIVE; "
-        "on SIM the report endpoints answer with canned rows from other accounts, "
-        "so a sweep refuses rather than store fiction."
+        "The account's own cash book — what the money did (#1689). `sync` reads the "
+        "account and stores the window; `totals` answers one window off the store. "
+        "LIVE only: on SIM the report endpoints serve canned rows from other "
+        "accounts, so a sweep refuses rather than store fiction and a total refuses "
+        "rather than sum an empty store."
     ),
     no_args_is_help=True,
 )
@@ -74,9 +95,11 @@ _CASHBOOK_ENV_OPTION = typer.Option(
     None,
     "--env",
     help="Broker instance to read and store under: 'sim' or 'live' (ADR 0016). "
-    "Default: $ALPHALENS_BROKER_ENVIRONMENT, else sim. 'live' additionally composes "
-    "the rails + EnvironmentFile of the installed LIVE unit, so the command works in "
-    "a plain shell. A sweep stores only under 'live'.",
+    "Default: $ALPHALENS_BROKER_ENVIRONMENT, else sim. 'live' also composes the "
+    "installed LIVE unit's environment, so either command works in a plain shell: "
+    "required by 'sync', best-effort for 'totals', which holds no broker. The cash "
+    "book exists only under 'live' — a sweep stores nothing else, and a total "
+    "refuses anything else rather than sum an empty store.",
 )
 
 _SINCE_OPTION = typer.Option(
@@ -89,6 +112,21 @@ _UNTIL_OPTION = typer.Option(
     ...,
     "--until",
     help="Last booking date to read, YYYY-MM-DD (inclusive).",
+)
+
+_TOTALS_SINCE_OPTION = typer.Option(
+    ...,
+    "--since",
+    help="First booking date the report covers, YYYY-MM-DD (inclusive). Earlier than the "
+    "store's own first swept day is refused, never answered smaller.",
+)
+
+_TOTALS_UNTIL_OPTION = typer.Option(
+    ...,
+    "--until",
+    help="Last booking date the report covers, YYYY-MM-DD (inclusive). Later than the "
+    "last swept day is answered, with the shortfall on the coverage line; a window no "
+    "sweep covers a single day of is refused, never answered as zeros.",
 )
 
 _DRY_RUN_OPTION = typer.Option(
@@ -291,6 +329,273 @@ def _render_sync_human(body: dict[str, Any]) -> None:
         _row("journals", f"{name:<12} {path}")
 
 
+#: Width of the TOTALS fact rows' label column: the widest label that body
+#: publishes. Its own constant rather than ``_LABEL_WIDTH``, which is the
+#: widest label of the SYNC body -- one character narrower, so sharing it
+#: would start the ``fills_unassigned`` row a character late while every other
+#: row lined up.
+_TOTALS_LABEL_WIDTH = len("fills_unassigned")
+
+#: The word for a published null and for an empty list. ``null`` and ``[]``
+#: are what the JSON body says, and a human renderer printing JSON literals is
+#: a serialiser wearing a renderer's name. ONE word for both, because they say
+#: the same thing to an operator -- there is nothing here.
+_NOT_STATED = "none"
+
+#: The eight published money lines, in memo section 6's render order, as
+#: ``(body field, label)``. The ORDER is load-bearing twice over: the deposits
+#: sit BELOW the subtotal because 24 000 PLN of funding is the easiest number
+#: in this repo to misread as profit, and the cost basis of what is still open
+#: is its own line because it is not realized money.
+#: The lines that ADD UP, in the order they add up in. Four terms, the rule,
+#: the subtotal, the deposits, the rule, the sum -- so a reader who totals the
+#: block above each rule gets the number the rule carries.
+_TOTALS_MONEY_LINES: tuple[tuple[str, str], ...] = (
+    ("net_closed_acct", "net on closed episodes"),
+    ("income_acct", "dividends and withholding tax"),
+    ("unclassified_acct", "unclassified cash events"),
+    ("residual_acct", "residual the named lines leave"),
+    ("subtotal_acct", "trading and income subtotal"),
+    ("deposits_acct", "deposits and withdrawals"),
+    ("cash_book_sum_acct", "cash book sum"),
+)
+
+#: Money the report states but does not ADD, printed below the sum and outside
+#: both rules. The open cost basis answers as of the store's watermark while
+#: every line above answers as of the window, so it is not a term of either
+#: derived line -- and while it sat among the terms, a reader who totalled the
+#: block was wrong by exactly its value (measured: the four terms give
+#: -7827.16 at the 2026-09-12 cut, the five gave -11422.02, and the rule says
+#: -7827.16).
+_TOTALS_STATED_LINES: tuple[tuple[str, str], ...] = (
+    ("cost_basis_open_acct", "cost basis of open episodes"),
+)
+
+#: What each money line's row count COUNTS, and what the number is not. The
+#: counts are in two spaces -- episodes for the first two lines, booking rows
+#: for the rest -- and a count in one space printed beside a number in another
+#: is this repo's own named defect.
+_TOTALS_MONEY_NOTES: dict[str, str] = {
+    "net_closed_acct": "episodes, after commission and exchange fee",
+    "cost_basis_open_acct": "episodes, not realized",
+    "income_acct": "rows",
+    "unclassified_acct": "rows",
+    # The terms themselves are appended from the RECORD (see `_money_note`):
+    # one of them -- the deposits -- is rendered BELOW this line, so a note
+    # that said "the lines above" described a number 24 000.00 PLN away from
+    # the one it was printed beside.
+    "residual_acct": "rows, the window's cash book sum less",
+    "subtotal_acct": "rows",
+    "deposits_acct": "rows, not P&L",
+    "cash_book_sum_acct": "rows",
+}
+
+#: The money line whose row count is not the whole story: it carries its own
+#: as-of (the cost of a position still open is as-of the last day the store can
+#: speak for, not the window's end) and the count of spans still holding shares
+#: that the amount leaves out.
+_COST_BASIS_FIELD = "cost_basis_open_acct"
+
+#: The money line whose note names the OTHER lines it was computed from. Its
+#: terms come off the record's own ``residual_terms``, never from a list here:
+#: the deposits are one of them and are rendered below this line, so a note
+#: spelled in the renderer is a sentence that was true when it was written and
+#: wrong by 24 000.00 PLN after the deposits moved under the subtotal.
+_RESIDUAL_FIELD = "residual_acct"
+
+
+def _stated(value: Any) -> str:
+    """One published scalar, with a word for the absent case."""
+    return _NOT_STATED if value is None else str(value)
+
+
+def _joined(values: list[str]) -> str:
+    """A published list of words, with a word for the empty case.
+
+    Two spaces between them rather than a comma, so each word stays bounded by
+    whitespace: a reader looking for one of them finds it whole.
+    """
+    return "  ".join(values) if values else _NOT_STATED
+
+
+def _fact(label: str, rest: str) -> None:
+    typer.echo(f"{label:<{_TOTALS_LABEL_WIDTH}} {rest}")
+
+
+def _named_terms(terms: list[str]) -> str:
+    """A published list of line names, as the last clause of a note reads.
+
+    Commas and one ``and``, because this is the tail of an English sentence
+    rather than a column of counts. Each name stays bounded by whitespace or a
+    comma, so a reader looking for one of them finds it whole.
+    """
+    if len(terms) < 2:
+        return _joined(terms)
+    return f"{', '.join(terms[:-1])} and {terms[-1]}"
+
+
+def _money_note(field: str, body: dict[str, Any]) -> str:
+    """The row count one money line rests on, and what it is not."""
+    note = f"{body[field]['rows']} {_TOTALS_MONEY_NOTES[field]}"
+    if field == _COST_BASIS_FIELD:
+        return (
+            f"{note}, as of {_stated(body['cost_basis_open_asof'])}, "
+            f"{body['cost_basis_open_excluded']} more held and not on this line"
+        )
+    if field == _RESIDUAL_FIELD:
+        # From the RECORD: it states which lines its own subtraction took off,
+        # so adding or removing a term changes this note instead of leaving it
+        # describing the subtraction the report used to make.
+        return f"{note} {_named_terms(body['residual_terms'])}"
+    return note
+
+
+def _render_totals_money(body: dict[str, Any]) -> None:
+    """Seven lines that add up, then the one the report states but does not add.
+
+    Both widths are DERIVED -- from the widest published label and the widest
+    rendered amount, over BOTH blocks so the two share one column -- so a
+    renamed line or a null value (which renders as its reason, and a reason is
+    longer than a number) moves the column instead of overflowing a literal.
+
+    The split is the point: everything above a rule totals to the number that
+    rule carries. The open cost basis does not belong to either total, so it
+    goes below the sum rather than among the terms.
+    """
+    every = _TOTALS_MONEY_LINES + _TOTALS_STATED_LINES
+    label_width = max(len(label) for _field, label in every)
+    money_width = max(len(body[field]["value_rendered"]) for field, _label in every)
+    rule = label_width + 1 + money_width
+
+    def emit(field: str, label: str) -> None:
+        amount = body[field]["value_rendered"]
+        typer.echo(f"{label:<{label_width}} {amount:>{money_width}}  {_money_note(field, body)}")
+
+    for field, label in _TOTALS_MONEY_LINES:
+        if field == "subtotal_acct":
+            typer.echo("-" * rule)
+        if field == "cash_book_sum_acct":
+            typer.echo("=" * rule)
+        emit(field, label)
+    for field, label in _TOTALS_STATED_LINES:
+        typer.echo("")
+        emit(field, label)
+
+
+def _render_totals_basis(basis: dict[str, Any]) -> None:
+    """What every number above rests on, printed ABOVE them (memo 5(d))."""
+    _fact(
+        "basis",
+        f"currency {_stated(basis['currency'])}  episodes {basis['episodes']}  "
+        f"episodes_summed {basis['episodes_summed']}  "
+        f"episodes_excluded {basis['episodes_excluded']}",
+    )
+    _fact(
+        "basis",
+        f"rows_in_store {basis['rows_in_store']}  rows_read {basis['rows_read']}  "
+        f"rows_classified {basis['rows_classified']}",
+    )
+    _fact(
+        "basis",
+        f"rows_outside_window {basis['rows_outside_window']}  "
+        f"rows_undated {basis['rows_undated']}  "
+        f"rows_date_malformed {basis['rows_date_malformed']}",
+    )
+    _fact("basis", f"fills_read {basis['fills_read']}  fills_assigned {basis['fills_assigned']}")
+    # Each mapping under its OWN label, the body's own key: these are four
+    # mappings of small integers that read alike, so one shared label would let
+    # a reader take one mapping's counts for another's.
+    for label in ("exclusions", "fills_unassigned", "restated", "malformed"):
+        _fact(label, "  ".join(f"{name} {count}" for name, count in basis[label].items()))
+
+
+def _render_totals_buckets(published: list[dict[str, Any]]) -> None:
+    """Every bucket, zero ones included: a type nobody has seen then reads as
+    a CHANGED number rather than as a new row in a list the reader has stopped
+    scanning (memo section 5(a))."""
+    name_width = max(len(bucket["name"]) for bucket in published)
+    money_width = max(len(bucket["total"]["value_rendered"]) for bucket in published)
+    for bucket in published:
+        _fact(
+            "bucket",
+            f"{bucket['name']:<{name_width}} "
+            f"{bucket['total']['value_rendered']:>{money_width}}  "
+            f"{bucket['rows']} rows  {_joined(bucket['bk_amount_types'])}",
+        )
+
+
+def _render_totals_coverage(coverage: dict[str, Any]) -> None:
+    """What the store can speak for, where it cannot, and what it cannot see."""
+    _fact(
+        "coverage",
+        f"history_begins {_stated(coverage['history_begins'])}  "
+        f"swept_through {_stated(coverage['swept_through'])}  "
+        f"sweeps {coverage['sweeps']}  malformed_windows {coverage['malformed_windows']}",
+    )
+    # One line per hole rather than one joined line, and `gaps none` when there
+    # is none: a shorter list reads as fuller coverage.
+    if coverage["gaps"]:
+        for first, last in coverage["gaps"]:
+            _fact("coverage", f"gap {first} .. {last}")
+    else:
+        _fact("coverage", f"gaps {_NOT_STATED}")
+    _fact("coverage", f"cannot_detect {_joined(coverage['cannot_detect'])}")
+
+
+def _render_totals_balance(checks: list[dict[str, Any]]) -> None:
+    """Both cross-checks, each stating its own basis and its own blind spot.
+
+    ``detects_restatement`` sits on the same line as the verdict on purpose:
+    the cumulative check is store-wide against the latest balance and cannot
+    see a correction to an old row, so "reconciles" alone would read as proof
+    the history is intact (memo section 5(c)).
+    """
+    for check in checks:
+        kind = check["kind"]
+        _fact(
+            "balance",
+            f"{kind}  {check['verdict']}  "
+            f"detects_restatement {_YES_NO[check['detects_restatement']]}  "
+            f"null_reason {_stated(check['null_reason'])}",
+        )
+        for name in ("expected", "observed", "difference"):
+            amount = check[name]
+            _fact(
+                "balance",
+                f"{kind}  {name} {amount['value_rendered']} over {amount['rows']} rows",
+            )
+        _fact(
+            "balance",
+            f"{kind}  rows {check['rows']}  {_stated(check['since'])} .. "
+            f"{_stated(check['until'])}  asof {_stated(check['asof'])}",
+        )
+
+
+def _render_totals_human(body: dict[str, Any]) -> None:
+    """The operator's version of the cash book's answer (memo section 6).
+
+    EVERY published fact, which is the repo CLI doctrine's own rule -- one
+    internal result rendered two ways, both carrying the same facts. ``schema``
+    is the one key with no prose form: it is the machine contract's identity
+    rather than a fact about this window.
+
+    The currency is ON every number and never once in a header, per memo
+    section 5(d) and the house renderer: a number beside a threshold in a
+    different unit reads as a comfortable pass. It arrives already rendered,
+    as the body's own ``value_rendered``, so the prose and the JSON cannot
+    come apart over how one amount reads.
+    """
+    basis = body["basis"]
+    typer.echo(f"cashbook totals {body['env']} {basis['window_since']} .. {basis['window_until']}")
+    _render_totals_basis(basis)
+    typer.echo("")
+    _render_totals_money(body)
+    typer.echo("")
+    _render_totals_buckets(body["buckets"])
+    _render_totals_coverage(body["coverage"])
+    _render_totals_balance(body["balance_checks"])
+
+
 @cashbook_app.command("sync")
 def sync_command(
     since: str = _SINCE_OPTION,
@@ -464,3 +769,140 @@ def sync_command(
         typer.echo(rendered)
         return
     _render_sync_human(body)
+
+
+def _totals_body(totals: Any) -> dict[str, Any]:
+    """The record's own wire form, with the envelope's field removed.
+
+    Nothing is computed here and nothing is renamed: the body IS
+    ``CashBookTotals.to_jsonable()``, because memo section 5(d) makes every
+    total structurally inseparable from its basis and a CLI that rebuilt the
+    body field by field is a second place the two could come apart. ``env`` is
+    dropped because :func:`_envelope` publishes it, and publishing it twice
+    would let the two disagree.
+    """
+    body = totals.to_jsonable()
+    body.pop("env")
+    return body
+
+
+@cashbook_app.command("totals")
+def totals_command(
+    since: str = _TOTALS_SINCE_OPTION,
+    until: str = _TOTALS_UNTIL_OPTION,
+    env: str | None = _CASHBOOK_ENV_OPTION,
+    output_format: str | None = _FORMAT_OPTION,
+) -> None:
+    """What the account's own money did over one window (#1689).
+
+    Reads the stored cash book -- the bookings, the trades and the balance
+    snapshots a previous ``cashbook sync`` appended -- and publishes one set of
+    lines with the basis they rest on. It touches NO vendor: a window is
+    answerable offline or it is refused.
+
+    STEPS, in this order:
+
+    \b
+      format      settled first, so every refusal below renders as asked
+      window      both bounds as dates, then --since <= --until
+      instance    the same `state_paths` seam the broker group resolves, so
+                  the store root this reads cannot disagree with the one a
+                  sweep wrote
+      answer      `report.build_totals`, which refuses a window it cannot
+                  answer rather than returning a smaller number
+      render      the record, as JSON or as prose; no number is computed here
+
+    WHAT IT REFUSES, all as `cashbook_totals_refused` with `details.reason`:
+    `sim_reports_unusable` (on SIM the vendor's report endpoints answer with
+    other accounts' canned rows, so the store is empty by construction and a
+    sum over it would publish 0.00 for an account nobody read),
+    `nothing_swept` (no sweep has ever covered any window, so there is no
+    watermark to answer against), `before_first_sweep` (`--since` is
+    earlier than the earliest window any sweep asked for; the store holds rows
+    whose own entries may predate it, so a smaller number would read as a
+    complete answer) and `window_never_swept` (no sweep asked about a single
+    day of this window -- it lies past every asked window, or inside a hole
+    between two of them).
+
+    An `--until` beyond the swept range is NOT refused: the store can be asked
+    about a day nobody swept and answers that it holds nothing for it, which
+    is honest because the coverage block is published beside every number. A
+    window with no day in common with any sweep is the case that does refuse:
+    nothing in it was read, so there is nothing for the coverage block to state
+    a shortfall against.
+    """
+    from alphalens_pipeline.account_cash import report
+    from alphalens_pipeline.brokers.automanager import state_paths
+
+    from alphalens_cli.commands.broker import _apply_env_option
+
+    resolved_format = _resolve_format(output_format)
+    since_date = _booking_date(since, option="--since")
+    until_date = _booking_date(until, option="--until")
+    if since_date > until_date:
+        raise _fail_with(
+            "usage",
+            f"--since {since} is after --until {until}; the window is inclusive on both ends",
+            details={"option": "--since", "value": since},
+        )
+
+    # BEST-EFFORT composition, unlike `sync`'s. This command holds no broker
+    # and places nothing, so the LIVE unit's rails are no part of its answer;
+    # what it needs from `--env live` is the instance pin, which the
+    # best-effort branch still applies (and it forces ALLOW_ORDERS=0 either
+    # way). Requiring the unit would refuse a read of a store copied onto a
+    # machine where no LIVE unit is installed.
+    _apply_env_option(env, required=False)
+    try:
+        resolved_env = state_paths.broker_environment()
+    except ValueError as exc:
+        raise _fail_with("usage", str(exc)) from exc
+
+    try:
+        totals = report.build_totals(env=resolved_env, since=since_date, until=until_date)
+    except report.CashBookTotalsRefusedError as exc:
+        raise _fail_with(
+            "cashbook_totals_refused",
+            str(exc),
+            # The record's own `details` ride along: a refusal leaves stdout
+            # EMPTY, so the watermark a recovery needs has to be on the failure
+            # object. `reason` and `env` lead, and nothing in `exc.details`
+            # may rename them -- they are the two keys the published table
+            # names for this code.
+            details={"reason": exc.reason, "env": exc.env, **exc.details},
+        ) from exc
+    except report.CashBookIdentityError as exc:
+        # NOT `unclassified`. The repo rule is that `unclassified` marks a
+        # refusal nobody has given a code yet and is never a branch condition;
+        # this one is named, is raised deliberately rather than by accident,
+        # and its recovery differs from the one below -- so a client that
+        # branches on the code gets the right answer rather than "a human must
+        # look" for two different humans. Its own code rather than a `reason`
+        # under the one above, because that code means "this WINDOW cannot be
+        # answered"; no window can be answered while the store contradicts
+        # itself.
+        raise _fail_with(
+            "cashbook_identity_broken", str(exc), details={"identity": exc.identity}
+        ) from exc
+    except OSError as exc:
+        # A journal or the store root this process cannot read. Separate from
+        # the identity above because `retryable` is a property of the CODE and
+        # the two differ in it: this one answers once the cause clears, and
+        # this command writes nothing either way, which is what `retryable`
+        # means here ("safe to re-run WITHOUT reconciling first").
+        #
+        # Caught at the command and not inside the record: the store's readers
+        # are pure over paths, and a reader that swallowed an unreadable
+        # journal would answer a SMALLER number -- the one thing the whole
+        # refusal surface exists to prevent.
+        raise _fail_with(
+            "cashbook_store_unreadable",
+            f"could not read the account cash book: {exc}",
+            details={"journal": _failed_file(exc)},
+        ) from exc
+
+    body = _envelope(_TOTALS_SCHEMA, resolved_env, **_totals_body(totals))
+    if resolved_format == _FORMAT_JSON:
+        _emit_json(body)
+        return
+    _render_totals_human(body)

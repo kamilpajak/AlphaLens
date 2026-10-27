@@ -319,6 +319,43 @@ class TheGoldenLiveWindow(IsolatedHomeTestCase):
             round(FULL_SPAN_RESIDUAL_PLN - COST_BASIS_OPEN_PLN, 2),
         )
 
+    def test_the_record_names_the_terms_the_residual_subtracted(self) -> None:
+        """The term list is PUBLISHED, so a render can name what was subtracted.
+
+        Written out here rather than read back off ``RESIDUAL_TERMS``: the
+        residual loop subtracts exactly that tuple, so comparing the published
+        list against it would be production against production.
+
+        **Mutation it catches:** a term list the record keeps to itself. While
+        it did, the prose named "the lines above" and the deposits are rendered
+        BELOW the residual, so the label was wrong by exactly 24 000.00 PLN and
+        every arithmetic test stayed green.
+        """
+        self.assertEqual(
+            self.totals.to_jsonable()["residual_terms"],
+            ["net_closed_acct", "income_acct", "unclassified_acct", "deposits_acct"],
+        )
+
+    def test_the_published_terms_add_back_to_the_windows_cash_book_sum(self) -> None:
+        """The published list IS the subtraction, not a caption beside it.
+
+        **Mutation it catches:** a list that names three of the four terms, or
+        one that names a line the residual never subtracted -- the open cost
+        basis, say, which is as-of the store's watermark. Either leaves this
+        sum 3594.86 or 24000.00 away from the measured literal.
+        """
+        body = self.totals.to_jsonable()
+
+        named = sum(body[name]["value"] for name in body["residual_terms"])
+
+        self.assertAlmostEqual(body["residual_acct"]["value"] + named, ALL_ROWS_TOTAL_PLN, places=2)
+
+    def test_one_named_term_is_rendered_below_the_residual_line(self) -> None:
+        """Why the label cannot say "above": the deposits are a term of the
+        residual and sit under it, below the subtotal, because 24 000 PLN of
+        funding is the easiest number in this repo to misread as profit."""
+        self.assertIn("deposits_acct", self.totals.to_jsonable()["residual_terms"])
+
     def test_the_whole_record_renders_as_one_strict_json_value(self) -> None:
         """``allow_nan=False`` is the CLI's rule; a body that cannot satisfy it
         turns a report into a refusal, so it is checked where the body is
@@ -1393,6 +1430,129 @@ class AWindowTheStoreCannotAnswerIsRefused(IsolatedHomeTestCase):
         self.assertEqual(ctx.exception.reason, report.REFUSED_BEFORE_FIRST_SWEEP)
         self.assertEqual(sorted(report.TOTALS_REFUSALS), sorted(set(report.TOTALS_REFUSALS)))
         self.assertIn(report.REFUSED_BEFORE_FIRST_SWEEP, report.TOTALS_REFUSALS)
+
+    def test_the_refusal_carries_the_earliest_answerable_since(self) -> None:
+        """The watermark rides on the refusal, because nothing else can carry it.
+
+        The published recovery is "ask for the earliest `--since` that is
+        answerable", and a refusal leaves stdout EMPTY -- so running the report
+        to read ``coverage.history_begins`` reproduces this same refusal. The
+        store's own sweeps journal was the only place left to read it from.
+
+        **Mutation it catches:** a refusal that names the rule and not the way
+        out.
+        """
+        _seed()
+
+        with self.assertRaises(report.CashBookTotalsRefusedError) as ctx:
+            report.build_totals(env=_LIVE, since=dt.date(2026, 7, 31), until=_SWEPT_UNTIL)
+
+        self.assertEqual(ctx.exception.details, {"history_begins": _SWEPT_SINCE.isoformat()})
+
+    def test_a_window_no_sweep_covered_a_day_of_refuses_rather_than_zeros(self) -> None:
+        """The right edge, which had no guard at all: the refusal only ever
+        looked at ``since`` against ``history_begins``.
+
+        **Mutation it catches:** answering a window the store never read. On
+        the real capture a 2026-11-01..2026-11-30 request came back exit 0
+        with "cash book sum 0.00 PLN 0 rows" and "balance cumulative
+        reconciles" -- the "0.00 for an account nobody read" shape the SIM
+        refusal exists to prevent, published as a confident answer with the
+        coverage block the only thing that disagreed with it.
+        """
+        _seed()
+
+        with self.assertRaises(report.CashBookTotalsRefusedError) as ctx:
+            report.build_totals(env=_LIVE, since=dt.date(2026, 11, 1), until=dt.date(2026, 11, 30))
+
+        self.assertEqual(ctx.exception.reason, report.REFUSED_WINDOW_NEVER_SWEPT)
+        self.assertEqual(ctx.exception.env, _LIVE)
+        self.assertEqual(
+            ctx.exception.details,
+            {
+                "history_begins": _SWEPT_SINCE.isoformat(),
+                "swept_through": _SWEPT_UNTIL.isoformat(),
+            },
+        )
+
+    def test_an_until_beyond_the_swept_range_is_still_answered(self) -> None:
+        """The distinction the docstring draws, and the negative control for
+        the test above: a window that OVERLAPS the swept range is answered,
+        however far past it the ``until`` reaches, because the coverage block
+        states the shortfall beside every number.
+
+        **Mutation it catches:** refusing on ``until > swept_through``, which
+        would refuse this window on its last covered day.
+        """
+        _seed()
+
+        totals = report.build_totals(env=_LIVE, since=_SWEPT_UNTIL, until=dt.date(2026, 11, 30))
+
+        self.assertEqual(totals.basis.window_until, "2026-11-30")
+        self.assertEqual(totals.coverage.swept_through, _SWEPT_UNTIL.isoformat())
+
+    def test_a_single_day_the_sweep_asked_for_is_answered_on_each_edge(self) -> None:
+        """Both ends of the overlap predicate, which is two comparisons.
+
+        A one-day window is where the two reduce to the same date, so each
+        comparison has to be inclusive. Measured: the seeded sweep asks
+        2026-08-01..2026-10-03, so both single days below were read and both
+        must answer.
+
+        **Mutation it catches:** tightening EITHER comparison from ``<=`` to
+        ``<``. The left one refuses the window on the sweep's own first day,
+        the right one on its last. Neither showed in any other test: every
+        window elsewhere spans more than a day, so the two dates differ and a
+        strict comparison still holds.
+        """
+        _seed()
+
+        for day in (_SWEPT_SINCE, _SWEPT_UNTIL):
+            with self.subTest(day=day):
+                totals = report.build_totals(env=_LIVE, since=day, until=day)
+
+                self.assertEqual(totals.basis.window_since, day.isoformat())
+                self.assertEqual(totals.basis.window_until, day.isoformat())
+
+    def test_overlap_is_against_every_asked_window_and_not_the_watermark(self) -> None:
+        """Two sweeps with a hole: ``swept_through`` stops at the end of the
+        FIRST run, so a window inside the SECOND run is past the watermark and
+        was nonetheless read.
+
+        **Mutation it catches:** comparing ``since`` against
+        ``swept_through``, which refuses days the store holds rows for. The two
+        readings cannot be told apart on a store with one sweep, which is every
+        other test here.
+        """
+        _seed(since=_SWEPT_SINCE, until=GAP_FIRST_UNTIL)
+        _seed(
+            since=GAP_SECOND_SINCE,
+            until=GAP_SECOND_UNTIL,
+            now=_SWEPT_AT + dt.timedelta(days=1),
+        )
+
+        totals = report.build_totals(
+            env=_LIVE, since=dt.date(2026, 9, 2), until=dt.date(2026, 9, 5)
+        )
+
+        self.assertEqual(totals.coverage.swept_through, GAP_FIRST_UNTIL.isoformat())
+        self.assertEqual(totals.basis.window_since, "2026-09-02")
+
+    def test_a_window_wholly_inside_a_gap_is_refused_too(self) -> None:
+        """The other half of the same rule: nobody read those days either, and
+        a hole in the middle of the coverage is no more answerable than one
+        past its end."""
+        _seed(since=_SWEPT_SINCE, until=GAP_FIRST_UNTIL)
+        _seed(
+            since=GAP_SECOND_SINCE,
+            until=GAP_SECOND_UNTIL,
+            now=_SWEPT_AT + dt.timedelta(days=1),
+        )
+
+        with self.assertRaises(report.CashBookTotalsRefusedError) as ctx:
+            report.build_totals(env=_LIVE, since=dt.date(2026, 8, 15), until=dt.date(2026, 8, 20))
+
+        self.assertEqual(ctx.exception.reason, report.REFUSED_WINDOW_NEVER_SWEPT)
 
     def test_the_day_the_history_begins_is_answerable(self) -> None:
         """The negative control: a refusal that refused one day too many would

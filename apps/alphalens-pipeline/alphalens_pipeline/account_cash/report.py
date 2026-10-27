@@ -171,13 +171,40 @@ REPORT_EXCLUSION_ORDER: tuple[str, ...] = (
     EXCLUSION_CLOSED_OUTSIDE_WINDOW,
 )
 
+#: The published lines :attr:`CashBookTotals.residual_acct` SUBTRACTS from the
+#: window's cash book sum, in subtraction order. One tuple, read by the
+#: subtraction itself and published with the record, because the render has to
+#: name what was actually taken off and a renderer that spelled the terms
+#: itself wrote a sentence that was true once: the deposits are a term and are
+#: rendered BELOW the line, so "the lines above" was wrong by exactly
+#: 24 000.00 PLN while every arithmetic test stayed green.
+#:
+#: ``cost_basis_open_acct`` is deliberately absent; see
+#: :attr:`CashBookTotals.residual_acct` for why a term in another scope is
+#: published as that term's offset.
+RESIDUAL_TERMS: tuple[str, ...] = (
+    "net_closed_acct",
+    "income_acct",
+    "unclassified_acct",
+    "deposits_acct",
+)
+
 #: The window could not be answered at all. One of these, never a ``0.0``.
 REFUSED_SIM_REPORTS_UNUSABLE = "sim_reports_unusable"
 REFUSED_BEFORE_FIRST_SWEEP = "before_first_sweep"
+#: No sweep ever ASKED about a single day of this window -- it lies past every
+#: asked window, or inside a hole between two of them. The right edge the
+#: ``before_first_sweep`` rule never guarded: a window entirely outside the
+#: swept range answered ``0.00`` over 0 rows with a reconciling balance check,
+#: which is the "a total for an account nobody read" shape
+#: :data:`REFUSED_SIM_REPORTS_UNUSABLE` exists to prevent, published as a
+#: confident answer with only the coverage block to disagree with it.
+REFUSED_WINDOW_NEVER_SWEPT = "window_never_swept"
 REFUSED_NOTHING_SWEPT = "nothing_swept"
 TOTALS_REFUSALS: tuple[str, ...] = (
     REFUSED_SIM_REPORTS_UNUSABLE,
     REFUSED_BEFORE_FIRST_SWEEP,
+    REFUSED_WINDOW_NEVER_SWEPT,
     REFUSED_NOTHING_SWEPT,
 )
 
@@ -213,7 +240,9 @@ __all__ = [
     "REFUSED_BEFORE_FIRST_SWEEP",
     "REFUSED_NOTHING_SWEPT",
     "REFUSED_SIM_REPORTS_UNUSABLE",
+    "REFUSED_WINDOW_NEVER_SWEPT",
     "REPORT_EXCLUSION_ORDER",
+    "RESIDUAL_TERMS",
     "TOTALS_REFUSALS",
     "UNDETECTED_PARTIAL_ENTRY",
     "Basis",
@@ -228,12 +257,21 @@ __all__ = [
 
 
 class CashBookTotalsRefusedError(Exception):
-    """The window cannot be answered. ``reason`` is one of :data:`TOTALS_REFUSALS`."""
+    """The window cannot be answered. ``reason`` is one of :data:`TOTALS_REFUSALS`.
 
-    def __init__(self, reason: str, env: str) -> None:
+    ``details`` carries the facts a caller needs to ask an answerable question
+    instead -- the watermarks, for the two reasons that are about where the
+    window sits. A refusal publishes nothing on stdout, so a recovery the
+    published table tells an operator to follow has to arrive on the failure
+    object itself; sending them to the report they were just refused is not a
+    recovery.
+    """
+
+    def __init__(self, reason: str, env: str, details: Mapping[str, Any] | None = None) -> None:
         super().__init__(f"the account cash book will not answer this window on {env}: {reason}")
         self.reason = reason
         self.env = env
+        self.details: Mapping[str, Any] = dict(details or {})
 
 
 class CashBookIdentityError(AssertionError):
@@ -244,7 +282,20 @@ class CashBookIdentityError(AssertionError):
     Publishing a total beside a broken identity is the one outcome the three
     identities exist to prevent -- the reader would see a number and a
     footnote, and would read the number.
+
+    ``identity`` names WHICH of them, as a field rather than only inside the
+    message: a caller that has to report this -- the CLI does, as
+    ``cashbook_identity_broken`` -- would otherwise have to parse the prose to
+    say anything more than "something broke".
     """
+
+    def __init__(self, identity: str, detail: str) -> None:
+        super().__init__(
+            f"the {identity} identity does not hold ({detail}); no total is published, "
+            f"because a number beside a broken identity is read as the number"
+        )
+        self.identity = identity
+        self.detail = detail
 
 
 def _as_pairs(
@@ -584,6 +635,11 @@ class CashBookTotals:
             "coverage": self.coverage.to_jsonable(),
             "cost_basis_open_asof": self.cost_basis_open_asof,
             "cost_basis_open_excluded": self.cost_basis_open_excluded,
+            # The names the residual subtracted, so a consumer -- the prose
+            # renderer first of all -- can say what was taken off instead of
+            # describing it from memory. Published off the one tuple the
+            # subtraction itself reads, so the two cannot come apart.
+            "residual_terms": list(RESIDUAL_TERMS),
             "buckets": [bucket.to_jsonable() for bucket in self.buckets],
             "balance_checks": [check.to_jsonable() for check in self.balance_checks],
         }
@@ -740,10 +796,7 @@ def _agree(left: AcctAmount, right: AcctAmount) -> bool:
 
 def _hold(name: str, held: bool, detail: str) -> None:
     if not held:
-        raise CashBookIdentityError(
-            f"the {name} identity does not hold ({detail}); no total is published, "
-            f"because a number beside a broken identity is read as the number"
-        )
+        raise CashBookIdentityError(name, detail)
 
 
 def _check_identities(
@@ -954,18 +1007,66 @@ def _refuse_a_non_live_environment(env: str) -> None:
         raise CashBookTotalsRefusedError(REFUSED_SIM_REPORTS_UNUSABLE, env)
 
 
-def _refuse_an_unanswerable_window(env: str, sweeps: Sequence[SweepRecord], since: dt.date) -> None:
-    """``nothing_swept``, then ``before_first_sweep``. Both before any sum.
+def _overlaps_an_asked_window(
+    sweeps: Sequence[SweepRecord], *, since: dt.date, until: dt.date
+) -> bool:
+    """True when some sweep ASKED about at least one day of this window.
 
-    "Nothing swept" comes first because a store with no sweep record cannot
-    say what window it covers, so there is no watermark to compare ``since``
-    against.
+    Against every asked window rather than against
+    :attr:`Coverage.swept_through`, and the two readings differ wherever the
+    coverage has a hole: the watermark stops at the end of the FIRST contiguous
+    run, so a window inside the SECOND run is past it and was nonetheless read.
+    Refusing that one would refuse days the store holds rows for. A window
+    inside the HOLE overlaps nothing and is refused, which is the same fact as
+    one past the end -- nobody read those days.
     """
-    begins = history_begins(sweeps)
-    if begins is None:
+    asked = (window for window in map(store.sweep_window, sweeps) if window is not None)
+    return any(asked_since <= until and since <= asked_until for asked_since, asked_until in asked)
+
+
+def _refuse_an_unanswerable_window(
+    env: str, coverage: Coverage, sweeps: Sequence[SweepRecord], *, since: dt.date, until: dt.date
+) -> None:
+    """``nothing_swept``, ``before_first_sweep``, ``window_never_swept``.
+
+    All three before any sum, and in this order. "Nothing swept" comes first
+    because a store with no sweep record cannot say what window it covers, so
+    there is no watermark to compare ``since`` against. The overlap check comes
+    last because it is the narrowest: a ``since`` before the store's own first
+    day is the more specific fact about that invocation.
+
+    **An ``until`` beyond the swept range is NOT refused here**, and that
+    distinction is the point of the overlap test. The store can be asked about
+    a day nobody swept and answer that it holds nothing for it, as long as part
+    of the window WAS read and the coverage block states the shortfall beside
+    every number. A window with no day in common with any sweep is a different
+    thing: there is nothing to state a shortfall against, and the answer would
+    be ``0.00`` over 0 rows for a period nobody ever read.
+    """
+    if coverage.history_begins is None:
         raise CashBookTotalsRefusedError(REFUSED_NOTHING_SWEPT, env)
-    if since < dt.date.fromisoformat(begins):
-        raise CashBookTotalsRefusedError(REFUSED_BEFORE_FIRST_SWEEP, env)
+    if since < dt.date.fromisoformat(coverage.history_begins):
+        # The earliest answerable `--since`, ON the refusal. The published
+        # recovery is to ask for that day, and a refusal publishes nothing on
+        # stdout -- so reading it off `coverage.history_begins` means running
+        # the report, which answers with this same refusal. The only other
+        # source is the sweeps journal, read by hand.
+        raise CashBookTotalsRefusedError(
+            REFUSED_BEFORE_FIRST_SWEEP, env, {"history_begins": coverage.history_begins}
+        )
+    if not _overlaps_an_asked_window(sweeps, since=since, until=until):
+        raise CashBookTotalsRefusedError(
+            REFUSED_WINDOW_NEVER_SWEPT,
+            env,
+            # Both watermarks, because this refusal is about WHERE the window
+            # sits: an operator holding the refusal alone can then ask a window
+            # the store can speak for, which is what the published recovery
+            # promises and what an empty stdout cannot deliver.
+            {
+                "history_begins": coverage.history_begins,
+                "swept_through": coverage.swept_through,
+            },
+        )
 
 
 def build_totals(*, env: str, since: dt.date, until: dt.date) -> CashBookTotals:
@@ -986,14 +1087,25 @@ def build_totals(*, env: str, since: dt.date, until: dt.date) -> CashBookTotals:
     does refuse: there the store holds rows whose own entries may predate it,
     and a smaller number would read as a complete answer (memo section 5's
     table, amendment W8).
+
+    A window with NO day in common with any sweep refuses as well
+    (:data:`REFUSED_WINDOW_NEVER_SWEPT`), and that is the other edge of the
+    same rule: there is no part of it the store read, so there is nothing for
+    the coverage block to state a shortfall against, and the answer would be
+    ``0.00`` over 0 rows beside a reconciling balance check -- a total for a
+    period nobody read.
     """
     if since > until:
         raise ValueError(f"a cash-book window must not end before it starts ({since} .. {until})")
     _refuse_a_non_live_environment(env)
     sweeps = store.read_sweeps(env=env)
-    _refuse_an_unanswerable_window(env, sweeps, since)
-
+    # The coverage is derived BEFORE the refusals and handed to them: two of
+    # the three are about where the window sits against these watermarks, and
+    # they publish them on the refusal so a caller holding nothing but the
+    # failure object can ask an answerable window.
     coverage = coverage_of(sweeps)
+    _refuse_an_unanswerable_window(env, coverage, sweeps, since=since, until=until)
+
     events_fold = store.read_cash_events(env=env)
     trades_fold = store.read_trade_rows(env=env)
     balances = store.read_balances(env=env)
@@ -1056,9 +1168,21 @@ def build_totals(*, env: str, since: dt.date, until: dt.date) -> CashBookTotals:
     # ``cost_basis_open`` is NOT one of them: it is as-of the store's
     # watermark and every other term here is the window's (see
     # :attr:`CashBookTotals.residual_acct`).
+    #
+    # Over :data:`RESIDUAL_TERMS` rather than over a tuple written here,
+    # because that tuple is also what the record PUBLISHES as the subtraction
+    # (``residual_terms``). A term added to or taken out of the subtraction
+    # therefore changes what every consumer is told was subtracted, including
+    # the prose label that used to say "the lines above".
+    window_scoped = {
+        "net_closed_acct": net_closed,
+        "income_acct": income,
+        "unclassified_acct": unclassified,
+        "deposits_acct": deposits,
+    }
     residual = cash_book_sum
-    for line in (net_closed, income, unclassified, deposits):
-        residual = acct_difference(residual, line)
+    for name in RESIDUAL_TERMS:
+        residual = acct_difference(residual, window_scoped[name])
     # It rests on the whole window, not on a subset of it: the named lines
     # live in two row spaces (booking rows for the buckets, trades rows for
     # the episodes), so no set of booking rows is the residual's own.
