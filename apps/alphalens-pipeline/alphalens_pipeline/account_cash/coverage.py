@@ -19,9 +19,17 @@ all**, which is why :data:`UNDETECTED_PARTIAL_ENTRY` is published on every
 total rather than left in a memo.
 
 Pure over the records it is handed: it takes no ``env``, resolves no path and
-calls no reader. :func:`~.store.sweep_window` is the one parse of a stored
-window, shared with :func:`~.balance_check.incremental_check` so the two
-answer the same thing about the same record.
+calls no reader. The one thing it takes from :mod:`store` is
+:func:`~.store.sweep_window`, which parses an already-decoded record's two
+free-text bounds and opens no file.
+
+That parse has THREE callers, and this module is the third of them -- adding
+it is what #1805 did. Here it decides whether a window EXISTS at all;
+:func:`~.refusals.refuse_an_unanswerable_window` asks whether any asked window
+OVERLAPS the one being reported; :func:`~.balance_check.incremental_check`
+decides which interval to SUM. All three have to answer the same thing about
+the same record, which is why there is one parser and not three
+(``tests/account_cash/test_store.py``, ``TheSweepWindowIsParsedInExactlyOnePlace``).
 """
 
 from __future__ import annotations
