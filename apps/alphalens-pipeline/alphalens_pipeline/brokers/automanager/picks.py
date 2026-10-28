@@ -267,19 +267,24 @@ _PickFoldKey = tuple[str, dt.date, int]
 #:   every pick in the queue rather than one line.
 #: * :class:`json.JSONDecodeError` — a line that is not JSON. The torn-write
 #:   shape of #1421, and the only member the guard used to name.
-#: * a plain :class:`ValueError` — an integer literal longer than
-#:   ``sys.get_int_max_str_digits()`` (4300 by default). CPython refuses to
-#:   build the ``int`` and ``json.loads`` lets that through unwrapped, so
-#:   naming ``JSONDecodeError`` alone does not cover it.
+#: Both ARE ``ValueError`` subclasses, and a bare ``ValueError`` is
+#: DELIBERATELY NOT a third member. It would catch both regardless of what
+#: else the tuple named -- making this a blanket wearing a named set's
+#: clothes, and no test could kill either member. It would also move a shape
+#: #1788 does not name: an integer literal longer than
+#: ``sys.get_int_max_str_digits()`` (4300 by default) raises a plain
+#: ``ValueError`` out of ``json.loads``, and MEASURED against the parent
+#: commit that line raises there and counts here. Counting it may well be the
+#: better answer -- a fold reporting a line it cannot read is this function's
+#: own rule -- but it is a second behaviour change on the live arming path and
+#: belongs to its own issue and its own review, which is the argument #1788
+#: makes for keeping this change narrow in the first place.
 #:
-#: All three ARE ``ValueError``, so the handler reads as one name; the tuple
-#: is what records which members have a route. ``OverflowError``, which the
-#: cash-book precedent needs, has no route here: ``_parse_record`` reads two
-#: fields and converts neither to a float.
+#: ``OverflowError``, which the cash-book precedent needs, has no route here
+#: either: ``_parse_record`` reads two fields and converts neither to a float.
 _UNREADABLE_LINE: tuple[type[BaseException], ...] = (
     UnicodeDecodeError,
     json.JSONDecodeError,
-    ValueError,
 )
 
 

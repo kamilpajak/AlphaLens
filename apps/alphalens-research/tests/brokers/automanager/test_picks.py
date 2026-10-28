@@ -641,24 +641,32 @@ class AnUnreadableLineIsCountedAndNeverRaisedOutOfThePickFold(unittest.TestCase)
         self.assertEqual([r.ticker for r in fold.records], ["KO"])
         self.assertEqual(fold.malformed, 2)
 
-    def test_an_integer_literal_the_interpreter_refuses_is_counted_not_raised(self) -> None:
-        """Member three: a plain ``ValueError`` that is NOT a ``JSONDecodeError``.
+    def test_an_integer_literal_the_interpreter_refuses_still_raises(self) -> None:
+        """The shape this change deliberately does NOT move, pinned so it cannot
+        drift in either direction without somebody saying so.
 
         CPython refuses to build an ``int`` from a literal longer than
-        ``sys.get_int_max_str_digits()`` (4300 by default), and ``json.loads``
-        lets that ``ValueError`` through unwrapped. Binary mode alone does not
-        close this one — the precedent's guard is widened to ``ValueError``,
-        which is what covers both members at once.
+        ``sys.get_int_max_str_digits()`` (4300 by default) and ``json.loads``
+        lets that plain ``ValueError`` through unwrapped. Counting it may well
+        be the better answer — "a fold reports a line it cannot read" is this
+        function's own rule — but it is a SECOND behaviour change on the live
+        arming path, and #1788 is scoped to the byte case precisely so this one
+        gets its own review. Measured against the parent commit: it raises
+        there, so it raises here.
+
+        An earlier draft covered it by naming a bare ``ValueError`` in the
+        unreadable set, which also made the set a blanket over every
+        ``ValueError`` subclass including both members it did name.
         """
         arm_pick(_intent("AAA", "2026-07-20"), path=self.path)
         digits = b"1" * (sys.get_int_max_str_digits() + 1)
         self._append_bytes(b'{"date": "2026-07-21", "generation": ' + digits + b"}\n")
-        arm_pick(_intent("BBB", "2026-07-22"), path=self.path)
 
-        fold = read_pick_fold(path=self.path)
+        with self.assertRaises(ValueError) as caught:
+            read_pick_fold(path=self.path)
 
-        self.assertEqual([r.ticker for r in fold.records], ["AAA", "BBB"])
-        self.assertEqual(fold.malformed, 1)
+        self.assertNotIsInstance(caught.exception, json.JSONDecodeError)
+        self.assertNotIsInstance(caught.exception, UnicodeDecodeError)
 
     def test_an_unbounded_json_integer_is_folded_rather_than_overflowing(self) -> None:
         """The issue's open question, answered by measurement: ``OverflowError``
@@ -752,9 +760,25 @@ class AnUnreadableLineIsCountedAndNeverRaisedOutOfThePickFold(unittest.TestCase)
         named = picks_module._UNREADABLE_LINE
         self.assertIn(UnicodeDecodeError, named)
         self.assertIn(json.JSONDecodeError, named)
-        self.assertIn(ValueError, named)
         self.assertNotIn(Exception, named)
         self.assertNotIn(BaseException, named)
+
+        # The assertion an earlier draft of this test did not have, which is
+        # why it passed on a set that named a bare ``ValueError`` beside two of
+        # its own subclasses. Checking for ``Exception`` and ``BaseException``
+        # is not enough: a blanket is any member broad enough to catch what the
+        # set does not name, and a member that is a SUPERCLASS of another is
+        # exactly that -- it also makes both of them unkillable, since removing
+        # either changes no behaviour.
+        for member in named:
+            with self.subTest(member=member.__name__):
+                others = [one for one in named if one is not member]
+                shadowed = [one.__name__ for one in others if issubclass(one, member)]
+                self.assertEqual(
+                    shadowed,
+                    [],
+                    f"{member.__name__} is a superclass of {shadowed}, so it blankets them",
+                )
 
         source = Path(picks_module.__file__).read_text(encoding="utf-8")
         handlers = [
