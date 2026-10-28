@@ -193,6 +193,18 @@ class TheSimRailNamesTheSimBootstrap(_EmitterCase):
         self.assertEqual(failure["code"], "broker_auth")
         self.assertEqual([s["argv"] for s in failure["suggestions"]], [SIM_BOOTSTRAP_ARGV])
 
+    def test_the_prose_names_the_SIM_rail_and_not_the_other_one(self) -> None:
+        """The argv half of this fix was pinned; the ``why`` half was not, and a
+        mutation proved it: swapping the two rails' prose left the whole
+        automanager suite green while each refusal explained the OTHER rail.
+        That is the same misnamed-rail defect #1811 exists to remove, so it is
+        pinned on both halves. Literal phrases, never the production constant —
+        a test that imports the string it asserts on cannot see a swap."""
+        why = self._sim_status_failure(None)["suggestions"][0]["why"]
+
+        self.assertIn("the SIM OAuth session is absent", why)
+        self.assertNotIn("the LIVE market-data OAuth session is absent", why)
+
 
 class TheLiveRailNamesTheLiveBootstrap(_EmitterCase):
     """Causes 4 and 5 — the operationally expensive ones. On 2026-10-23 the LIVE
@@ -250,23 +262,56 @@ class TheLiveRailNamesTheLiveBootstrap(_EmitterCase):
 
         self.assertEqual([s["argv"] for s in failure["suggestions"]], [LIVE_BOOTSTRAP_ARGV])
 
+    def test_the_prose_names_the_LIVE_rail_and_not_the_other_one(self) -> None:
+        """The LIVE twin of the SIM prose test. This is the rail whose misnaming
+        cost a day on 2026-10-23, so its explanation must say LIVE even though
+        the same sentence also mentions ``broker auth`` to warn against it."""
+        why = self._live_status_failure(self._status())["suggestions"][0]["why"]
+
+        self.assertIn("the LIVE market-data OAuth session is absent", why)
+        self.assertNotIn("the SIM OAuth session is absent", why)
+
+
+#: Every code in the merged contract + CLI registry that declares
+#: ``needs_suggestion``, measured 2026-10-28 over
+#: ``{**CONTRACT_FAILURE_CODES, **_CLI_FAILURE_CODES}``. Written out because the
+#: loop below derives the same set by comprehension and would pass on an empty
+#: one: a renamed ``needs_suggestion`` flag, or a registry that stopped merging,
+#: makes the loop green over nothing.
+CODES_DEMANDING_A_SUGGESTION = frozenset(
+    {
+        "broker_auth",
+        "pick_already_armed",
+        "pick_not_writable",
+        "stream_metrics_missing",
+        "write_outcome_unknown",
+    }
+)
+
+
+def _codes_demanding_a_suggestion() -> set[str]:
+    from alphalens_cli.commands._cli_envelope import _CLI_FAILURE_CODES
+    from broker_contract.failure import CONTRACT_FAILURE_CODES
+
+    return {
+        name
+        for name, entry in {**CONTRACT_FAILURE_CODES, **_CLI_FAILURE_CODES}.items()
+        if entry.needs_suggestion
+    }
+
 
 class TheTableStillHoldsTheGuarantee(unittest.TestCase):
     """The comment on ``_SUGGESTIONS_BY_CODE`` is the requirement: the way out
     is held in the table, not at the call sites, so no emitter can forget."""
 
-    def test_every_code_that_demands_a_suggestion_has_one_in_the_table(self) -> None:
-        from alphalens_cli.commands._cli_envelope import (
-            _CLI_FAILURE_CODES,
-            _SUGGESTIONS_BY_CODE,
-        )
-        from broker_contract.failure import CONTRACT_FAILURE_CODES
+    def test_the_derived_set_is_the_one_that_was_measured(self) -> None:
+        """Non-vacuity guard for the loop below."""
+        self.assertEqual(_codes_demanding_a_suggestion(), set(CODES_DEMANDING_A_SUGGESTION))
 
-        demanding = {
-            name
-            for name, entry in {**CONTRACT_FAILURE_CODES, **_CLI_FAILURE_CODES}.items()
-            if entry.needs_suggestion
-        }
+    def test_every_code_that_demands_a_suggestion_has_one_in_the_table(self) -> None:
+        from alphalens_cli.commands._cli_envelope import _SUGGESTIONS_BY_CODE
+
+        demanding = _codes_demanding_a_suggestion()
 
         for name in demanding:
             with self.subTest(code=name):
