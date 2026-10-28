@@ -218,10 +218,51 @@ _CLI_FAILURE_CODES: Mapping[str, FailureCode] = {
 
 _FAILURE_CODES: Mapping[str, FailureCode] = {**CONTRACT_FAILURE_CODES, **_CLI_FAILURE_CODES}
 
+# The four argvs behind `broker_auth` (#1811). The two `--status` forms are
+# OFFLINE store inspections — zero network, no token values — and the two bare
+# forms each bootstrap ONE rail: `auth` the SIM OAuth session, `marketdata-auth`
+# the LIVE market-data session (ADR 0017). Running one rail's bootstrap for the
+# other rail's dead chain is the 2026-10-23 mistake.
+_SIM_AUTH_STATUS_ARGV = ("alphalens", "broker", "auth", "--status")
+_LIVE_AUTH_STATUS_ARGV = ("alphalens", "broker", "marketdata-auth", "--status")
+_SIM_AUTH_BOOTSTRAP_ARGV = ("alphalens", "broker", "auth")
+_LIVE_AUTH_BOOTSTRAP_ARGV = ("alphalens", "broker", "marketdata-auth")
+
+# The cause-specific recoveries, for the emitters that KNOW which cause they
+# hold. They are the `suggestions=` argument of `_fail_with`, which overrides the
+# table below; the table stays the floor, so passing one is an upgrade and never
+# a precondition.
+_SIM_AUTH_BOOTSTRAP: tuple[Suggestion, ...] = (
+    Suggestion(
+        argv=_SIM_AUTH_BOOTSTRAP_ARGV,
+        why=(
+            "the SIM OAuth session is absent or its refresh chain is dead; this command "
+            "re-establishes it through the browser"
+        ),
+    ),
+)
+_LIVE_AUTH_BOOTSTRAP: tuple[Suggestion, ...] = (
+    Suggestion(
+        argv=_LIVE_AUTH_BOOTSTRAP_ARGV,
+        why=(
+            "the LIVE market-data OAuth session is absent or its refresh chain is dead; "
+            "`alphalens broker auth` bootstraps the SIM rail and would leave this one dead"
+        ),
+    ),
+)
+
 # The runnable recovery for every code that declares `needs_suggestion`. Held
 # here rather than at the call sites so the guarantee is structural: a machine
 # reads `retryable: false` as "drop it", and a code that promises a way out must
 # not depend on each emitter remembering to attach one.
+#
+# A code with SEVERAL causes keeps its entry here TRUE rather than specific
+# (#1811). This is what an emitter that knows nothing about its cause publishes,
+# so it must hold for every cause the code covers: `broker_auth` also arrives
+# from a MISSING credential, where the refresh chain is alive and a bootstrap
+# would replace a healthy one, and from either rail, which a single bootstrap
+# cannot name. So the entry is the two offline store READS, and the five sites
+# that do know their cause pass `_SIM_AUTH_BOOTSTRAP` / `_LIVE_AUTH_BOOTSTRAP`.
 _SUGGESTIONS_BY_CODE: Mapping[str, tuple[Suggestion, ...]] = {
     "write_outcome_unknown": (
         Suggestion(
@@ -234,8 +275,19 @@ _SUGGESTIONS_BY_CODE: Mapping[str, tuple[Suggestion, ...]] = {
     ),
     "broker_auth": (
         Suggestion(
-            argv=("alphalens", "broker", "auth"),
-            why="the OAuth refresh chain is dead or absent; re-authenticate",
+            argv=_SIM_AUTH_STATUS_ARGV,
+            why=(
+                "read the SIM store state before re-authenticating: this code also covers "
+                "a missing credential, where the chain is alive and a bootstrap would "
+                "replace a healthy one"
+            ),
+        ),
+        Suggestion(
+            argv=_LIVE_AUTH_STATUS_ARGV,
+            why=(
+                "the same code covers the LIVE market-data rail, whose store "
+                "`broker auth --status` does not read"
+            ),
         ),
     ),
     "pick_already_armed": (

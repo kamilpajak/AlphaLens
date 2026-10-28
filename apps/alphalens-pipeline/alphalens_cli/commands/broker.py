@@ -124,7 +124,9 @@ from alphalens_cli.commands._cli_envelope import (  # noqa: F401
     _FORMAT_HUMAN,
     _FORMAT_JSON,
     _FORMAT_OPTION,
+    _LIVE_AUTH_BOOTSTRAP,
     _OUTPUT_FORMAT,
+    _SIM_AUTH_BOOTSTRAP,
     _emit_json,
     _envelope,
     _fail,
@@ -490,7 +492,9 @@ def _auth_status() -> None:
     if state is None:
         typer.echo("refresh      ABSENT — no OAuth session yet")
         raise _fail_with(
-            "broker_auth", "no token store — run `alphalens broker auth` to bootstrap OAuth"
+            "broker_auth",
+            "no token store — run `alphalens broker auth` to bootstrap OAuth",
+            suggestions=_SIM_AUTH_BOOTSTRAP,
         )
     now = _dt.datetime.now(_dt.UTC)
     access_left = (state.access_token_expires_at - now).total_seconds() / 60
@@ -506,7 +510,11 @@ def _auth_status() -> None:
         typer.echo(f"refresh      ALIVE, ~{refresh_left:.0f} min remaining")
         return
     typer.echo(_REFRESH_DEAD_LINE)
-    raise _fail_with("broker_auth", "refresh chain is dead — re-run `alphalens broker auth`")
+    raise _fail_with(
+        "broker_auth",
+        "refresh chain is dead — re-run `alphalens broker auth`",
+        suggestions=_SIM_AUTH_BOOTSTRAP,
+    )
 
 
 def _telegram_chain_loss_notify() -> NotificationPort:
@@ -764,6 +772,7 @@ def _marketdata_auth_status() -> None:
             "broker_auth",
             "no token store — run `alphalens broker marketdata-auth` to bootstrap the "
             "LIVE market-data OAuth session",
+            suggestions=_LIVE_AUTH_BOOTSTRAP,
         )
     now = dt.datetime.now(dt.UTC)
     if state.access_expires_at is not None:
@@ -783,7 +792,9 @@ def _marketdata_auth_status() -> None:
             return
         typer.echo(_REFRESH_DEAD_LINE)
         raise _fail_with(
-            "broker_auth", "refresh chain is dead — re-run `alphalens broker marketdata-auth`"
+            "broker_auth",
+            "refresh chain is dead — re-run `alphalens broker marketdata-auth`",
+            suggestions=_LIVE_AUTH_BOOTSTRAP,
         )
     if state.refresh_present:
         # Legacy store without a recorded refresh expiry: unknown window, fall
@@ -792,7 +803,9 @@ def _marketdata_auth_status() -> None:
         return
     typer.echo(_REFRESH_DEAD_LINE)
     raise _fail_with(
-        "broker_auth", "refresh chain is dead — re-run `alphalens broker marketdata-auth`"
+        "broker_auth",
+        "refresh chain is dead — re-run `alphalens broker marketdata-auth`",
+        suggestions=_LIVE_AUTH_BOOTSTRAP,
     )
 
 

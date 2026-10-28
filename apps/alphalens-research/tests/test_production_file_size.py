@@ -120,7 +120,15 @@ BASELINE: dict[str, int] = {
     # distinction, the mechanism (a function's globals are its DEFINING module)
     # and the measurement. Asked for rather than paid for by deleting six lines
     # of someone else's explanation, which is how a ratchet gets gamed.
-    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3168,
+    #
+    # Raised by 13 in #1811: `broker_auth` is one code over five causes, and the
+    # five sites that know their cause now pass the bootstrap for their own rail
+    # (`broker auth` for SIM, `broker marketdata-auth` for LIVE market data).
+    # Each of the five calls was a one-liner that the formatter rewraps onto
+    # four lines once it carries `suggestions=`. The constants themselves live
+    # in `_cli_envelope.py` beside the table they override, so this file pays
+    # for the call sites only.
+    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3181,
     "apps/alphalens-pipeline/alphalens_cli/commands/thematic.py": 1708,
     # Raised again, by 8, to say that the raise page's ticker fallback is
     # unreachable by construction. It sits beside the stop-PLACED page's
