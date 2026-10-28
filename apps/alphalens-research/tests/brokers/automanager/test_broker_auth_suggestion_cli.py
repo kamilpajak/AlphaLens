@@ -327,6 +327,27 @@ class TheTableStillHoldsTheGuarantee(unittest.TestCase):
             with self.subTest(argv=suggestion.argv):
                 self.assertIn("--status", suggestion.argv)
 
+    def test_each_default_read_explains_the_rail_it_actually_reads(self) -> None:
+        """The prose half of the default, which is the half an operator and an
+        agent actually see — the per-rail constants behind the five knowing
+        sites render as prose today and their object is discarded.
+
+        A review mutation proved this was unpinned: swapping the two defaults'
+        ``why`` strings left 2718 automanager tests green while the entry read
+        'run `broker auth --status`, because `broker auth --status` does not
+        read that store'. Literal phrases, never the production constant."""
+        from alphalens_cli.commands._cli_envelope import _SUGGESTIONS_BY_CODE
+
+        by_rail = {
+            "auth" if "marketdata-auth" not in s.argv else "marketdata-auth": s.why
+            for s in _SUGGESTIONS_BY_CODE["broker_auth"]
+        }
+
+        self.assertIn("read the SIM store state", by_rail["auth"])
+        self.assertNotIn("LIVE market-data rail", by_rail["auth"])
+        self.assertIn("LIVE market-data rail", by_rail["marketdata-auth"])
+        self.assertNotIn("read the SIM store state", by_rail["marketdata-auth"])
+
 
 if __name__ == "__main__":
     unittest.main()

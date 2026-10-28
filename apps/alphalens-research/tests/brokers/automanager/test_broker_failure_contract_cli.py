@@ -203,21 +203,24 @@ def _code_of(call: ast.Call) -> str | None:
     return arg.value if isinstance(arg, ast.Constant) and isinstance(arg.value, str) else None
 
 
-def _auth_recovery_names(tree: ast.Module) -> list[str | None]:
+def _auth_recovery_names(tree: ast.Module) -> list[tuple[str | None, int]]:
     """The ``suggestions=`` name each ``broker_auth`` site passes, one per site.
 
-    ``None`` marks a site that passed nothing, or passed something this walk
-    cannot read as a named constant — the shape that silently degrades to the
-    table's two store reads.
+    Each entry is ``(name, lineno)``. ``None`` marks a site that passed
+    nothing, or passed something this walk cannot read as a named constant —
+    the shape that silently degrades to the table's two store reads.
     """
-    names: list[str | None] = []
+    names: list[tuple[str | None, int]] = []
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
             continue
         if node.func.id != "_fail_with" or _code_of(node) != _MULTI_CAUSE_CODE:
             continue
         passed = next((kw.value for kw in node.keywords if kw.arg == "suggestions"), None)
-        names.append(passed.id if isinstance(passed, ast.Name) else None)
+        # The line number rides along so a refusal can say WHICH site is bare.
+        # Its sibling gate already subTests on the module name; a failure that
+        # names neither sends the reader to grep for five call sites.
+        names.append((passed.id if isinstance(passed, ast.Name) else None, node.lineno))
     return names
 
 
@@ -247,10 +250,18 @@ def _module_level_string_tuples(tree: ast.Module) -> dict[str, tuple[str, ...]]:
     """
     bound: dict[str, tuple[str, ...]] = {}
     for node in tree.body:
-        if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
+        # BOTH binding forms. A review mutation showed the cost of reading only
+        # ``ast.Assign``: annotating one of these constants -- which is the style
+        # of its own neighbour, ``_SIM_AUTH_BOOTSTRAP: tuple[Suggestion, ...]``
+        # -- turned this gate red on correct code, blaming the ``Suggestion`` for
+        # an argv the walk simply could not read.
+        if isinstance(node, ast.AnnAssign):
+            target, value = node.target, node.value
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, value = node.targets[0], node.value
+        else:
             continue
-        target = node.targets[0]
-        literal = _string_tuple(node.value)
+        literal = _string_tuple(value)
         if isinstance(target, ast.Name) and literal is not None:
             bound[target.id] = literal
     return bound
@@ -621,22 +632,24 @@ class EveryAuthSiteNamesItsOwnRail(unittest.TestCase):
     """
 
     def test_every_broker_auth_site_passes_a_per_rail_recovery(self) -> None:
-        for tree in _module_asts():
-            for name in _auth_recovery_names(tree):
-                if name is None:
-                    self.fail(
-                        f"a {_MULTI_CAUSE_CODE} site passed no named recovery; "
-                        f"pass one of {_AUTH_RECOVERY_PREFIXES}*"
+        for path, tree in zip(EMITTING_CLI_MODULES, _module_asts(), strict=True):
+            for name, lineno in _auth_recovery_names(tree):
+                where = f"{path.name}:{lineno}"
+                with self.subTest(site=where):
+                    if name is None:
+                        self.fail(
+                            f"{where}: this {_MULTI_CAUSE_CODE} site passed no named "
+                            f"recovery; pass one of {_AUTH_RECOVERY_PREFIXES}*"
+                        )
+                    self.assertTrue(
+                        name.startswith(_AUTH_RECOVERY_PREFIXES),
+                        f"{where}: {name} is not a per-rail recovery constant",
                     )
-                self.assertTrue(
-                    name.startswith(_AUTH_RECOVERY_PREFIXES),
-                    f"{name} is not a per-rail recovery constant",
-                )
 
     def test_the_walk_found_every_known_site(self) -> None:
         """Non-vacuity: the assertions above hold trivially over an empty walk,
         which is what deleting a site or renaming ``_fail_with`` would produce."""
-        found = [name for tree in _module_asts() for name in _auth_recovery_names(tree)]
+        found = [entry for tree in _module_asts() for entry in _auth_recovery_names(tree)]
 
         self.assertGreaterEqual(len(found), _KNOWN_AUTH_SITES, found)
 
@@ -646,7 +659,7 @@ class EveryAuthSiteNamesItsOwnRail(unittest.TestCase):
         it could object to."""
         tree = ast.parse("_fail_with('broker_auth', 'refresh chain is dead')")
 
-        self.assertEqual(_auth_recovery_names(tree), [None])
+        self.assertEqual([name for name, _line in _auth_recovery_names(tree)], [None])
 
     def test_the_walk_catches_a_recovery_that_is_not_a_per_rail_constant(self) -> None:
         """A name the walk CAN read but must still reject — otherwise the gate
@@ -654,13 +667,13 @@ class EveryAuthSiteNamesItsOwnRail(unittest.TestCase):
         passed = "_SOMETHING_ELSE"
         tree = ast.parse(f"_fail_with('broker_auth', 'boom', suggestions={passed})")
 
-        self.assertEqual(_auth_recovery_names(tree), [passed])
+        self.assertEqual([name for name, _line in _auth_recovery_names(tree)], [passed])
         self.assertFalse(passed.startswith(_AUTH_RECOVERY_PREFIXES))
 
     def test_the_walk_reads_the_keyword_code_form_too(self) -> None:
         tree = ast.parse("_fail_with(code='broker_auth', message='boom')")
 
-        self.assertEqual(_auth_recovery_names(tree), [None])
+        self.assertEqual([name for name, _line in _auth_recovery_names(tree)], [None])
 
     def test_another_code_is_not_this_walks_business(self) -> None:
         """Only a multi-cause code needs this; a single-cause code's default IS

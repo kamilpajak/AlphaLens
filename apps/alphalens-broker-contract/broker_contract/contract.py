@@ -47,7 +47,9 @@ class BrokerError(RuntimeError):
 
 
 class BrokerAuthError(BrokerError):
-    """Credentials invalid or expired — no retry, operator action required."""
+    """Credential missing, invalid, or its refresh chain dead — no retry,
+    operator action required. The three differ in remedy: a missing credential
+    is a configuration fix and re-authenticating would discard a live chain."""
 
     failure_code: ClassVar[str] = "broker_auth"
 

@@ -167,7 +167,11 @@ CONTRACT_FAILURE_CODES: Final[Mapping[str, FailureCode]] = _registry(
     FailureCode(
         name="broker_auth",
         retryable=False,
-        meaning="Credentials are invalid or the refresh chain is dead. Re-authenticate.",
+        meaning=(
+            "The credential is missing, invalid, or its refresh chain is dead. "
+            "Which of those it is decides the remedy, so the suggestion reads state "
+            "rather than prescribing a re-authentication."
+        ),
         needs_suggestion=True,
     ),
     FailureCode(
