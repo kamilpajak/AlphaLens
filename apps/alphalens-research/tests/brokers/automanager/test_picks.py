@@ -9,14 +9,17 @@ fatal, missing file yields nothing. No back-compat for old bare
 
 from __future__ import annotations
 
+import ast
 import datetime as dt
 import json
 import logging
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from alphalens_pipeline.brokers.automanager import picks as picks_module
 from alphalens_pipeline.brokers.automanager.picks import (
     STATUS_ARMED,
     STATUS_DISARMED,
@@ -534,6 +537,238 @@ class ReadPickFoldTest(unittest.TestCase):
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write("\n")
         self.assertEqual(read_pick_fold(path=self.path).malformed, 0)
+
+
+class AnUnreadableLineIsCountedAndNeverRaisedOutOfThePickFold(unittest.TestCase):
+    """The fold's stated rule is that it REPORTS a line it cannot read (#1788).
+
+    ``ReadPickFoldTest`` above covers the shapes the fold already knew about,
+    every one of which arrives at ``_parse_record`` as a ``ValueError``. A line
+    that fails EARLIER — while the ``for`` statement advances the file and
+    decodes its bytes — never reached that guard at all, so it escaped the
+    fold. One such line anywhere in ``picks.jsonl`` then made the WHOLE queue
+    unreadable, and this fold is the reader's half of the arming join: the
+    door, ``alphalens broker picks`` and the daemon's drain all stop on it.
+
+    One test per member of the named exception set, so the set cannot quietly
+    shrink back to the narrower one it was.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.path = Path(self._tmp.name) / "picks.jsonl"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _append_bytes(self, payload: bytes) -> None:
+        with self.path.open("ab") as fh:
+            fh.write(payload)
+
+    @staticmethod
+    def _torn_utf8_line() -> bytes:
+        """A rendered line cut on the LEAD byte of its last multibyte sequence,
+        so the bytes end with a sequence that has no continuation byte.
+
+        The non-ASCII character is written as an escape and the cut is made on
+        its measured lead byte, so this file stays ASCII and the English-only
+        gate (``tests.test_no_polish_chars``) has nothing to find.
+        """
+        euro_sign = "€"  # U+20AC -> b"\xe2\x82\xac"
+        whole = json.dumps(
+            {"ticker": "TORN", "date": "2026-07-21", "status": "armed", "note": euro_sign},
+            ensure_ascii=False,
+        ).encode("utf-8")
+        torn = whole[: whole.rindex(b"\xe2") + 1]
+        assert torn != whole
+        assert torn.endswith(b"\xe2")
+        return torn + b"\n"
+
+    def test_a_line_whose_bytes_are_not_utf8_is_counted_not_raised(self) -> None:
+        """Member one: ``UnicodeDecodeError``.
+
+        ``arm_pick`` cannot write such a line itself — ``json.dumps`` escapes
+        every non-ASCII character by default, and a tear of ASCII bytes yields
+        invalid JSON rather than invalid UTF-8. It arrives the way the contract
+        README's ``jq`` copy recipe invites: a hand edit, or a restore from a
+        copy whose bytes were mangled. The cost is what makes it worth a guard,
+        not the odds.
+        """
+        arm_pick(_intent("KO", "2026-07-20"), path=self.path)
+        self._append_bytes(self._torn_utf8_line())
+
+        fold = read_pick_fold(path=self.path)
+
+        self.assertEqual([r.ticker for r in fold.records], ["KO"])
+        self.assertEqual(fold.malformed, 1)
+
+    def test_an_undecodable_line_hides_none_of_the_readable_lines_after_it(self) -> None:
+        """The cost the issue is about: not the counter, the picks BELOW it.
+
+        A fold that raises reports nothing at all, so one undecodable byte
+        loses every pick in the queue rather than one line — and the arming
+        door reads this same fold before it lets a document in.
+        """
+        arm_pick(_intent("AAA", "2026-07-20"), path=self.path)
+        self._append_bytes(self._torn_utf8_line())
+        arm_pick(_intent("BBB", "2026-07-22"), path=self.path)
+
+        fold = read_pick_fold(path=self.path)
+
+        self.assertEqual([r.ticker for r in fold.records], ["AAA", "BBB"])
+        self.assertEqual(fold.malformed, 1)
+
+    def test_a_single_stray_byte_is_counted_the_same_way(self) -> None:
+        """A second route to the same member, with no multibyte sequence at
+        all: ``0xff`` is not a valid UTF-8 start byte."""
+        arm_pick(_intent("KO", "2026-07-20"), path=self.path)
+        self._append_bytes(b"\xff\n")
+
+        fold = read_pick_fold(path=self.path)
+
+        self.assertEqual([r.ticker for r in fold.records], ["KO"])
+        self.assertEqual(fold.malformed, 1)
+
+    def test_a_line_that_is_not_json_is_still_counted_exactly_as_before(self) -> None:
+        """Member two: ``json.JSONDecodeError``. The regression guard — the
+        remedy moves the decode, so the shape that already counted must keep
+        counting, and keep counting ONCE per line."""
+        self.path.write_text("not json\n[]\n", encoding="utf-8")
+        arm_pick(_intent("KO", "2026-07-20"), path=self.path)
+
+        fold = read_pick_fold(path=self.path)
+
+        self.assertEqual([r.ticker for r in fold.records], ["KO"])
+        self.assertEqual(fold.malformed, 2)
+
+    def test_an_integer_literal_the_interpreter_refuses_is_counted_not_raised(self) -> None:
+        """Member three: a plain ``ValueError`` that is NOT a ``JSONDecodeError``.
+
+        CPython refuses to build an ``int`` from a literal longer than
+        ``sys.get_int_max_str_digits()`` (4300 by default), and ``json.loads``
+        lets that ``ValueError`` through unwrapped. Binary mode alone does not
+        close this one — the precedent's guard is widened to ``ValueError``,
+        which is what covers both members at once.
+        """
+        arm_pick(_intent("AAA", "2026-07-20"), path=self.path)
+        digits = b"1" * (sys.get_int_max_str_digits() + 1)
+        self._append_bytes(b'{"date": "2026-07-21", "generation": ' + digits + b"}\n")
+        arm_pick(_intent("BBB", "2026-07-22"), path=self.path)
+
+        fold = read_pick_fold(path=self.path)
+
+        self.assertEqual([r.ticker for r in fold.records], ["AAA", "BBB"])
+        self.assertEqual(fold.malformed, 1)
+
+    def test_an_unbounded_json_integer_is_folded_rather_than_overflowing(self) -> None:
+        """The issue's open question, answered by measurement: ``OverflowError``
+        is NOT reachable here.
+
+        The cash-book precedent needed it because that codec runs every money
+        field through ``float(value)``. ``_parse_record`` reads exactly two
+        fields and converts neither: ``generation`` is only type-checked, so
+        ``10**400`` is a valid ``int`` that folds as an ordinary record. Pinned
+        so that a later field which DOES convert cannot be added here without
+        this assertion turning red first.
+        """
+        self._append_bytes(
+            json.dumps(
+                {"ticker": "KO", "date": "2026-07-20", "status": "armed", "generation": 10**400}
+            ).encode("utf-8")
+            + b"\n"
+        )
+
+        fold = read_pick_fold(path=self.path)
+
+        self.assertEqual(fold.malformed, 0)
+        self.assertEqual([r.ticker for r in fold.records], ["KO"])
+        self.assertEqual(fold.records[0].generation, 10**400)
+
+    def test_a_line_of_unicode_only_whitespace_stays_skipped_not_malformed(self) -> None:
+        """Copying the precedent's binary open verbatim MOVES this count.
+
+        ``str.strip()`` treats U+00A0, U+0085, U+2028 and U+3000 as whitespace;
+        ``bytes.strip()`` does not. A reader that tested blankness on the bytes
+        would start counting each of these as corruption, and the published
+        rule is that a blank line is skipped WITHOUT being counted. So the
+        blankness test stays on the decoded string.
+        """
+        arm_pick(_intent("KO", "2026-07-20"), path=self.path)
+        for blank in ("\n", "   \n", "\t\n", "\u00a0\n", "\u0085\n", "\u2028\n", "\u3000\n"):
+            with self.subTest(blank=blank.strip("\n").encode("unicode_escape")):
+                self._append_bytes(blank.encode("utf-8"))
+                self.assertEqual(read_pick_fold(path=self.path).malformed, 0)
+
+    def test_a_bare_carriage_return_still_separates_two_lines(self) -> None:
+        """The OTHER way the precedent's open is not behaviour-neutral here.
+
+        Text mode's universal newlines make a lone ``\r`` a line boundary;
+        iterating a binary file does not. A journal holding two good records
+        separated by one bare ``\r`` folds to two picks today — read as a
+        single line it would fold to ONE malformed line and lose BOTH. Neither
+        appender writes a bare ``\r``, but it arrives by the same route as the
+        undecodable byte does, so the splitting is kept rather than changed.
+        """
+        self.path.write_bytes(
+            json.dumps({"ticker": "AAA", "date": "2026-07-20", "status": "armed"}).encode()
+            + b"\r"
+            + json.dumps({"ticker": "BBB", "date": "2026-07-21", "status": "armed"}).encode()
+            + b"\n"
+        )
+
+        fold = read_pick_fold(path=self.path)
+
+        self.assertEqual([r.ticker for r in fold.records], ["AAA", "BBB"])
+        self.assertEqual(fold.malformed, 0)
+
+    def test_an_undecodable_line_is_logged_at_debug_and_never_per_tick_warned(self) -> None:
+        """The count is the published report, not a log line.
+
+        The manager daemon re-folds this journal every ~45 s tick and the
+        journal is append-only, so an undecodable line is permanent: a WARNING
+        would repeat for ever on a condition that never heals. The same reason
+        ``iter_picks`` already states for a pre-PR-7 bare line. The sibling
+        malformed shapes log nothing at all, so a WARNING here would also make
+        one of the four routes louder than the other three for no reason a
+        reader could act on differently.
+        """
+        arm_pick(_intent("KO", "2026-07-20"), path=self.path)
+        self._append_bytes(self._torn_utf8_line())
+
+        with self.assertLogs(picks_module.__name__, level="DEBUG") as captured:
+            self.assertEqual(read_pick_fold(path=self.path).malformed, 1)
+
+        self.assertTrue(any("not UTF-8" in line for line in captured.output))
+        self.assertEqual([line for line in captured.output if line.startswith("WARNING")], [])
+
+    def test_the_fold_names_its_unreadable_set_rather_than_blanketing_it(self) -> None:
+        """The remedy must not become ``except Exception``.
+
+        A blanket handler would count a real defect in this module's own parser
+        as corruption on disk, on the one journal the money path writes to. A
+        structural check, because every behavioural test above passes under a
+        blanket handler too.
+        """
+        named = picks_module._UNREADABLE_LINE
+        self.assertIn(UnicodeDecodeError, named)
+        self.assertIn(json.JSONDecodeError, named)
+        self.assertIn(ValueError, named)
+        self.assertNotIn(Exception, named)
+        self.assertNotIn(BaseException, named)
+
+        source = Path(picks_module.__file__).read_text(encoding="utf-8")
+        handlers = [
+            node for node in ast.walk(ast.parse(source)) if isinstance(node, ast.ExceptHandler)
+        ]
+        self.assertGreaterEqual(len(handlers), 3, "the except-handler scan found too little")
+        for handler in handlers:
+            with self.subTest(line=handler.lineno):
+                self.assertIsNotNone(
+                    handler.type, "a bare `except:` catches even a KeyboardInterrupt"
+                )
+                names = [node.id for node in ast.walk(handler.type) if isinstance(node, ast.Name)]
+                self.assertNotIn("Exception", names)
+                self.assertNotIn("BaseException", names)
 
 
 class JoinHelperTest(unittest.TestCase):

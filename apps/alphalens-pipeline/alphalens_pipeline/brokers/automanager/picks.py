@@ -52,7 +52,7 @@ import logging
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from broker_contract.trade_intent.codec import (
     TradeIntentDecodeError,
@@ -253,6 +253,74 @@ def mark_disarmed(
 
 _PickFoldKey = tuple[str, dt.date, int]
 
+#: What READING one journal line can raise, beside the shape checks
+#: :func:`_parse_record` already reports as malformed. Named member by member
+#: rather than covered by ``except Exception``: this queue's value is that a
+#: defect in the parser announces itself while corruption on disk is counted,
+#: and a blanket handler would turn the first into the second on the one
+#: journal the money path writes to. Three members, each with a measured route
+#: and a test of its own:
+#:
+#: * :class:`UnicodeDecodeError` — bytes that are not UTF-8 (#1788). In text
+#:   mode the decode happened while the ``for`` statement advanced the file,
+#:   OUTSIDE any guard, so one such line raised out of the whole fold and lost
+#:   every pick in the queue rather than one line.
+#: * :class:`json.JSONDecodeError` — a line that is not JSON. The torn-write
+#:   shape of #1421, and the only member the guard used to name.
+#: * a plain :class:`ValueError` — an integer literal longer than
+#:   ``sys.get_int_max_str_digits()`` (4300 by default). CPython refuses to
+#:   build the ``int`` and ``json.loads`` lets that through unwrapped, so
+#:   naming ``JSONDecodeError`` alone does not cover it.
+#:
+#: All three ARE ``ValueError``, so the handler reads as one name; the tuple
+#: is what records which members have a route. ``OverflowError``, which the
+#: cash-book precedent needs, has no route here: ``_parse_record`` reads two
+#: fields and converts neither to a float.
+_UNREADABLE_LINE: tuple[type[BaseException], ...] = (
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    ValueError,
+)
+
+
+def _journal_lines(fh: BinaryIO) -> Iterator[bytes]:
+    """The journal's lines as BYTES, split exactly where text mode splits them.
+
+    Iterating the binary handle alone would break on ``b"\\n"`` only, which is
+    NOT what this reader used to do: text mode's universal newlines make a
+    lone ``\\r`` a line boundary too, so a journal holding two good records
+    separated by one bare ``\\r`` folded to two picks and read as a single
+    line would fold to ONE malformed line and lose BOTH. Splitting each chunk
+    again with :meth:`bytes.splitlines` restores that, and measured on
+    CPython 3.13 it splits on the same three boundaries text mode does
+    (``\\r\\n``, ``\\r``, ``\\n``) and on no others — ``\\x0b``, ``\\x0c``,
+    ``\\x1c`` and U+0085 stay inside a line in both.
+
+    Why bytes at all: so the UTF-8 decode happens inside a guard the fold can
+    write. See :data:`_UNREADABLE_LINE`.
+    """
+    for chunk in fh:
+        yield from chunk.splitlines()
+
+
+def _decoded_line(raw_line: bytes) -> str | None:
+    """One journal line's bytes -> its stripped text; None if UNDECODABLE.
+
+    The decode sits here, inside a guard, instead of happening while the
+    ``for`` statement advances a text-mode file, where no caller could guard
+    it (#1788).
+
+    A line that decodes is stripped as a ``str`` and NOT as bytes, because the
+    two disagree about what is blank: ``str.strip()`` treats U+00A0, U+0085,
+    U+2028 and U+3000 as whitespace and ``bytes.strip()`` does not. Testing
+    the bytes would count each of those as corruption and move a count this
+    fold publishes as zero.
+    """
+    try:
+        return raw_line.decode("utf-8").strip()
+    except _UNREADABLE_LINE:
+        return None
+
 
 def _parse_record(raw_line: str) -> tuple[_PickFoldKey, dict] | None:
     """One well-formed status line -> ((TICKER, date, generation), record);
@@ -263,7 +331,7 @@ def _parse_record(raw_line: str) -> tuple[_PickFoldKey, dict] | None:
         return None
     try:
         record = json.loads(line)
-    except json.JSONDecodeError:
+    except _UNREADABLE_LINE:
         return None
     if not isinstance(record, dict):
         return None
@@ -319,17 +387,41 @@ def read_pick_fold(*, path: Path | None = None) -> PickFold:
     applies, computed here ONCE so the queue view and the drain can never
     disagree about which line is current. Records keep first-seen key order
     (the order the CLI renders). A missing file folds empty.
+
+    A line this fold cannot read is COUNTED, never raised: the whole reason
+    :attr:`PickFold.malformed` exists is that a reader of the queue must be
+    able to say how much of the journal it could not account for. That rule
+    only held for the shapes :func:`_parse_record` sees. The journal is opened
+    in BINARY mode so that a line whose bytes are not UTF-8 reaches the same
+    counter (#1788) instead of raising out of the fold — which, since this
+    fold is the reader's half of the arming join, stopped the arming door,
+    `alphalens broker picks` and the daemon's drain on one bad byte and lost
+    every pick in the queue rather than one line.
     """
     target = path or state_paths.picks_path()
     if not target.exists():
         return PickFold(records=[], malformed=0)
     latest: dict[_PickFoldKey, dict] = {}
     malformed = 0
-    with target.open("r", encoding="utf-8") as fh:
-        for raw_line in fh:
-            if not raw_line.strip():
+    with target.open("rb") as fh:
+        for index, raw_line in enumerate(_journal_lines(fh), start=1):
+            line = _decoded_line(raw_line)
+            if line is None:
+                malformed += 1
+                # DEBUG, not WARNING, for the reason :func:`iter_picks` states
+                # about the bare-shape line: the manager daemon re-folds this
+                # journal every ~45 s tick, and the journal is append-only, so
+                # an undecodable line is permanent — a WARNING would repeat for
+                # ever. The COUNT is the published report (the CLI prints
+                # "skipped N malformed line(s)"), and the sibling malformed
+                # shapes below are silent for the same reason.
+                logger.debug(
+                    "%s line %d: bytes are not UTF-8 — counted as malformed", target, index
+                )
                 continue
-            parsed = _parse_record(raw_line)
+            if not line:
+                continue
+            parsed = _parse_record(line)
             if parsed is None:
                 malformed += 1
                 continue
