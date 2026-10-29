@@ -414,6 +414,42 @@ class TestContainmentAndSkew(unittest.TestCase):
         snapshot = self.h.build(_FakeBroker(orders=[_working_order("O-1")]))
         self.assertEqual(snapshot.skewed, [])
 
+    def _repair_picks_between_the_two_folds(self) -> mock._patch[Any]:
+        """Patch the call that sits BETWEEN ``_health`` and ``_waiting_picks`` so a
+        hand repair of picks.jsonl lands there — the exact window #1822 tells the
+        operator to act in while reading this command."""
+        from alphalens_pipeline.brokers.automanager import entry_trails
+
+        picks = self.h.root / "picks.jsonl"
+        picks.write_bytes(b"not json\n")
+        original = entry_trails.tier_rows
+
+        def repair_then_read(*args: Any, **kwargs: Any) -> Any:
+            picks.write_bytes(b"")
+            return original(*args, **kwargs)
+
+        return mock.patch.object(status_snapshot.entry_trails, "tier_rows", repair_then_read)
+
+    def test_a_pick_journal_repaired_mid_read_is_flagged_as_skewed(self) -> None:
+        """A status invocation folds picks.jsonl twice — once in ``_health`` for the
+        withheld count, once in ``_waiting_picks`` for the rows. A repair between the
+        two makes the two halves of ONE output describe different versions of the
+        journal, and the operator has no way to tell: the withheld line says the
+        drain places nothing while the rows below it say otherwise. The module's own
+        docstring promises ``skewed`` names any journal that moved mid-read."""
+        with self._repair_picks_between_the_two_folds():
+            snapshot = self.h.build(_FakeBroker())
+        self.assertIn("picks", snapshot.skewed)
+
+    def test_the_offline_snapshot_also_reports_the_skew_it_can_see(self) -> None:
+        """``--offline`` is the invocation an operator reaches for mid-incident (the
+        broker half can block for minutes), and it is the one that still renders the
+        withheld line. It returns early, so before this it reported no skew at all —
+        every journal it reads is read on that path too."""
+        with self._repair_picks_between_the_two_folds():
+            snapshot = self.h.build(_FakeBroker(), offline=True)
+        self.assertIn("picks", snapshot.skewed)
+
 
 class TestHealth(unittest.TestCase):
     def setUp(self) -> None:

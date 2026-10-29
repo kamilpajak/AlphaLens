@@ -212,6 +212,17 @@ def _mtimes(paths: dict[str, Path]) -> dict[str, float | None]:
     return out
 
 
+def _skew(before: dict[str, float | None], watched: dict[str, Path]) -> list[str]:
+    """The watched journals whose mtime moved since ``before`` was taken.
+
+    One helper rather than the comparison written inline, because BOTH returns of
+    :func:`build_snapshot` need it — the offline one answered ``[]`` for as long as
+    the comparison lived only on the online path.
+    """
+    after = _mtimes(watched)
+    return [name for name, stamp in before.items() if after.get(name) != stamp]
+
+
 def _filter_open_records(records: list[dict[str, Any]], open_ids: set[str]) -> list[dict[str, Any]]:
     """Records rewritten to keep ONLY brackets whose entry order is still open.
 
@@ -662,7 +673,17 @@ def build_snapshot(
 
     trails_path = state_paths.entry_trails_path(env=env)
     submissions_path = state_paths.submissions_path(env=env)
-    watched = {"entry_trails": trails_path, "submissions": submissions_path}
+    # #1822: picks.jsonl joins the watch set because this snapshot folds it TWICE
+    # (``_health`` for the withheld count and the terminal lines, ``_waiting_picks``
+    # for the rows), and the one repair #1822 tells the operator to make is a hand
+    # edit of exactly this file. A repair landing between the two folds makes the
+    # withheld line and the waiting rows describe different versions of the journal,
+    # which is what ``skewed`` exists to say out loud.
+    watched = {
+        "entry_trails": trails_path,
+        "submissions": submissions_path,
+        "picks": state_paths.picks_path(env=env),
+    }
     before = _mtimes(watched)
 
     # Read each journal ONCE and thread the same snapshot everywhere (the
@@ -687,6 +708,10 @@ def build_snapshot(
         waiting = []
 
     if offline:
+        # The offline half reads every local journal the online half does, so it can
+        # tear the same way and must report it. Leaving ``skewed`` at its default
+        # here claimed a point-in-time read on the invocation an operator reaches
+        # for mid-incident, because the broker half can block for minutes.
         return StatusSnapshot(
             env=env,
             offline=True,
@@ -696,6 +721,7 @@ def build_snapshot(
             orders=[],
             watches=watches,
             health=health,
+            skewed=_skew(before, watched),
             waiting_picks=waiting,
         )
 
@@ -735,8 +761,6 @@ def build_snapshot(
             blocked=[f"cash floor could not be computed: {exc}"],
             as_of=_iso(now),
         )
-    after = _mtimes(watched)
-    skewed = [name for name, stamp in before.items() if after.get(name) != stamp]
     return StatusSnapshot(
         env=env,
         offline=False,
@@ -746,7 +770,7 @@ def build_snapshot(
         orders=list(open_orders),
         watches=watches,
         health=health,
-        skewed=skewed,
+        skewed=_skew(before, watched),
         waiting_picks=waiting,
     )
 

@@ -610,6 +610,26 @@ class StatusCommandTest(unittest.TestCase):
         doc = (status_command.__doc__ or "").lower()
         self.assertIn("withh", doc)
 
+    def test_the_published_help_says_what_the_withheld_count_is_a_read_of(self) -> None:
+        """An unqualified "reports the WITHHELD count" is the sentence an operator or
+        an agent trusts during the one incident where it is false.
+
+        Three facts the enumeration owes, each measured rather than assumed:
+        the number is a fresh fold taken WHEN the command runs (``_health`` reads
+        picks.jsonl per invocation) while the Prometheus gauge is the daemon's view
+        as of its last tick, so the two legitimately disagree; a journal that cannot
+        be OPENED has no count at all and reports unknown; and
+        ``alphalens broker picks`` is NOT equivalent on that state -- measured
+        2026-10-29, it exits 1 with a traceback on a picks.jsonl that cannot be
+        opened, which is precisely the state both withheld alerts page on.
+        """
+        from alphalens_cli.commands.broker import status_command
+
+        doc = (status_command.__doc__ or "").lower()
+        for phrase in ("when the command runs", "unknown", "exits 1"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, doc)
+
     def test_the_published_help_no_longer_claims_a_slot_count(self) -> None:
         """#1732 removed the slots section and two tests assert its absence, but the
         `--help` enumeration kept naming it."""

@@ -2480,7 +2480,13 @@ def status_command(
     ``picks.jsonl`` the pick fold cannot read. Any non-zero count means the
     drain places NOTHING at all, for every pick in the queue (#1788). Repair
     those lines by hand and re-arm what was lost; the journal is append-only, so
-    re-arming alone does not clear it. ``alphalens broker picks`` says the same.
+    re-arming alone does not clear it. The count is a fresh fold of the journal,
+    taken WHEN THE COMMAND RUNS; the Prometheus gauge is the daemon's view as of
+    its last tick, so the two can legitimately disagree for one tick. A journal
+    that cannot be OPENED at all has no count: it is reported as unknown, and
+    the line names the fault instead of a number. ``alphalens broker picks``
+    shows the queue itself, but it EXITS 1 on a journal that cannot be opened,
+    so for that state this command is the only one that reports it.
 
     An unhealthy instance still exits 0 — health is content, and a Prometheus
     rule must not be duplicated in a CLI. Only a failed broker read exits 1.
