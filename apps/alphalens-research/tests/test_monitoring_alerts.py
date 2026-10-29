@@ -405,6 +405,24 @@ class TestPrometheusRulesYaml(unittest.TestCase):
             "alphalens_grafana_sync_",
             "alphalens_edge_",
             "alphalens_textfile_",
+            # #1822: the broker-manager heartbeat domain was missing from this
+            # tuple, so the guard that exists for every other family did not
+            # cover the four series _default_emit_heartbeat publishes — they
+            # are overwritten on every emit like all the others, so a counter
+            # function on them returns nonsense just the same.
+            #
+            # Listed by NAME and not as the `alphalens_broker_` prefix,
+            # because that prefix would also forbid a CORRECT use:
+            # `alphalens_broker_manager_stream_trips_total` is the one
+            # genuinely monotonic counter in the broker families, and
+            # AlphalensBrokerStreamFlapping wraps it in increase() on purpose
+            # (the reason is written beside that rule). A prefix here would
+            # have turned that rule red — measured when this entry was first
+            # written as a prefix.
+            "alphalens_broker_manager_last_tick_timestamp_seconds",
+            "alphalens_broker_manager_kill_active",
+            "alphalens_broker_manager_chain_alive",
+            "alphalens_broker_manager_placements_withheld",
         )
         for rule in rules:
             expr = rule.get("expr", "")

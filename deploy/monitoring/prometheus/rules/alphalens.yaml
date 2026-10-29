@@ -1740,6 +1740,45 @@ groups:
           summary: "SIM broker-manager OAuth token chain is dead — placement halted"
           description: "The SIM auto-manager's session keeper reports the OAuth token chain unusable, so the placement drain is gated off while the loop keeps ticking. Re-run `alphalens broker auth` and restart alphalens-broker-manager.service. The Telegram page for this fires once per transition, not per tick, so this alert is the standing indication."
 
+      # The withheld-queue gauge (control_loop.placements_withheld_metric,
+      # #1822). Since #1788 ONE line the pick fold cannot read withholds the
+      # WHOLE queue — `picks.iter_picks` yields nothing, so the drain places
+      # nothing at all — and the journal is append-only, so the condition never
+      # heals without a hand repair. The only surfaces that said so were a
+      # WARNING in journald and `alphalens broker picks`: the heartbeat kept
+      # ticking, KILL was absent and the chain was alive, so every monitored
+      # series read green for an instance that could place nothing. That is
+      # what this rule exists to contradict.
+      #
+      # Same two deliberate choices as the chain-dead pair above, for the same
+      # two reasons. Gated on a FRESH heartbeat: the textfile keeps serving its
+      # last sample after the daemon stops, so an ungated rule would page
+      # forever on a stopped daemon and duplicate HeartbeatStale. No absent()
+      # twin on purpose — this series only appears after the daemon runs the
+      # code that emits it, the rules file reaches the VPS within ~1h of merge
+      # while the pipeline image is a MANUAL rebuild (see the deploy-order note
+      # at the head of this file), and `== 1` stays quiet while the series does
+      # not exist. A {Stale, MetricMissing} pair for it belongs in a separate,
+      # later PR, once the image carrying the gauge is deployed.
+      #
+      # for: 5m, matching that pair. The condition is binary and never
+      # self-heals, so `for:` only sets how long a repair window stays quiet;
+      # 5m is about 7 ticks at --poll-seconds 45, which also means no
+      # single-tick disagreement between the drain's fold and the gauge's can
+      # page.
+      - alert: AlphalensBrokerPlacementsWithheld
+        expr: >-
+          alphalens_broker_manager_placements_withheld{job="broker-manager-sim"} == 1
+          and (time() - alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-sim"}) < 300
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: broker-manager
+        annotations:
+          summary: "SIM broker-manager is withholding every placement — a line in picks.jsonl cannot be read"
+          description: "The SIM auto-manager's pick fold reports a line it cannot read, so `iter_picks` yields NOTHING and the placement drain places nothing at all (#1788) — including for pick keys whose own lines are perfectly readable. The loop keeps ticking, KILL is absent and the token chain is alive, so every other series on this instance reads green. This never heals by itself: the journal is append-only, so only a hand repair clears it, and re-arming does not. Run `alphalens broker picks` for the count, repair those lines in ~/.alphalens/broker_orders/sim/picks.jsonl by hand, and re-arm whatever was lost. The gauge clears on the next tick; no restart is needed."
+
 
       # --- SIM order/position stream breaker (rearm design memo §4.6) -------
       # Telegram gets EDGES (the daemon's episode latch pages one OPEN and one
@@ -1942,6 +1981,34 @@ groups:
         annotations:
           summary: "LIVE broker-manager OAuth token chain is dead — placement halted (REAL MONEY)"
           description: "The LIVE auto-manager's session keeper reports the OAuth token chain unusable. The daemon keeps ticking but places nothing, cannot trail a stop and cannot amend one; stops already resting at Saxo still protect open positions. Re-running `alphalens broker marketdata-auth` is NOT enough on its own: the LIVE token provider latches dead, so the daemon also needs `systemctl --user restart alphalens-broker-manager-live.service`. Until that restart this gauge stays 0 while the saxo-marketdata-refresh job alerts resolve — that divergence is exactly what this rule exists to show."
+
+      # The withheld-queue gauge (control_loop.placements_withheld_metric,
+      # #1822) — the LIVE twin. Everything the SIM comment states holds here;
+      # what differs is the consequence. This instance places REAL MONEY, so a
+      # withheld queue means no new entry goes on while the operator believes
+      # the daemon is working: the heartbeat ticks, KILL is absent and the
+      # chain is alive. Open positions are NOT exposed by it — stops already
+      # resting at Saxo stay there and the exit and protection passes run
+      # regardless of the queue.
+      #
+      # Same two deliberate choices as the SIM twin and the chain-dead pair:
+      # gated on a FRESH heartbeat (a stopped daemon is HeartbeatStale's page,
+      # and the textfile keeps re-serving its last sample), and NO absent()
+      # twin, because the rules file reaches the VPS within ~1h of merge while
+      # the pipeline image is a manual rebuild, and `== 1` stays quiet while
+      # the series does not exist.
+      - alert: AlphalensBrokerPlacementsWithheldLive
+        expr: >-
+          alphalens_broker_manager_placements_withheld{job="broker-manager-live"} == 1
+          and (time() - alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-live"}) < 300
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: broker-manager-live
+        annotations:
+          summary: "LIVE broker-manager is withholding every placement — a line in picks.jsonl cannot be read (REAL MONEY)"
+          description: "The LIVE auto-manager's pick fold reports a line it cannot read, so `iter_picks` yields NOTHING and the placement drain places nothing at all (#1788) — including for pick keys whose own lines are perfectly readable. No NEW entry is placed. Stops already resting at Saxo still protect open positions, and the exit and protection passes are unaffected. The loop keeps ticking, KILL is absent and the token chain is alive, so every other series on this instance reads green. This never heals by itself: the journal is append-only, so only a hand repair clears it, and re-arming does not. Run `alphalens broker picks --env live` for the count, repair those lines in ~/.alphalens/broker_orders/live/picks.jsonl by hand, and re-arm whatever was lost. The gauge clears on the next tick; no restart is needed."
 
 
       - alert: AlphalensLivePriceStreamReaderDown
