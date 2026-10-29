@@ -165,110 +165,110 @@ first look at fires says the opposite.
   read as a verdict about how it would FILL. Verify at the state the claim is
   about.
 
-**2026-10-29 reference addendum (§4d) — why detection reads the BID, recovered rather than
-quoted. Status: PARTIALLY RECOVERED — a CONSTRAINT is recovered, the deliberation is not, and the reason first reached for is wrong.**
+**2026-10-29 reference addendum (§4d) — the recorded reason, and the premise it rests on.
+Status: RECOVERED AND CONTRADICTED.**
 
-Two live-tier docstrings asserted the reference and cited a source that does not exist. This
-section records what survives, what is inference, and what nobody can recover — kept separate on
-purpose, because the thing being justified is a real-money path.
+Written because two live-tier docstrings cited a "memo trap #8" that is in no tracked markdown.
+Three earlier drafts of this section were wrong in ways the adversarial pass caught; what they got
+wrong is recorded here rather than deleted, because each error was the kind this file exists to
+stop.
 
-**The citation was empty.** `entry_watch._point_sample_bids` and the `entry_trail_watcher` module
-docstring both cited a "memo trap #8". No tracked markdown in any branch's history has ever
-carried the phrase: `git log --all -S"trap #8" -- '*.md'` returns nothing and
-`grep -rn "trap #" docs/` finds nothing (run 2026-10-28). Only the two comments citing it matched.
-The numbering implies a list of traps in a memo that was never committed — the same failure
-§9 already records for `trailing_execution_design_2026_08_07.md`, and the one
-`docs/research/CLAUDE.md` exists to prevent.
+**1. The reason WAS recorded, on the day the watcher shipped.** `59054fb0` (#1040, 2026-08-13),
+the commit that created `entry_trail_watcher`, put it in that module's own docstring:
 
-**EVIDENCE — what §4b actually recorded.** Probe L1, 2026-08-12, MARA uic 573264, 1 share,
-DayOrder, declining tape. Three facts, quoted from §4b above:
+> **Price side (memo notes trap #8, pinned here):** the exit peak reads ``point.bid`` (selling a
+> long executes at the bid). The entry watcher tracks the running low and the touch/trigger
+> comparison on the SAME reference the LIVE V1 probe used (bid + distance; the server
+> repositioned the trigger off the new bid low — memo §4b L1).
 
-* the request was composed as **"requested trigger 9.71 (bid 9.66 + 0.05)"** — the probe took the
-  bid as the reference when building the order;
-* **"the server had repositioned the trigger DOWN to the new low 9.65 + distance, unprompted"**;
-* the trigger **"correctly FROZE at 9.70 through bid oscillation 9.65-9.68"** — the oscillation
-  the freeze was measured against is stated in bid terms, and 9.65 is its floor.
+Two reasons, contemporaneous: **(a)** consistency with the exit peak, and **(b)** matching the
+reference the L1 ratchet moved off. What was missing was never the reason — only the pointer. The
+dead citation named a trap LIST; the reason stood in the same sentence. Earlier drafts of this
+section said the reason was recorded nowhere. That was wrong, and it was wrong about text the same
+pull request was editing.
 
-So the low the server ratcheted from, on the one occasion anyone watched it, is the floor of a
-range this memo states as a BID range.
+**2. Reason (a) stands.** It is independently recorded in
+[`../superpowers/plans/2026-08-07-saxo-live-price-feed.md`](../superpowers/plans/2026-08-07-saxo-live-price-feed.md)
+as `price=point.bid,  # selling a long: the executable side is the BID`, and shipped verbatim —
+the same line and comment are in `brokers/automanager/live_exit_engine.py` today.
 
-**THE OBVIOUS INFERENCE, AND WHY IT DOES NOT HOLD.** The reconstruction this section was written
-to record ran: the server owns the ratchet once the order rests, so if detection read trades while
-the server ratcheted on the bid, our arming decision and the resting trigger would sit on two
-different series — therefore detection is bid-referenced to keep both on one. **Two facts in this
-repository defeat it, and they were found by the adversarial pass on this very section.**
+**3. Reason (b) is contradicted, by three things pointing one way.** The order we place is
+`TrailingStopIfTraded` (`brokers/saxo/broker.py`'s `_TRAILING_STOP_ORDER_TYPE`, placed from the
+arming path in `control_loop`). [`saxo_live_followup_tests_2026_07_20.md`](saxo_live_followup_tests_2026_07_20.md)
+records Saxo's family in its `## T3` list as "**StopLimit**, **TrailingStop /
+TrailingStopIfTraded**, StopIfBid/Offered", so the suffix distinguishes a series and ours says
+TRADED. And it is not only the naming: [`trailing_execution_design_2026_08_07.md`](trailing_execution_design_2026_08_07.md)
+records a LIVE precheck in which one stock advertised trigger price types "**`LastTraded`,
+`Open`** (no Bid/Ask)", and the schema as `PriceType = LastTraded|Bid`. That is the `Trigger*`
+conditional family, NOT the trailing stop, so it does not settle this order type — it points the
+same way. §4b's own L1 adds the third: the server repositioned the trigger "**unprompted**", so
+the price we compose from decides WHEN we place, not where the trigger then rests.
 
-*The order type names a different series than the bid.* We place `TrailingStopIfTraded`, and
-[`saxo_live_followup_tests_2026_07_20.md`](saxo_live_followup_tests_2026_07_20.md) records, in its `## T3` order-type list,
-Saxo's family as "**StopLimit**, **TrailingStop / TrailingStopIfTraded**, StopIfBid/Offered" — so
-the suffix names the series the trigger is evaluated against, and ours says TRADED. If that is what
-it means, bid-referenced detection and the server's trigger sit on DIFFERENT series, which is the
-opposite of the inference. This is the naming convention's implication, not a vendor statement
-anyone here has read; §4c is the standing reminder that reading a convention is not an observation.
+**4. A cost IS measured on this path, and reason (b)'s mechanism is its leading hypothesis.**
+Issue **#1549** (OPEN, `area:bracket-keeper`) measures it: on TNGX, LIVE 2026-09-24, nine of ten
+arming attempts were rejected `OnWrongSideOfMarket`, the entry was accepted eight minutes after
+the touch, and the delay cost **0.7-1.6%** (4-8 USD on 20 shares) — "buy after a 0.5% rebound"
+became about 2.6% from the low. Six of 34 native fires hit the same rejection. Its **H1 is the bid
+reference itself**: the trigger sits 50 bps above the BID while a BUY stop must rest above the
+market, so a spread wider than 50 bps puts the trigger below the ask and every retry repeats it.
+#1549 does not separate H1 from H2 (a reference low up to one tick stale), so the cost is measured
+and its cause is NOT apportioned. #1549 also already asks which price Saxo compares the trigger
+against. An earlier draft of this section said "no harm is measured anywhere". That was wrong.
 
-*And our reference may not be load-bearing after placement anyway.* §4b's own L1 result is that
-"the server had repositioned the trigger DOWN to the new low 9.65 + distance, **unprompted**". If
-the server re-anchors on its own, the price we compose the order from decides WHEN we place, not
-where the trigger ends up — which removes the premise that the two must agree.
+**5. Which series the server ratchets from cannot be answered from anything on disk — and that is
+a property of the JOURNAL, not of the sample size.** No price on a `trail_armed` line is
+server-echoed: `trigger` is our composed `geo.order_price`, `distance` is the requested distance,
+`ceiling` is read back out of our own request body, `final_trough` is the latched minimum of our
+own bid samples, and `trigger_at_final_trough` is that trough plus the requested distance. The
+only server-echoed prices anywhere in the journal are the fill and its venue time. A fill gives a
+ONE-SIDED bound — fill >= trigger = L_server + d, so `fill - d` bounds the server's reference low
+from ABOVE — while bid-referencing predicts the LOWER of the two candidate lows, which an upper
+bound can never exclude. Measured over the 8 fires carrying both a journaled arm distance and
+cached 1-minute bars: 6 of 8 bounds sit above that window's lowest trade and 2 sit below it by at
+most one tick, inside the tick-rounding residual this repo measures at a median of 0.51 bps. Every
+row is consistent with BOTH hypotheses. The VCYT trough of 44.00 does not help either: it is OUR
+latch, not a server echo.
 
-**WHAT IS RECOVERABLE IS A CONSTRAINT, AND IT IS SUFFICIENT.** The watch reads the
-`PriceFeed` contract, and `broker_contract/price_feed.py`'s `PricePoint` carries exactly `uic`,
-`bid`, `ask`, `event_time`, `received_at`, `source` and a `mid` property. **There is no traded
-series in it at all**, so a trade price was never a thing the watch could have read. Of the two
-sides it does have, the bid is the lower, so it is the side a DECLINING price reaches first —
-which is what a pullback rung needs. The analogous choice on the EXIT side has its reason written
-down, in
-[`../superpowers/plans/2026-08-07-saxo-live-price-feed.md`](../superpowers/plans/2026-08-07-saxo-live-price-feed.md):
-`price=point.bid,  # selling a long: the executable side is the BID`. Nothing comparable was ever
-written for the entry side, but the same contract bounded both.
+**6. Two cheap steps before any attended probe, neither needing an order.**
+*(i)* Read `SupportedOrderTriggerPriceTypes` for the instrument — the **A7** step already written
+down in [`trailing_probes_runbook_2026_08_07.md`](trailing_probes_runbook_2026_08_07.md), which is
+read-only. *(ii)* Journal the server's own resting trigger. The reconcile pass already calls
+`get_order` every 45 s on every resting armed tier (`control_loop`'s `_read_entry_order`) and uses
+the answer only for "is it gone"; on a `TrailingStopIfTraded` the resting price is Saxo's `Price`,
+the trigger as the server holds it, and the exit side already trusts it this way (#1514). A
+sampled `resting_price - wire distance` that falls below the session's running lowest trade
+refutes trade-referencing with no extra HTTP and no attended session. An attended probe at n>=2 is
+needed only if both are inconclusive — and it must log THREE series, not the two an earlier draft
+named: the bid, the last traded, and the server's own resting trigger.
 
-**And the constraint is OURS, not the vendor's.** The subscription asks for
-`FieldGroups: ["Quote", "PriceInfo", "DisplayAndFormat"]`
-(`data/alt_data/saxo_marketdata_client.py`) while the cache keeps only `row["Quote"]`
-(`QuoteCache.apply` in `data/alt_data/saxo_price_stream.py`), and `PriceInfoDetails` is reachable
-through a `GET /trade/v1/infoprices` snapshot — the session-OPEN read in `control_loop` does
-exactly that, live-verified 2026-08-11. Whether either block carries a last-traded price for
-stocks is NOT established here. What is established is that a second series was never plumbed
-into the watch path, so the reference is revisitable rather than fixed by the vendor.
+**7. What this leaves for the owner.** The recorded reason for a real-money price reference rests
+half on a premise the order type appears to contradict, and a measured cost on the same path names
+that premise's mechanism as its leading hypothesis. That is a case to REVISIT the reference. It is
+not a defect: nothing here shows the bid is worse than the alternative, and on the one divergent
+replay record the bid entered 0.63 higher while the trade-referenced replay armed its trail early
+and missed the take-profit — of that record's ΔR −0.5648, the entry channel is −0.5115 and the
+exit fill the rest, and the panel is explicit that the SIZE of the entry gap is not what produced
+the flip. What changed on 2026-10-29 is that the decision now has evidence on both sides instead
+of an unfollowable citation. The measurement that prompted it is section 9 of
+[`replay_vs_live_panel_2026_10_11.md`](replay_vs_live_panel_2026_10_11.md).
 
-**So: the choice is explained, the deliberation is not.** Nobody recorded choosing the bid, and
-the first rationale anyone reaches for — matching the server's ratchet — is contradicted by the
-order type we place. The sharpened open question is worse than the original one: if the server's
-trigger is traded-referenced while our detection is quote-referenced **because our own cache
-discards the non-quote block**, then the mismatch between the two series is an accident of
-plumbing rather than a decision. That is what the probe below has to settle.
-
-**NOT ESTABLISHED, and §4c is the warning.** §4c records this memo making exactly this mistake
-once already: a PREPARED state stood in for the TERMINAL one, and its lesson is "verify at the
-state the claim is about". The same discount applies here. Probe L1 watched a RESTING order being
-repositioned; it did not establish what the matching engine references, and n=1 against §4's own
-BLOCKING standard of n>=2. Saxo's own field is `TrailingStopDistanceToMarket`, whose name does not
-name a side, and no statement of the reference side is recorded anywhere in this repository.
-
-**What would settle it.** An attended LIVE probe at n>=2 that logs the bid series and the
-last-traded series side by side while a native trailing entry rests and ratchets, recording
-(a) which series each server repositioning follows, and (b) which series the FIRE condition
-reacts to — the two can differ inside one order type, and the `IfTraded` suffix is a claim about
-(b) that nobody here has checked against (a). Until then the reference is a decision with no
-recorded reason, which is what this section says and all it says.
-
-**Why this was asked on 2026-10-29.** On 2026-10-28 the reference gap produced the first
-outcome-word disagreement between the replay and a closed LIVE record: `VCYT:2026-09-29`, where
-the daemon's bid reached the 44.01 rung on 2026-10-06 and no trade of that session did. The
-measurement, its decomposition and the decision not to change either side are in
-[`replay_vs_live_panel_2026_10_11.md`](replay_vs_live_panel_2026_10_11.md) section 9.
-
-**What did NOT change.** The daemon keeps the bid. No harm is measured anywhere: on the only
-divergent record the bid reference earned **+0.5648 R** against the trade-referenced replay. The
-gap is reported, not closed — and the sign of the entry gap is not established, because a trade
-can print below the displayed bid, so the tape can reach a rung the bid has not.
+**8. What the earlier drafts got wrong, kept as the record.** (i) "the reason is recorded nowhere"
+— false; it was in the docstring being edited. (ii) "no harm is measured anywhere" — false; #1549
+measures one. (iii) "no vendor statement anyone here has read" — false; the 2026-08-07 precheck is
+one. (iv) "there is no traded series in the contract, so a trade price was never available" — a
+claim about field NAMES, not data: `YfinancePriceFeed` puts `last_price` into **both** `bid` and
+`ask` with `source="yfinance-last"`, so the contract carries a last trade whenever its
+implementation chooses to. (v) the bid "is the side a DECLINING price reaches first" — true
+arithmetic, but a 2026-10-29 reconstruction, not anyone's recorded reasoning. (vi) blaming the
+cache for discarding "the non-quote block" — wrong lever: the subscription asks for `PriceInfo`,
+never for the `PriceInfoDetails` group that a snapshot would need.
 
 ## 9. Corrections to prior docs
 
-- The "memo trap #8" cited by `entry_watch._point_sample_bids` and the `entry_trail_watcher` module docstring is ABSENT from the repo and from every branch's history. The bid-reference rationale is NOT recorded anywhere: §4d says what §4b does and does not establish, and why the obvious reconstruction is contradicted by the order type we place.
-- **STALE, corrected 2026-10-29:** this bullet said `docs/research/trailing_execution_design_2026_08_07.md` is "ABSENT from the repo". It is tracked today (153 lines) — it was written 2026-08-07 and first committed 2026-08-23, 16 days later, which `docs/research/CLAUDE.md` now cites as its own example of why a finished memo is committed the same day. The rest of this bullet stands as written:
+- The "memo trap #8" cited by `entry_watch._point_sample_bids` and the `entry_trail_watcher` module docstring could not be followed: as of 2026-10-28 no tracked markdown carried the phrase. Today it is named only by the documents recording its removal — §4d and this section, and section 9 of `replay_vs_live_panel_2026_10_11.md` — so the search returns those and nothing else. The RATIONALE was never missing: it stood in the same docstring sentence as the dead citation, and §4d quotes it.
+- **STALE, corrected 2026-10-29:** the bullet below said `docs/research/trailing_execution_design_2026_08_07.md` is "ABSENT from the repo". It is tracked today, 153 lines: written 2026-08-07, first committed 2026-08-23 in `6a811c58`. `docs/research/CLAUDE.md` cites the same episode as its own example of why a finished memo is committed the same day, and rounds the gap to "three weeks" where the dates give 16 days. The bullet is re-tensed below; its INC-4 point stands.
 - `docs/research/trailing_execution_design_2026_08_07.md` was cited by the whatif memo and was ABSENT from the repo when this memo was written (survivors: `trailing_sl_exit_policy_bot_amend_{design,plan}_2026_08_09.md`); the INC-4 rejection rationale is memory-sourced — restated self-contained here (§2 V2 row + the 45s-cadence facts).
-- No production code places any trailing order today: `TrailingStopIfTraded` exists only in recognition frozensets and an unconsumed wire primitive — Tor-B's LIVE validation (SELL ratchet n=2, amend repositioning) was probe-level. V1 is a contract extension (`SupportsTrailingStop` Protocol) + probe, not reuse.
+- **STALE, corrected 2026-10-29:** this bullet said "No production code places any trailing order today". It was true when written, before V1 shipped. Production places them now: `brokers/saxo/broker.py` defines `_TRAILING_STOP_ORDER_TYPE = "TrailingStopIfTraded"` and `place_trailing_stop`, called from the arming path in `control_loop`; §4c measured 23 fires and §4d rests on the order type being placed. As written: `TrailingStopIfTraded` existed only in recognition frozensets and an unconsumed wire primitive — Tor-B's LIVE validation (SELL ratchet n=2, amend repositioning) was probe-level, and V1 was a contract extension (`SupportsTrailingStop` Protocol) + probe, not reuse.
 - The exit amend path (`_build_amend_stop_body`) stamps `_EXIT_DURATION` (GoodTillCancel) and defaults `StopIfTraded` — any entry amend needs its own GTD-preserving method; PATCHing an entry through the exit body would silently clobber its TTL.
 
 ## 10. Zen adversarial pass — adjudication record
