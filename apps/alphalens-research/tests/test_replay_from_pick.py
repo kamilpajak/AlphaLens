@@ -3436,6 +3436,13 @@ class TheTouchAuditMeasuresTheReferenceGapPerRecordTest(_FetchingTestCase):
     # bar of the tape -- so a corroborating tape has a POSITIVE lag and the
     # sign of that number means something.
     _TOUCH_AT = dt.datetime(2026, 9, 21, 13, 30, 30, tzinfo=dt.UTC)
+    # The session AFTER the touch, and still inside VST's 2026-09-30T20:00Z
+    # entry deadline -- which is what makes it VCYT's shape rather than a
+    # ladder that had already expired.
+    LATE_REACH = dt.datetime(2026, 9, 22, 13, 30, tzinfo=dt.UTC)
+    # A session of the window that the tape carries no bar for, and a touch
+    # inside it.
+    _TOUCH_UNOBSERVED = dt.datetime(2026, 9, 23, 14, 0, tzinfo=dt.UTC)
     # 77 seconds after XNYS's 20:00:00Z close on 2026-09-21: AUR:2026-10-06-g2's
     # own shape, which falsifies the README's "every live fire on record
     # happened in the session of its touch".
@@ -3504,14 +3511,25 @@ class TheTouchAuditMeasuresTheReferenceGapPerRecordTest(_FetchingTestCase):
         return answer["touch_audit"]["entries"][0]
 
     # A tape whose 2026-09-21 session trades ABOVE the tier and whose
-    # 2026-10-01 session trades below it: VCYT's own shape, one session late.
+    # 2026-09-22 session trades below it: VCYT's own shape, one session late and
+    # still INSIDE the 2026-09-30T20:00Z entry deadline. The third segment only
+    # satisfies the deadline-coverage gate.
     def _late_tape(self) -> list[dict[str, Any]]:
+        return (
+            _aggs(self.WALK_START, 3, price=200.0)
+            + _aggs(self.LATE_REACH, 3, price=10.0)
+            + _aggs(self.AFTER_DEADLINE, 3, price=11.0)
+        )
+
+    # The same shape with the reach moved PAST the entry deadline: the ladder has
+    # expired by then, so the tape reaching the tier there is no fill at all.
+    def _post_deadline_tape(self) -> list[dict[str, Any]]:
         return _aggs(self.WALK_START, 3, price=200.0) + _aggs(self.AFTER_DEADLINE, 3, price=10.0)
 
     def test_a_touch_the_tape_reaches_in_its_own_session_is_corroborated(self) -> None:
         """The common case, and the one that has to be visible as such: the bid
         touch has a counterpart on the tape in the same session, so the entry
-        channel contributed nothing to whatever the two results differ by."""
+        channel's divergence is bounded by one minute of tape."""
         with TemporaryDirectory() as tmp:
             directory = pathlib.Path(tmp)
             # The first bar trades above the tier, the next two below it, so the
@@ -3561,9 +3579,173 @@ class TheTouchAuditMeasuresTheReferenceGapPerRecordTest(_FetchingTestCase):
             # `_aggs` prices a bar at open=price, low=price-0.5.
             self.assertEqual(tier["tape_low_touch_session"]["value"], 199.5)
             self.assertEqual(tier["tape_low_touch_session"]["at_utc"], format_time(self.WALK_START))
-            self.assertEqual(tier["first_tape_reach_at"]["value"], format_time(self.AFTER_DEADLINE))
-            # 2026-09-21T13:30:30Z -> 2026-10-01T13:30:00Z is 9 days 23:59:30.
-            self.assertEqual(tier["touch_to_tape_lag_minutes"]["value"], 14399.5)
+            self.assertEqual(tier["first_tape_reach_at"]["value"], format_time(self.LATE_REACH))
+            # 2026-09-21T13:30:30Z -> 2026-09-22T13:30:00Z is 23:59:30.
+            self.assertEqual(tier["touch_to_tape_lag_minutes"]["value"], 1439.5)
+
+    def test_a_reach_only_after_the_entry_deadline_is_no_reach_at_all(self) -> None:
+        """The walked series runs two margin sessions PAST the entry deadline, so
+        a tier the tape only reaches there is a tier the resting ladder had
+        already expired on. Publishing that as `tape_late` with a lag would claim
+        the replay entered later, when what the replay publishes is `no_fill`.
+        The reach is therefore bounded by the deadline."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+
+            _, answer, _ = self._audit(
+                directory,
+                payload=self._post_deadline_tape(),
+                touch=135.0,
+                touched_at=self._TOUCH_AT,
+            )
+            tier = self._tier(answer)
+
+            self.assertEqual(tier["verdict"], "tape_never")
+            self.assertIsNone(tier["first_tape_reach_at"]["value"])
+            self.assertIn("entry window", tier["first_tape_reach_at"]["null_reason"])
+            self.assertIsNone(tier["touch_to_tape_lag_minutes"]["value"])
+
+    def test_a_reach_before_the_touch_session_is_corroborated_with_a_negative_lag(self) -> None:
+        """The opposite sign of VCYT: the tape traded at the tier BEFORE the
+        daemon's bid latched a touch. The tier was reachable by the time the
+        daemon said so, which is what `corroborated` states, and the verdict is
+        NOT `tape_late` -- so the word never sits next to a negative lag. The
+        in-session boolean beside it is false, which is how a reader tells this
+        apart from a same-session agreement."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            payload = (
+                _aggs(self.WALK_START, 3, price=10.0)
+                + _aggs(self.LATE_REACH, 3, price=200.0)
+                + _aggs(self.AFTER_DEADLINE, 3, price=200.0)
+            )
+
+            # The touch is in the 2026-09-22 session; the reach is in 2026-09-21.
+            _, answer, _ = self._audit(
+                directory,
+                payload=payload,
+                touch=135.0,
+                touched_at=self.LATE_REACH + dt.timedelta(minutes=30),
+            )
+            tier = self._tier(answer)
+
+            self.assertEqual(tier["verdict"], "corroborated")
+            self.assertFalse(tier["tape_reaches_limit_in_touch_session"]["value"])
+            self.assertEqual(tier["first_tape_reach_at"]["value"], format_time(self.WALK_START))
+            self.assertEqual(tier["touch_to_tape_lag_minutes"]["value"], -1470.0)
+            self.assertIn("before the touch session", tier["verdict_formula"])
+
+    def test_a_touch_session_the_tape_carries_no_bar_for_is_unknown(self) -> None:
+        """A session inside the window can hold no kept bar at all: a halt, a
+        vendor gap, or a hand-trimmed `--bars` file. "No bar of that session
+        reaches the tier" is then true of a session nothing observed, so the
+        in-session question has no answer and must not be published as a
+        measured false."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+
+            _, answer, _ = self._audit(
+                directory,
+                payload=self._late_tape(),
+                touch=135.0,
+                touched_at=self._TOUCH_UNOBSERVED,
+            )
+            tier = self._tier(answer)
+
+            self.assertEqual(tier["touch_session"]["value"], "2026-09-23")
+            self.assertEqual(tier["verdict"], "unknown")
+            self.assertIsNone(tier["tape_reaches_limit_in_touch_session"]["value"])
+            self.assertIn(
+                "no kept bars", tier["tape_reaches_limit_in_touch_session"]["null_reason"]
+            )
+            self.assertIsNone(tier["tape_low_touch_session"]["value"])
+            self.assertIn("no kept bars", tier["tape_low_touch_session"]["null_reason"])
+
+    def test_a_touched_at_that_is_not_an_instant_is_not_a_missing_touch(self) -> None:
+        """One reason for two causes is the mistake this module's refusal
+        vocabulary already exists to avoid. A reader sent to look for a touch the
+        daemon never journalled never finds the one that is there and
+        unparseable, and `journaled_touch_at.value` shows the stamp either way."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            for stamp in ("2026-09-21T13:30:30", "not-a-time"):
+                with self.subTest(stamp=stamp):
+                    report = self._report_with_touch(directory, touch=135.0, touched_at=None)
+                    body = json.loads(report.read_text())
+                    record = next(row for row in body["trades"] if row["pick_key"] == self._PICK)
+                    record["entries"][0]["touched_at"]["value"] = stamp
+                    record["entries"][0]["touched_at"]["null_reason"] = None
+                    report.write_text(json.dumps(body))
+
+                    status, out, err = self._run(
+                        str(report),
+                        self._PICK,
+                        "--out",
+                        str(directory),
+                        "--entry-trail-bps",
+                        "50",
+                        "--bar-cache",
+                        str(directory / "cache"),
+                        "--format",
+                        "json",
+                        **self._seams(self._late_tape()),
+                    )
+
+                    self.assertEqual(status, 0, err)
+                    tier = self._tier(json.loads(out))
+                    self.assertEqual(tier["verdict"], "unknown")
+                    self.assertEqual(tier["journaled_touch_at"]["value"], stamp)
+                    self.assertIn("not an instant", tier["touch_session"]["null_reason"])
+
+    def test_a_tier_that_is_not_an_object_is_annotated_and_not_a_traceback(self) -> None:
+        """`spec.entry_tiers` reaches this block unvalidated, and a member of it
+        need not be an object at all. The record side already guards its rows
+        with `isinstance(row, Mapping)`; the document side has to as well, or an
+        annotation raises on a run that wrote all four input files."""
+        for tier_value in (None, "135.61", [135.61]):
+            with self.subTest(tier=tier_value), TemporaryDirectory() as tmp:
+                directory = pathlib.Path(tmp)
+                report = self._report_with_touch(directory, touch=135.0, touched_at=self._TOUCH_AT)
+                body = json.loads(report.read_text())
+                record = next(row for row in body["trades"] if row["pick_key"] == self._PICK)
+                record["plan"]["spec"]["entry_tiers"][0] = tier_value
+                report.write_text(json.dumps(body))
+
+                status, out, err = self._run(
+                    str(report),
+                    self._PICK,
+                    "--out",
+                    str(directory),
+                    "--entry-trail-bps",
+                    "50",
+                    "--bar-cache",
+                    str(directory / "cache"),
+                    "--format",
+                    "json",
+                    **self._seams(self._late_tape()),
+                )
+
+                self.assertEqual(status, 0, err)
+                tier = self._tier(json.loads(out))
+                self.assertEqual(tier["verdict"], "unknown")
+                self.assertIsNone(tier["tier_limit"]["value"])
+                self.assertIsNotNone(tier["tier_limit"]["null_reason"])
+
+    def test_the_published_test_source_does_not_overclaim_the_walks_rule(self) -> None:
+        """`intent_replay.walk._reachable` is TWO rules: a bar's low against the
+        rung, and a rung at or below the resting stop, which it SKIPS. This audit
+        applies the first only, so citing the whole function as its source would
+        make the block claim a verdict the walk would not reach."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+
+            _, answer, _ = self._audit(
+                directory, payload=self._late_tape(), touch=135.0, touched_at=self._TOUCH_AT
+            )
+
+            source = answer["touch_audit"]["tape_test_source"]
+            self.assertIn("intent_replay.walk._reachable", source)
+            self.assertIn("stop", source)
 
     def test_a_record_with_no_journaled_touch_is_unknown(self) -> None:
         """Most records carry no touch at all -- 55 of 66 LIVE entry tiers, with
@@ -3712,7 +3894,7 @@ class TheTouchAuditMeasuresTheReferenceGapPerRecordTest(_FetchingTestCase):
 
             self.assertEqual(status, 0, err)
             self.assertIn("tape_late", out)
-            self.assertIn("14399.5", out)
+            self.assertIn("1439.5", out)
 
 
 class TheHelpTextIsThePublishedSurfaceTest(unittest.TestCase):
