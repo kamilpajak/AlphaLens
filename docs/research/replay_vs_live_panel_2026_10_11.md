@@ -115,6 +115,8 @@ Three picks refused with `bars_window_unservable` / `deadline_not_yet_servable`,
 
 ## 6. What this does NOT settle
 
+**SUPERSEDED IN PART by section 9 (2026-10-28): the last bullet below ("The three refused picks") is wrong about what those three became. `BE:2026-09-30` filled and closed; only two of the three stayed `never_filled`. Read section 9.7 before quoting it.**
+
 * **The retracted 1.05%.** The published claim that "the replay is pessimistic on take-profit exits by 1.05%" came from a run whose tape carried a bar ninety minutes after the session close. On a correctly fetched tape the same pick measures **−1.11 pp of P&L (−9.4% of the realized figure)** — the same direction and a similar magnitude. Whether that is agreement or coincidence **cannot be determined**, because the retracted run's session filter and close-bar treatment were never recorded. That irreproducibility is why every run now writes a provenance sidecar.
 * **Any distribution.** Seven terminal records, four of them closed. Every magnitude here is a hint with its construction attached, not a constant.
 * **The non-US path.** All twelve records are XNAS or XNYS, so the venue-span half of the grid is unexercised by this panel.
@@ -129,7 +131,7 @@ Three picks refused with `bars_window_unservable` / `deadline_not_yet_servable`,
 
 ## 9. Correction, 2026-10-28: VCYT closed, and the outcome word no longer agrees
 
-Status: **MEASURED**, 2026-10-28. **This section assumes section 8 (2026-10-12) is already in the file.** If the two land in the other order, read section 8 first; it reports the two section 7 items landing and it changes nothing measured here. The `Status:` word is the one this file's own header uses, not one of the four in [`CLAUDE.md`](CLAUDE.md) — those four describe a design decision, and this file is a measurement record. Sections 3 and 4 are SUPERSEDED IN PART by this section. Sections 1, 2, 5, 6, 7 and 8 do not move.
+Status: **MEASURED**, 2026-10-28. **This section assumes section 8 (2026-10-12) is already in the file.** If the two land in the other order, read section 8 first; it reports the two section 7 items landing and it changes nothing measured here. The `Status:` word is the one this file's own header uses, not one of the four in [`CLAUDE.md`](CLAUDE.md) — those four describe a design decision, and this file is a measurement record. Sections 3, 4 and 6 are SUPERSEDED IN PART by this section. Sections 1, 2, 5, 7 and 8 do not move.
 
 ### 9.1 Section 3's "The outcome word agrees on 7 of 7" now has a counterexample
 
@@ -267,7 +269,34 @@ daemon" — agreement is a WINDOW, and both of its edges are properties of this 
 bps wedge of section 9.4 happens to fall inside that window, which is what makes the knob tempting
 and is also a fact about one pick and not a result.
 
-### 9.7 What IS being done, in two further pull requests
+### 9.7 Section 6's last bullet is wrong about the three refused picks
+
+Section 6 closes with: "**The three refused picks.** They become replayable on 2026-10-13 and would
+take the closed panel from four to four and the terminal panel from seven to ten, since all three
+are `never_filled`."
+
+The three are `BE:2026-09-30`, `OSCR:2026-09-30` and `SYM:2026-09-30` — the rows section 2 marks
+`refused deadline_not_yet_servable`. Read from the LIVE trades report taken
+2026-10-28T13:26:17.661Z (`alphalens broker trades --env live --format json`, offline mode, 48
+records) — the same read section 9.8 counts its 66 entry rows from:
+
+| pick | `state` | `state_reason` | exits |
+|---|---|---|---:|
+| `BE:2026-09-30` | `closed` | — | 1 |
+| `OSCR:2026-09-30` | `never_filled` | `expired` | 0 |
+| `SYM:2026-09-30` | `never_filled` | `expired` | 0 |
+
+So **two** of the three are `never_filled`, not three, and the closed panel would go from four to
+**five**, not four to four. `BE:2026-09-30` filled at 269.58 on 2026-10-08 and is the row section
+9.2 already quotes as the largest non-flipping gap on the 8-pick panel. The refutation was already
+in this file, one section away from the claim it refutes, which is why a correction has to sweep
+the whole document and not only the sentences it was pointed at.
+
+The "seven to ten" half survives: all three did become terminal, so the terminal panel does reach
+ten. The bullet was already false when it was published on 2026-10-11, because `BE:2026-09-30`
+filled three days earlier; nothing about VCYT caused it.
+
+### 9.8 What IS being done, in two further pull requests
 
 Neither changes how a touch is detected. Both attack the SILENCE around the gap, which is the part
 that was actually wrong.
@@ -278,7 +307,14 @@ that was actually wrong.
   `cancelled` 26, `expired` 7, `fill_probe` 3, `fill_probe_protection_gap` 1 — and **zero**
   `touched`. The 11 touch prices survive only in the pre-compaction snapshot files under
   `~/.alphalens/broker_orders/live/compaction_snapshots/` on the VPS, so **55 of 66 entry tiers can
-  never be asked** whether their bid touch had a counterpart on the tape.
+  never be asked** whether their bid touch had a counterpart on the tape. The two numbers come
+  from DIFFERENT reads and neither is the other's denominator, so both constructions are stated
+  here: **66** is the entry rows of the LIVE trades report
+  (`alphalens broker trades --env live --format json` taken 2026-10-28T13:26:17.661Z, offline
+  mode, 48 records, `sum(len(t["entries"]) for t in trades)` = 66), and **11** is the touches that
+  still carry a price. The same journal file holds only **61** distinct `crid` values, every one of
+  them from a `watch_open`, because a tier whose watch never opened leaves no journal line at all.
+  Do not recount 66 from the journal; it is not in there.
 * **`feat/replay-touch-audit`** — nothing asks that question routinely. Every figure in this
   section was produced by hand, from scratch files, which is why a 1-in-8 defect went five weeks
   without being seen.

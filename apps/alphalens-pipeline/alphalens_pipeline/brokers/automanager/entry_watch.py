@@ -133,9 +133,12 @@ def _point_sample_bids(
     checkable without leaving them.
 
     (This docstring used to cite a "memo trap #8" for the same fact. The
-    citation is dropped because it cannot be followed: ``git log --all -S"trap
-    #8" -- '*.md'`` prints nothing and ``grep -rn "trap #" docs/`` finds
-    nothing.)
+    citation was dropped on 2026-10-28 because it could not be followed: as of
+    that date no tracked markdown in any branch's history carried the phrase —
+    only the two comments that cited it. Do NOT re-run that search expecting an
+    empty result: section 9 of
+    ``docs/research/replay_vs_live_panel_2026_10_11.md`` records the removal and
+    names the phrase, so it is the one tracked document that matches today.)
 
     ONE shared sample per uic, for the same reason the drain above is once per
     uic: every tier of a laddered pick must read the SAME verdict, and the
