@@ -54,5 +54,10 @@ it is NOT re-injected after `/compact`.
   [`docs/superpowers/specs/2026-09-23-intent-replay-design.md`](../../docs/superpowers/specs/2026-09-23-intent-replay-design.md):
   "A knob cannot supply a missing fact; it can only hide that the fact is missing."
 - Never claim the replay reproduces the LIVE record exactly, and apply no single-signed correction
-  to an R figure — the timing gap is one-directional, the money gap is not, and the outcome word
-  itself can disagree.
+  to an R figure. The two gaps differ. The EXIT timing gap ran ONE way on the four closed picks of
+  the 2026-10-11 panel — the replay exited early on 4 of 4, and `README.md` names the mechanism
+  — while the money gap did not. The ENTRY reference gap has NO established sign: nothing here
+  measures which series reaches a rung first, and the inequality is not structural, because a
+  trade can print below the displayed bid (an odd-lot execution outside the NBBO, an off-exchange
+  print, or a tape report lagging its own execution each do it). So the tape can reach a rung the
+  bid has not. `VCYT:2026-09-29` is one observation of one direction, not a bias to correct for.

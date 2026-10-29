@@ -475,6 +475,7 @@ answer in the tool's favour:
 | the coarse ratchet step | a deliberate scope cut, not a missing fact: the step is a tenth of the distance floored at one tick, which is 11% of the distance at the median and up to 26% on cheap names, and it holds the live trigger higher than the modelled one |
 | the exit-region refusal, the day-1 gap gate, the cash floor at fire, partial fills, sibling retirement | live gates that change WHICH rungs fill. None is modelled |
 | the `StopLimitPrice` ceiling | not modelled because it does not bind: 8 of 23 recorded fires executed above it, by up to 53.5 bps |
+| queue position and the size quoted at the rung | the replay treats REACHING a rung as an executable event: it models neither queue priority nor how much was on offer there, so a touch into thin size fills here and need not live. **NOT MEASURED** — no depth or size series is fetched, so this is the one row in this table with no figure beside it. It flatters EXECUTABILITY; whether it flatters the ANSWER is a separate and weaker claim, since an entry that should not have filled can save money as readily as cost it |
 
 A stated distance has no upper bound here, because section 5.2 publishes the key
 as an integer `>= 1` and a deployment rail is not a document fact. But the live
