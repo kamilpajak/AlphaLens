@@ -493,6 +493,80 @@ class StatusCommandTest(unittest.TestCase):
         self.assertIn("23h ago", _age_phrase(86_399.9))
         self.assertIn("1d ago", _age_phrase(86_400.0))
 
+    # --- the withheld queue (#1822) ----------------------------------------
+
+    _WITHHELD_LABEL = "withheld"
+
+    def _withheld_line(self, human: str) -> str | None:
+        return next(
+            (line for line in human.splitlines() if line.startswith(self._WITHHELD_LABEL)), None
+        )
+
+    def test_a_withheld_queue_is_reported_in_both_renderings(self) -> None:
+        # The bug PR #1815 had to fix for `broker picks` was the two renderings
+        # disagreeing on this one fact; status must not repeat it.
+        (self.root / "picks.jsonl").write_bytes(b"not json\n{]\n")
+        payload = self._json("--offline")
+        self.assertEqual(payload["health"]["placements_withheld"], 2)
+        line = self._withheld_line(self._invoke("--offline").stdout)
+        self.assertIsNotNone(line)
+        assert line is not None
+        self.assertIn("2", line)
+
+    def test_the_withheld_line_names_the_hand_repair_not_re_arming(self) -> None:
+        """Re-arming does NOT clear this -- the journal is append-only, so only a
+        hand repair does. The `broker picks` help carries the same correction."""
+        (self.root / "picks.jsonl").write_bytes(b"not json\n")
+        line = self._withheld_line(self._invoke("--offline").stdout) or ""
+        self.assertIn("picks.jsonl", line)
+        self.assertIn("by hand", line)
+
+    def test_a_clean_queue_prints_no_withheld_line(self) -> None:
+        """Positive control: the new fact must be invisible on a real journal, like
+        the `refused` and `expired` lines beside it."""
+        from alphalens_pipeline.brokers.automanager.picks import arm_pick
+
+        from tests.brokers.automanager.test_picks import _intent
+
+        arm_pick(_intent("KO", "2026-09-08"), path=self.root / "picks.jsonl")
+        payload = self._json("--offline")
+        self.assertEqual(payload["health"]["placements_withheld"], 0)
+        self.assertIsNone(self._withheld_line(self._invoke("--offline").stdout))
+
+    def test_an_unknown_count_prints_no_line_and_no_none(self) -> None:
+        """`_unknown_health` leaves the count at None. Rendering it would put
+        "withheld  None" on the screen during an incident."""
+        from alphalens_pipeline.brokers.automanager import status_snapshot as mod
+
+        (self.root / "picks.jsonl").write_bytes(b"not json\n")
+        with mock.patch.object(mod, "_token_health", side_effect=RuntimeError("store blew up")):
+            result = self._invoke("--offline")
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIsNone(self._withheld_line(result.stdout))
+        self.assertNotIn("None", result.stdout)
+
+    def test_the_withheld_line_states_the_count_and_never_a_threshold_verdict(self) -> None:
+        """Same rule as the heartbeat line: status publishes the number, the
+        Prometheus rule owns the threshold. The command's own docstring promises it."""
+        (self.root / "picks.jsonl").write_bytes(b"not json\n")
+        payload = self._json("--offline")
+        self.assertNotIn("CRITICAL", json.dumps(payload["health"]).upper())
+
+    def test_the_published_help_names_the_withheld_signal(self) -> None:
+        """The status docstring IS the published `--help`, so the enumeration of what
+        status reports is a claim about the command."""
+        from alphalens_cli.commands.broker import status_command
+
+        doc = (status_command.__doc__ or "").lower()
+        self.assertIn("withh", doc)
+
+    def test_the_published_help_no_longer_claims_a_slot_count(self) -> None:
+        """#1732 removed the slots section and two tests assert its absence, but the
+        `--help` enumeration kept naming it."""
+        from alphalens_cli.commands.broker import status_command
+
+        self.assertNotIn("slot", (status_command.__doc__ or "").lower())
+
     def test_no_token_value_ever_reaches_the_output(self) -> None:
         payload = self._json(broker=self._seed_book())
         blob = json.dumps(payload)

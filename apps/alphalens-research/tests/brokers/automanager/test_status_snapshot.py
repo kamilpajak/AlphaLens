@@ -484,6 +484,51 @@ class TestHealth(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertIsNone(_refusal_age_s(raw, _NOW))
 
+    def test_the_withheld_count_comes_off_the_pick_folds_malformed_tally(self) -> None:
+        # #1822: the same condition `iter_picks` gates on, and the same number
+        # `broker picks` prints -- read off PickFold.malformed rather than
+        # decided a second time here, so the two surfaces cannot drift.
+        (self.h.root / "picks.jsonl").write_bytes(b"not json\n{]\n")
+        self.assertEqual(self.h.build(_FakeBroker()).health.placements_withheld, 2)
+
+    def test_a_queue_whose_every_line_folds_reports_nothing_withheld(self) -> None:
+        from alphalens_pipeline.brokers.automanager.picks import arm_pick
+
+        from tests.brokers.automanager.test_picks import _intent
+
+        arm_pick(_intent("KO", "2026-09-08"), path=self.h.root / "picks.jsonl")
+        self.assertEqual(self.h.build(_FakeBroker()).health.placements_withheld, 0)
+
+    def test_an_unreadable_health_section_reports_the_count_as_unknown_not_as_zero(self) -> None:
+        """A default of 0 would claim a clean queue during the one incident where
+        nothing about health could be read -- a false green, which is the bug #1822
+        exists to remove."""
+        from alphalens_pipeline.brokers.automanager import status_snapshot as mod
+
+        (self.h.root / "picks.jsonl").write_bytes(b"not json\n")
+        with mock.patch.object(mod, "_token_health", side_effect=RuntimeError("store blew up")):
+            snapshot = self.h.build(_FakeBroker())
+        self.assertIsNone(snapshot.health.placements_withheld)
+
+    def test_health_folds_the_pick_journal_once_rather_than_twice(self) -> None:
+        """PR-T1 anti-torn-read rule, stated in this module's own docstring: each
+        journal is read ONCE and threaded into every consumer. `_health` broke it for
+        picks.jsonl -- the refusal lookup and the expiry lookup each folded the file --
+        so adding the withheld count on top would have made three reads of it."""
+        from alphalens_pipeline.brokers.automanager import picks as picks_mod
+        from alphalens_pipeline.brokers.automanager import status_snapshot as mod
+
+        calls: list[object] = []
+        real = picks_mod.read_pick_fold
+
+        def _counting(**kwargs: Any):
+            calls.append(kwargs.get("path"))
+            return real(**kwargs)
+
+        with mock.patch.object(picks_mod, "read_pick_fold", _counting):
+            mod._health(self.h.env, _NOW)
+        self.assertEqual(len(calls), 1, calls)
+
     def test_a_health_read_that_raises_degrades_to_an_unknown_section(self) -> None:
         from alphalens_pipeline.brokers.automanager import status_snapshot as mod
 

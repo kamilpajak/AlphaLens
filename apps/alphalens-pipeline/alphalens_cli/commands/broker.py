@@ -2288,6 +2288,16 @@ def _render_status_health(health: Any, skewed: list[str]) -> None:
     if health.last_expiry:
         age = _age_phrase(health.last_expiry_age_s)
         typer.echo(f"expired   {age}{health.last_expiry}")
+    # #1822: guarded on a truthy count, like the two lines above, so a clean
+    # queue and an unreadable health section both print nothing rather than
+    # "withheld  0" or "withheld  None". Same wording as `broker picks`, so one
+    # condition reads the same in both commands.
+    if health.placements_withheld:
+        typer.echo(
+            f"withheld  {health.placements_withheld} unreadable line(s) in picks.jsonl — "
+            "the drain places NOTHING; repair them by hand (the journal is "
+            "append-only), re-arming does not clear it"
+        )
     if skewed:
         typer.echo(f"WARN      journal changed while reading the broker: {', '.join(skewed)}")
 
@@ -2448,11 +2458,17 @@ def status_command(
 ) -> None:
     """One read-only snapshot of a broker instance — READ-ONLY (issue #1378).
 
-    Account, gross / slot / cash-floor headroom, the resting orders, the open
+    Account, gross and cash-floor headroom, the resting orders, the open
     entry-trail tiers and the daemon's health, in one invocation. The headroom
     numbers come from the DAEMON'S OWN folds with the candidate set to zero, so
     what is printed is what the gate will subtract; a state the gate could not
     value is rendered as ``BLOCKED`` with that reason rather than as a number.
+
+    The health half also reports the WITHHELD count: how many lines of
+    ``picks.jsonl`` the pick fold cannot read. Any non-zero count means the
+    drain places NOTHING at all, for every pick in the queue (#1788), and only
+    a hand repair of those lines clears it — re-arming does not, because the
+    journal is append-only. ``alphalens broker picks`` names the same condition.
 
     An unhealthy instance still exits 0 — health is content, and a Prometheus
     rule must not be duplicated in a CLI. Only a failed broker read exits 1.

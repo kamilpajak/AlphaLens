@@ -55,9 +55,15 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from alphalens_pipeline.brokers.automanager import entry_trails, safety, state_paths
+
+if TYPE_CHECKING:
+    # Type-only: ``picks`` stays a lazy in-body import at the two call sites, so
+    # the annotation costs no import at runtime but pyright still checks that
+    # ``_last_terminal`` is handed a fold and not the env string it used to take.
+    from alphalens_pipeline.brokers.automanager.picks import PickFold
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +159,15 @@ class Health:
     # with its age from the line's own ``expired_ts`` (the #1385 rule).
     last_expiry: str | None = None
     last_expiry_age_s: float | None = None
+    # #1822: how many lines of picks.jsonl the fold cannot read. Any non-zero
+    # value means the drain places NOTHING at all, for every key in the queue
+    # (``picks.iter_picks`` fails closed since #1788), and the journal is
+    # append-only so it never heals without a hand repair. The COUNT, never a
+    # verdict — the Prometheus rule owns the threshold, like every other number
+    # in this record. ``None`` is "could not be read" (``_unknown_health``):
+    # defaulting to 0 would claim a clean queue during exactly the incident
+    # where nothing is known.
+    placements_withheld: int | None = None
     as_of: str = ""
 
 
@@ -476,16 +491,20 @@ def _refusal_age_s(raw_ts: Any, now: dt.datetime) -> float | None:
 
 
 def _last_terminal(
-    env: str, now: dt.datetime, *, status: str, ts_field: str
+    fold: PickFold, now: dt.datetime, *, status: str, ts_field: str
 ) -> tuple[str | None, float | None]:
     """``(rendered line, age in seconds)`` for the latest pick in ``status``.
 
     The age is derived from the line's own timestamp (``refused_ts`` /
     ``expired_ts``) — the moment the daemon wrote it — never from the brief
-    date the text renders, which is a different thing entirely."""
-    from alphalens_pipeline.brokers.automanager import picks as picks_mod
+    date the text renders, which is a different thing entirely.
 
-    fold = picks_mod.read_pick_fold(path=state_paths.picks_path(env=env))
+    Takes the already-read ``PickFold`` rather than reading one. It used to fold
+    the journal itself, so ``_health`` read picks.jsonl TWICE — once for the
+    refusal and once for the expiry — against this module's own rule that each
+    journal is read ONCE and threaded into every consumer (the docstring above,
+    the daemon's PR-T1 anti-torn-read rule). Threading it also makes #1822's
+    withheld count free: it comes off the same fold."""
     for record in reversed(fold.records):
         if record.status != status:
             continue
@@ -493,10 +512,6 @@ def _last_terminal(
         text = f"{record.ticker} {record.trade_date.isoformat()}: {reason}".strip()
         return (text, _refusal_age_s(record.record.get(ts_field), now))
     return (None, None)
-
-
-def _last_refusal(env: str, now: dt.datetime) -> tuple[str | None, float | None]:
-    return _last_terminal(env, now, status="refused", ts_field="refused_ts")
 
 
 def _waiting_picks(
@@ -560,6 +575,7 @@ def _unknown_health(env: str, now: dt.datetime) -> Health:
 
 
 def _health(env: str, now: dt.datetime) -> Health:
+    from alphalens_pipeline.brokers.automanager import picks as picks_mod
     from alphalens_pipeline.observability import textfile
 
     gauges = parse_prom_gauges(
@@ -568,9 +584,13 @@ def _health(env: str, now: dt.datetime) -> Health:
     heartbeat = gauges.get(_HEARTBEAT_GAUGE)
     stream_age, stream_source = _price_stream(env, now)
     unit, unit_state, unit_since = _unit_health(env)
-    last_refusal, last_refusal_age_s = _last_refusal(env, now)
+    # ONE fold, threaded into all three consumers (the module docstring's rule).
+    pick_fold = picks_mod.read_pick_fold(path=state_paths.picks_path(env=env))
+    last_refusal, last_refusal_age_s = _last_terminal(
+        pick_fold, now, status="refused", ts_field="refused_ts"
+    )
     last_expiry, last_expiry_age_s = _last_terminal(
-        env, now, status="expired", ts_field="expired_ts"
+        pick_fold, now, status="expired", ts_field="expired_ts"
     )
     return Health(
         unit=unit,
@@ -590,6 +610,7 @@ def _health(env: str, now: dt.datetime) -> Health:
         last_refusal_age_s=last_refusal_age_s,
         last_expiry=last_expiry,
         last_expiry_age_s=last_expiry_age_s,
+        placements_withheld=pick_fold.malformed,
         as_of=_iso(now),
     )
 

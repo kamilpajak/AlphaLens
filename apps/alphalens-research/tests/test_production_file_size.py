@@ -138,7 +138,17 @@ BASELINE: dict[str, int] = {
     # not clear this condition), 7 for the rendering (above the empty-queue
     # early return, or a journal whose only line is unreadable renders as an
     # EMPTY queue) and 10 of comment saying which reader each surface asks.
-    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3207,
+    #
+    # Raised again, by 16, in #1822: `broker status` now reports the same
+    # withheld condition. #1788 left it visible only in `broker picks` and in
+    # journald, so a daemon that could place nothing read green on every gauge
+    # and on the one command an operator runs during an incident. The room is 5
+    # lines of published `--help` (the enumeration of what status reports is a
+    # claim about the command; the stale `slot /` came out in the same edit,
+    # #1732 having removed that section), 7 for the rendered line beside
+    # `refused` / `expired` and 4 of comment saying why the line is guarded on a
+    # truthy count rather than on the field being present.
+    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3223,
     "apps/alphalens-pipeline/alphalens_cli/commands/thematic.py": 1708,
     # Raised again, by 8, to say that the raise page's ticker fallback is
     # unreachable by construction. It sits beside the stop-PLACED page's
