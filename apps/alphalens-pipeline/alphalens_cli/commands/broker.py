@@ -1726,6 +1726,15 @@ def _pick_detail(record: PickRecord, wait: Any = None) -> str | None:
 def _render_picks_human(result: dict[str, Any]) -> None:
     """Render the picks table as the human view (same facts as the JSON)."""
     typer.echo(f"env  {result['env']}")
+    if result["placement_withheld"]:
+        # Stdout, not stderr: the JSON carries it in the body, so both renderings
+        # must say it. Above the early return: a journal whose only line is unreadable
+        # folds to no records, and `no picks in <path>` reads as an EMPTY queue.
+        typer.echo(
+            f"placements WITHHELD: {result['malformed']} line(s) in "
+            f"{result['picks_journal']} cannot be read, so the drain places nothing — "
+            "repair them by hand (the journal is append-only) and re-arm what was lost"
+        )
     rows = result["picks"]
     if not rows:
         typer.echo(f"no picks in {result['picks_journal']}")
@@ -1751,14 +1760,6 @@ def _render_picks_human(result: dict[str, Any]) -> None:
     extra = sorted(name for name in counts if name not in _PICK_STATES)
     summary = "  ".join(f"{name} {counts[name]}" for name in (*_PICK_STATES, *extra))
     typer.echo(f"{summary}  ({sum(counts.values())} picks)")
-    if result["placement_withheld"]:
-        # Stdout, not stderr: the JSON carries it in the BODY, so it is part of
-        # the answer, and the two renderings must carry the same facts.
-        typer.echo(
-            f"placements WITHHELD: {result['malformed']} line(s) in "
-            f"{result['picks_journal']} cannot be read, so the drain places nothing — "
-            "repair them by hand (the journal is append-only) and re-arm what was lost"
-        )
 
 
 @broker_app.command(name="picks")

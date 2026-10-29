@@ -421,6 +421,26 @@ class PicksWhileAPickLineCannotBeReadTest(unittest.TestCase):
         self.assertEqual(human.exit_code, 0, human.output)
         self.assertIn("withheld", human.stdout.lower())
 
+    def test_a_queue_that_folds_to_nothing_still_says_it_is_withheld(self) -> None:
+        """The state where the operator needs it most, and where the human
+        rendering used to drop it.
+
+        A journal whose ONLY line is unreadable folds to zero records, so the
+        table has nothing to print and the human view answered `no picks in
+        <path>` -- an empty queue, which is not what this is. The JSON carried
+        `placement_withheld` all along, so the two renderings disagreed on a
+        fact (repo CLI doctrine: they must carry the same ones).
+        """
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_bytes(b"not json\n")
+        payload = json.loads(_run(self.runner, "--format", "json").stdout)
+        self.assertEqual(payload["picks"], [], "the fixture must fold to no records")
+        self.assertIs(payload["placement_withheld"], True)
+
+        human = _run(self.runner)
+        self.assertEqual(human.exit_code, 0, human.output)
+        self.assertIn("withheld", human.stdout.lower())
+
     def test_a_clean_queue_does_not_claim_the_placements_are_withheld(self) -> None:
         """Positive control: the new fact must be invisible on a real journal."""
         _arm(self.home, "KO", "2026-07-20")
