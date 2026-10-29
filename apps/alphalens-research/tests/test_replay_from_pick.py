@@ -3896,6 +3896,126 @@ class TheTouchAuditMeasuresTheReferenceGapPerRecordTest(_FetchingTestCase):
             self.assertIn("tape_late", out)
             self.assertIn("1439.5", out)
 
+    def test_a_bar_whose_low_equals_the_tier_limit_reaches_it(self) -> None:
+        """The inequality has to be the ENGINE's, including at equality.
+
+        ``walk._reachable`` ends in ``bar.low <= rung.limit_price``, so a bar
+        whose low is the limit to the cent fills the rung. An audit that used a
+        strict ``<`` would publish `tape_never` for a tier the walk fills on
+        that very bar, which makes the block contradict the result it annotates.
+        Nothing else in this class distinguishes the two: every other tape here
+        clears the limit by 125 or misses it by 64, so both inequalities agree.
+        """
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            # `_aggs` prices a bar at low = price - 0.5, and both 300.0 - 0.5
+            # and 200.0 - 0.5 are exact in binary, so "the low IS the limit"
+            # needs no tolerance. The first bar misses the limit, the next two
+            # are ON it, which is what makes equality the only thing deciding.
+            payload = (
+                _aggs(self.WALK_START, 1, price=300.0)
+                + _aggs(self.WALK_START + dt.timedelta(minutes=1), 2, price=200.0)
+                + _aggs(self.AFTER_DEADLINE, 3, price=200.0)
+            )
+
+            _, answer, _ = self._audit(
+                directory,
+                payload=payload,
+                touch=199.4,
+                touched_at=self._TOUCH_AT,
+                limit_price=199.5,
+            )
+            tier = self._tier(answer)
+
+            self.assertEqual(tier["tier_limit"]["value"], 199.5)
+            self.assertEqual(tier["tape_low_touch_session"]["value"], 199.5)
+            self.assertTrue(tier["tape_reaches_limit_in_touch_session"]["value"])
+            self.assertEqual(tier["verdict"], "corroborated")
+            self.assertEqual(
+                tier["first_tape_reach_at"]["value"],
+                format_time(self.WALK_START + dt.timedelta(minutes=1)),
+            )
+
+    def test_a_reach_on_the_touch_sessions_opening_bar_is_that_sessions_own(self) -> None:
+        """A session's FIRST bar is stamped at the open, so a reach there is the
+        one case where the earlier-session test is at its boundary.
+
+        That test is ``first_reach < open``, strict, because the opening bar is
+        IN the session the touch is in. A non-strict one would still answer
+        `corroborated`, but it would explain itself as a reach "in a session
+        before the touch session, so the lag is negative" about a bar of the
+        touch session itself -- a true word next to a false reason."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            # Every bar of 2026-09-21 is below the tier, so the first reach is
+            # the opening bar and the touch half a minute later is inside the
+            # same session.
+            payload = _aggs(self.WALK_START, 3, price=10.0) + _aggs(
+                self.AFTER_DEADLINE, 3, price=10.0
+            )
+
+            _, answer, _ = self._audit(
+                directory, payload=payload, touch=135.0, touched_at=self._TOUCH_AT
+            )
+            tier = self._tier(answer)
+
+            self.assertEqual(tier["first_tape_reach_at"]["value"], format_time(self.WALK_START))
+            self.assertEqual(tier["touch_session"]["value"], "2026-09-21")
+            self.assertEqual(tier["verdict"], "corroborated")
+            self.assertIn("the touch session itself", tier["verdict_formula"])
+            self.assertNotIn("before the touch session", tier["verdict_formula"])
+
+    def test_a_touch_stamped_on_the_close_instant_itself_is_in_no_session(self) -> None:
+        """The boundary of the rule the bars obey, which 77 seconds past it does
+        not reach.
+
+        Membership is ``open <= t < close``, so the close instant is the FIRST
+        instant outside. A touch latched there has no session for the same
+        reason AUR:2026-10-06-g2's touch 77 seconds later has none, and the two
+        must not be answered differently: an inclusive rule here would hand the
+        audit a session whose kept bars stop a minute before the stamp."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+
+            _, answer, _ = self._audit(
+                directory,
+                payload=self._late_tape(),
+                touch=135.0,
+                touched_at=self._CLOSE,
+            )
+            tier = self._tier(answer)
+
+            self.assertEqual(tier["journaled_touch_at"]["value"], format_time(self._CLOSE))
+            self.assertIsNone(tier["touch_session"]["value"])
+            self.assertIn(GRID_PREDICATE, tier["touch_session"]["null_reason"])
+            self.assertEqual(tier["verdict"], "unknown")
+
+    def test_a_touch_in_no_session_still_gets_the_lag_the_subtraction_has(self) -> None:
+        """`unknown` is the IN-SESSION question's answer, not the whole block's.
+
+        AUR:2026-10-06-g2 is this shape on the record: the touch is in no
+        session, so "did a trade reach the tier in the touch's own session" has
+        no subject -- but the lag between the journalled stamp and the first
+        reach is a plain subtraction whose both operands exist, and its sign is
+        the fact a reader of that record wants. Nulling it to match the verdict
+        would drop a measurement the run holds."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+
+            _, answer, _ = self._audit(
+                directory,
+                payload=self._late_tape(),
+                touch=135.0,
+                touched_at=self._TOUCH_AFTER_CLOSE,
+            )
+            tier = self._tier(answer)
+
+            self.assertEqual(tier["verdict"], "unknown")
+            # 2026-09-21T20:01:17Z -> 2026-09-22T13:30:00Z is 17:28:43.
+            self.assertEqual(tier["touch_to_tape_lag_minutes"]["value"], 1048.717)
+            self.assertIsNone(tier["touch_to_tape_lag_minutes"]["null_reason"])
+            self.assertEqual(tier["touch_to_tape_lag_minutes"]["unit"], "minutes")
+
 
 class TheHelpTextIsThePublishedSurfaceTest(unittest.TestCase):
     """``usage=argparse.SUPPRESS`` with a raw-description formatter means
