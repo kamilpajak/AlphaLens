@@ -715,10 +715,15 @@ class _CompactionTracker:
     out identical; ``latest_touched`` is the one kept for EVIDENCE instead (see
     its own note below).
 
-    ONE index dict PER KEPT REASON, and every field of this dataclass is such a
-    dict: that is what makes :data:`COMPACTED_LINES_PER_CRID_BOUND` equal the
-    field count, and a test pins the two together so a new reason cannot be
-    added without raising the bound.
+    ONE dict PER KEPT REASON, each holding at most ONE index per crid, and
+    every field of this dataclass is such a dict (``min_trough`` is one too: it
+    carries its index inside a tuple, beside the trough that index won on).
+    That is what makes :data:`COMPACTED_LINES_PER_CRID_BOUND` equal the field
+    count, and a test pins the two together so a new reason cannot be added
+    without raising the bound. The bound is the field count, not a proof about
+    a future field: a single field holding TWO indexes per crid would keep 7
+    lines and pass that test — measured 2026-10-29 — and is caught by the
+    every-ordering test instead.
 
     MUTABLE by design (unlike this module's frozen dataclasses): ``note()``
     updates those dicts in place across a single compaction pass and the

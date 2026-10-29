@@ -59,6 +59,20 @@ def _watch_open(
     )
 
 
+def _latest_touched_record(raw_lines: list[str], crid: str) -> dict[str, Any] | None:
+    """The record ``trades._build_trail_tiers`` reads a tier's ``touch_price``
+    and ``touched_at`` from: the LAST ``touched`` line of ``crid``, in file
+    order. Spelled here the way that consumer spells it, so a retention change
+    is checked against the reader rather than against the compactor."""
+    records = [json.loads(line) for line in raw_lines if line.strip()]
+    touched = [
+        record
+        for record in records
+        if record.get("crid") == crid and record.get("kind") == et.KIND_TOUCHED
+    ]
+    return touched[-1] if touched else None
+
+
 class TestEntryTrailBpsReader(unittest.TestCase):
     """``entry_trail_bps`` — unset/blank/malformed/out-of-bounds all fail
     CLOSED to 0 (feature OFF, today's behavior); explicit ``"0"`` is valid."""
@@ -717,6 +731,39 @@ class TestCompactionKeepsTheTouchedLine(unittest.TestCase):
             _line(et.KIND_TOUCHED, touch_price=43.10, touch_ts="2026-10-07T13:31:00.000Z"),
             compacted,
         )
+
+    def test_the_record_the_trades_reader_reads_survives_compaction(self) -> None:
+        # Retention is only worth the kept line if the CONSUMER still gets the
+        # number. ``trades._build_trail_tiers`` builds the entry record's
+        # ``touch_price`` / ``touched_at`` from the LAST ``touched`` record of
+        # the crid, so that is the expression asserted here — not merely "some
+        # touched line survived". Measured 2026-10-29 over 14573 generated
+        # journals carrying a touch: this expression came out identical to the
+        # full journal on all of them, where the pre-fix compactor lost it on
+        # 8235 (56.5%).
+        other = "KO:2026-08-12:T2-entry-0"
+        lines = [
+            _watch_open(),
+            _line(et.KIND_TOUCHED, touch_price=44.00, touch_ts="2026-10-06T19:05:54.861Z"),
+            _watch_open(other),
+            _line(et.KIND_TOUCHED, other, touch_price=12.00, touch_ts="2026-10-06T19:06:00.000Z"),
+            _line(et.KIND_TROUGH, trough=43.90),
+            _watch_open(),  # memo §5 CRITICAL-2 re-arm: this tier is touched twice
+            _line(et.KIND_TOUCHED, touch_price=43.80, touch_ts="2026-10-07T13:31:00.000Z"),
+            _line(et.KIND_TRAIL_ARMED, order_id="O-1", trigger=43.58, ceiling=43.60),
+            _line(et.KIND_FIRED, avg_price=44.43, realized_qty=100),
+            _line(et.KIND_CANCELLED, other, note="day order"),
+        ]
+        compacted = et.compact_entry_trail_lines(lines)
+        for crid in (_CRID, other):
+            self.assertEqual(
+                _latest_touched_record(compacted, crid),
+                _latest_touched_record(lines, crid),
+                f"{crid}: the record trades._build_trail_tiers reads must survive verbatim",
+            )
+        # Pinned explicitly, so the loop above cannot pass by comparing two
+        # Nones: the LATEST touch is the one the reader must see.
+        self.assertEqual(_latest_touched_record(compacted, _CRID)["touch_price"], 43.80)
 
     def test_touched_retention_stays_fold_equivalent(self) -> None:
         lines = [
