@@ -10087,6 +10087,125 @@ class TestChainAliveMetric(IsolatedHomeTestCase):
         self.assertEqual(captured["metrics"][cl.chain_alive_metric("broker-manager-sim")], 1)
 
 
+class TestPlacementsWithheldMetric(IsolatedHomeTestCase):
+    """The placements-withheld gauge (level 0/1): 1 while the pick fold reports a line
+    it cannot read, 0 when every line folds.
+
+    Why a level series and not the WARNING ``iter_picks`` already logs: since #1788
+    one unreadable line withholds the WHOLE queue, and the journal is append-only, so
+    the condition never heals without a hand repair. Until this gauge every monitored
+    surface read green for a daemon that could place nothing — the heartbeat kept
+    ticking, KILL was absent and the chain was alive. ``broker picks`` said it, and
+    nothing an operator watches did.
+
+    It MUST co-emit with the other three in ONE ``emit_domain_metrics(job, {...})``
+    call: that write atomically OVERWRITES the whole per-instance textfile, so a
+    second call to this domain would erase the heartbeat, the KILL gauge and the
+    chain gauge, and the daemon would read as DEAD rather than as withholding."""
+
+    _JOB = "broker-manager-sim"
+
+    def _picks_path(self) -> Path:
+        path = state_paths.picks_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _emitted(self) -> tuple[list[str], dict[str, Any]]:
+        """``(the job of every emit call, the metrics of the last one)``."""
+        jobs: list[str] = []
+        metrics: dict[str, Any] = {}
+
+        def _spy(job: str, emitted: Any) -> None:
+            jobs.append(job)
+            metrics.clear()
+            metrics.update(emitted)
+
+        with mock.patch("alphalens_pipeline.observability.textfile.emit_domain_metrics", _spy):
+            cl._default_emit_heartbeat()
+        return jobs, metrics
+
+    def test_an_unreadable_line_publishes_withheld_1(self) -> None:
+        self._picks_path().write_bytes(b"not json\n")
+        _, metrics = self._emitted()
+        self.assertEqual(metrics[cl.placements_withheld_metric(self._JOB)], 1)
+
+    def test_the_withheld_gauge_rides_the_one_call_that_carries_its_three_siblings(
+        self,
+    ) -> None:
+        """A second emit call to this domain would atomically erase the other three."""
+        self._picks_path().write_bytes(b"not json\n")
+        jobs, metrics = self._emitted()
+        self.assertEqual(jobs, [self._JOB], "exactly ONE emit call to the heartbeat domain")
+        self.assertEqual(
+            sorted(metrics),
+            sorted(
+                (
+                    cl.heartbeat_metric(self._JOB),
+                    cl.kill_active_metric(self._JOB),
+                    cl.chain_alive_metric(self._JOB),
+                    cl.placements_withheld_metric(self._JOB),
+                )
+            ),
+        )
+
+    def test_a_queue_whose_every_line_folds_publishes_withheld_0(self) -> None:
+        from alphalens_pipeline.brokers.automanager.picks import arm_pick
+
+        from tests.brokers.automanager.test_picks import _intent
+
+        arm_pick(_intent("KO", "2026-07-20"), path=self._picks_path())
+        _, metrics = self._emitted()
+        self.assertEqual(metrics[cl.placements_withheld_metric(self._JOB)], 0)
+
+    def test_a_journal_that_does_not_exist_yet_publishes_withheld_0(self) -> None:
+        """A daemon that has never been armed is not withholding anything."""
+        self.assertFalse(state_paths.picks_path().exists())
+        _, metrics = self._emitted()
+        self.assertEqual(metrics[cl.placements_withheld_metric(self._JOB)], 0)
+
+    def test_the_gauge_is_a_level_not_the_number_of_unreadable_lines(self) -> None:
+        """0/1 like its three siblings, so the rule reads the same way and no
+        ``rate()``/``increase()`` can be applied to it meaningfully. The COUNT is what
+        ``broker picks`` and ``broker status`` publish; the gauge owns the alert
+        condition only."""
+        self._picks_path().write_bytes(b"not json\nalso not json\n{]\n")
+        _, metrics = self._emitted()
+        self.assertEqual(metrics[cl.placements_withheld_metric(self._JOB)], 1)
+
+    def test_a_journal_that_cannot_be_read_at_all_publishes_withheld_not_a_false_green(
+        self,
+    ) -> None:
+        """An OSError on the journal means the drain cannot read the queue either, so
+        it places nothing — publishing 0 there would be the false green this gauge
+        exists to remove."""
+        with mock.patch.object(
+            cl.picks, "read_pick_fold", side_effect=OSError("picks.jsonl unreadable")
+        ):
+            _, metrics = self._emitted()
+        self.assertEqual(metrics[cl.placements_withheld_metric(self._JOB)], 1)
+
+    def test_an_unreadable_journal_still_publishes_the_other_three_gauges(self) -> None:
+        """The heartbeat must not depend on the pick journal: before this gauge a
+        permissions fault on picks.jsonl could not stop the liveness series, and it
+        still must not — HeartbeatStale would page about a daemon that is ticking."""
+        with mock.patch.object(
+            cl.picks, "read_pick_fold", side_effect=OSError("picks.jsonl unreadable")
+        ):
+            _, metrics = self._emitted()
+        for metric in (cl.heartbeat_metric, cl.kill_active_metric, cl.chain_alive_metric):
+            with self.subTest(metric=metric.__name__):
+                self.assertIn(metric(self._JOB), metrics)
+
+    def test_the_published_value_is_an_int_because_the_writer_refuses_bools(self) -> None:
+        """``emit_domain_metrics`` DROPS a bool sample (a ``True`` makes node_exporter
+        discard the whole file), so a bare ``fold.malformed > 0`` would publish
+        nothing and the rule would read green forever."""
+        self._picks_path().write_bytes(b"not json\n")
+        _, metrics = self._emitted()
+        value = metrics[cl.placements_withheld_metric(self._JOB)]
+        self.assertIs(type(value), int)
+
+
 class TestKillEdgeAlert(IsolatedHomeTestCase):
     """Edge-triggered KILL alert (observability only — placement/protection gating is
     unchanged). deps.alert fires ONCE on each False->True / True->False transition,

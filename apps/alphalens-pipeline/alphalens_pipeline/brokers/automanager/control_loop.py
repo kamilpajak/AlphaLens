@@ -150,6 +150,7 @@ AmendStopPlacer = Callable[[int, str, str, str, float, float, str], PlacedOrder]
 _HEARTBEAT_METRIC_NAME = "alphalens_broker_manager_last_tick_timestamp_seconds"
 _KILL_ACTIVE_METRIC_NAME = "alphalens_broker_manager_kill_active"
 _CHAIN_ALIVE_METRIC_NAME = "alphalens_broker_manager_chain_alive"
+_PLACEMENTS_WITHHELD_METRIC_NAME = "alphalens_broker_manager_placements_withheld"
 
 
 def heartbeat_metric(job: str) -> str:
@@ -183,6 +184,29 @@ def chain_alive_metric(job: str) -> str:
     restart — so without this gauge every monitored surface reads green while
     placement is halted indefinitely. ``AlphalensBrokerChainDead`` alerts on it."""
     return f'{_CHAIN_ALIVE_METRIC_NAME}{{job="{job}"}}'
+
+
+def placements_withheld_metric(job: str) -> str:
+    """The withheld-queue gauge (level, 0/1): 1 while the pick fold reports a line it
+    cannot read, 0 when every line folds. CO-EMITTED with ``heartbeat_metric`` in the
+    SAME ``emit_domain_metrics(job, {...})`` call, for the reason
+    ``kill_active_metric`` states — that write atomically OVERWRITES the whole
+    per-instance textfile, so a separate call would erase the other three and the
+    daemon would read as DEAD rather than as withholding.
+
+    It exists because since #1788 ONE unreadable line withholds the WHOLE queue:
+    :func:`picks.iter_picks` yields nothing while ``PickFold.malformed`` is non-zero,
+    so the drain places nothing at all. The journal is append-only, so the condition
+    never heals by itself — only a hand repair of ``picks.jsonl`` clears it. Until
+    this gauge the only surfaces that said so were a WARNING in journald and
+    ``alphalens broker picks``: the heartbeat kept ticking, KILL was absent and the
+    chain was alive, so every monitored series read green for an instance that could
+    place nothing. ``AlphalensBrokerPlacementsWithheld`` alerts on it.
+
+    A LEVEL and not the line count that ``broker picks`` and ``broker status``
+    publish: the condition is binary (any unreadable line withholds everything), and
+    0/1 matches the three siblings so the rule reads the same way."""
+    return f'{_PLACEMENTS_WITHHELD_METRIC_NAME}{{job="{job}"}}'
 
 
 # The stream gauge writes to its OWN domain textfile, NOT the heartbeat's domain
@@ -439,6 +463,52 @@ def _always() -> bool:
     return True
 
 
+def _placements_withheld() -> int:
+    """1 while the pick fold reports a line it cannot read, 0 when every line folds.
+
+    Read HERE rather than handed in by the loop, unlike ``kill`` and ``chain_alive``.
+    ``deps.iter_picks()`` yields decoded intents, so the count is thrown away before
+    the loop can see it. More decisively, ``run_once`` gates the drain off entirely
+    under KILL or a dead chain (``enabled=not kill and alive``), so a count forwarded
+    from the drain would be stale or zero exactly when the operator needs the truth.
+    Read here, the gauge always answers "is the queue readable right now".
+
+    Cost of the extra fold, measured 2026-10-29 on this Mac over journals built with
+    ``picks.arm_pick`` from the suite's ``TradeIntent`` fixture (535 B/line), median
+    of 30 timed calls after one warm-up: 75 lines / 40 KB 0.251 ms; 2 250 lines /
+    1.2 MB 7.57 ms; 5 000 lines / 4.3 MB 29.6 ms. Against ``--poll-seconds 45`` that
+    is 0.00056% of a tick at the realistic size and 0.066% at the largest. The tick
+    already folds this file twice (``iter_picks`` and ``iter_legacy_size_pct_picks``).
+
+    The chain gauge argues the opposite (it reuses the verdict ``run_once`` took,
+    "never a second ensure_alive() call") and that reasoning does not carry over: a
+    dead LIVE token provider LATCHES, so a re-read could contradict the halt the loop
+    just applied, while this condition is level-triggered on an append-only file. A
+    pick armed, disarmed or repaired between the drain's fold and this one makes the
+    gauge describe the CURRENT journal, which is the newer fact, and both rules
+    debounce ``for: 5m`` (about 7 ticks at 45 s), so no single-tick disagreement pages.
+
+    An OSError reads as WITHHELD, not 0: the drain reads the same journal through the
+    same function, so one this cannot open is one the drain cannot place from either,
+    and 0 would be the false green this gauge exists to remove. Caught HERE rather
+    than by the caller's ``except OSError`` so the other three gauges still publish —
+    a fault on ``picks.jsonl`` must not make a ticking daemon read as stopped."""
+    try:
+        malformed = picks.read_pick_fold().malformed
+    except OSError:
+        logger.warning(
+            "broker-manager cannot read %s to report whether placements are withheld; "
+            "publishing WITHHELD, because the drain reads that same journal",
+            state_paths.picks_path(),
+            exc_info=True,
+        )
+        return 1
+    # int(), never the bool: emit_domain_metrics DROPS a bool sample (a True or "1"
+    # makes node_exporter discard the whole file), so `malformed > 0` would publish
+    # nothing and the rule would read green forever.
+    return int(malformed > 0)
+
+
 def _default_emit_heartbeat(kill: bool = False, chain_alive: bool = True) -> None:
     """Write the per-tick Prometheus heartbeat + KILL-active gauges. A Type=simple
     daemon rarely triggers ExecStopPost, so the emit-job-metrics last_success clock is
@@ -451,6 +521,9 @@ def _default_emit_heartbeat(kill: bool = False, chain_alive: bool = True) -> Non
     ``chain_alive_metric``): the dead-chain page is edge-triggered, so this level
     series is the only standing indication that the daemon cannot place. It defaults
     to True so a caller that does not pass it never publishes a FALSE outage.
+    The placements-withheld gauge joins them too (#1822), and is the one value this
+    function READS rather than being handed — ``_placements_withheld`` says why, and
+    carries the measured cost of that read.
     The job label (``state_paths.metrics_job()``) is resolved HERE, at call
     time, not at import — so the textfile domain and the ``{job=...}`` label always
     reflect the CURRENT ``$ALPHALENS_BROKER_ENVIRONMENT`` rather than a value frozen
@@ -466,6 +539,7 @@ def _default_emit_heartbeat(kill: bool = False, chain_alive: bool = True) -> Non
                 heartbeat_metric(job): int(time.time()),
                 kill_active_metric(job): int(kill),
                 chain_alive_metric(job): int(chain_alive),
+                placements_withheld_metric(job): _placements_withheld(),
             },
         )
     except OSError:
