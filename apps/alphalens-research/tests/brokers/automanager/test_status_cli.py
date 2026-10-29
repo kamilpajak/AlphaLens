@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 import subprocess
 import unittest
 from pathlib import Path
@@ -504,22 +505,30 @@ class StatusCommandTest(unittest.TestCase):
 
     def test_a_withheld_queue_is_reported_in_both_renderings(self) -> None:
         # The bug PR #1815 had to fix for `broker picks` was the two renderings
-        # disagreeing on this one fact; status must not repeat it.
-        (self.root / "picks.jsonl").write_bytes(b"not json\n{]\n")
+        # disagreeing on this one fact; status must not repeat it. The rendered
+        # NUMBER is compared to the JSON number -- `assertIn(str(count), line)`
+        # passed a renderer that printed a hardcoded constant (measured).
+        (self.root / "picks.jsonl").write_bytes(b"not json\n{]\n[\n")
         payload = self._json("--offline")
-        self.assertEqual(payload["health"]["placements_withheld"], 2)
+        self.assertEqual(payload["health"]["picks_malformed"], 3)
         line = self._withheld_line(self._invoke("--offline").stdout)
         self.assertIsNotNone(line)
         assert line is not None
-        self.assertIn("2", line)
+        rendered = re.search(r"(\d+) unreadable line", line)
+        self.assertIsNotNone(rendered, line)
+        assert rendered is not None
+        self.assertEqual(int(rendered.group(1)), payload["health"]["picks_malformed"])
 
-    def test_the_withheld_line_names_the_hand_repair_not_re_arming(self) -> None:
-        """Re-arming does NOT clear this -- the journal is append-only, so only a
-        hand repair does. The `broker picks` help carries the same correction."""
+    def test_the_withheld_line_names_the_hand_repair_AND_the_re_arm(self) -> None:
+        """Both halves of the remedy, like the `broker picks` line and both alert
+        descriptions: repair the lines by hand, THEN re-arm what was lost. Stopping
+        at "re-arming does not clear it" reads as "re-arming is not part of the fix",
+        and the picks whose lines were torn still have to be re-armed."""
         (self.root / "picks.jsonl").write_bytes(b"not json\n")
         line = self._withheld_line(self._invoke("--offline").stdout) or ""
-        self.assertIn("picks.jsonl", line)
-        self.assertIn("by hand", line)
+        for phrase in ("picks.jsonl", "by hand", "re-arm"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, line)
 
     def test_a_clean_queue_prints_no_withheld_line(self) -> None:
         """Positive control: the new fact must be invisible on a real journal, like
@@ -530,7 +539,7 @@ class StatusCommandTest(unittest.TestCase):
 
         arm_pick(_intent("KO", "2026-09-08"), path=self.root / "picks.jsonl")
         payload = self._json("--offline")
-        self.assertEqual(payload["health"]["placements_withheld"], 0)
+        self.assertEqual(payload["health"]["picks_malformed"], 0)
         self.assertIsNone(self._withheld_line(self._invoke("--offline").stdout))
 
     def test_an_unknown_count_prints_no_line_and_no_none(self) -> None:
@@ -547,10 +556,51 @@ class StatusCommandTest(unittest.TestCase):
 
     def test_the_withheld_line_states_the_count_and_never_a_threshold_verdict(self) -> None:
         """Same rule as the heartbeat line: status publishes the number, the
-        Prometheus rule owns the threshold. The command's own docstring promises it."""
-        (self.root / "picks.jsonl").write_bytes(b"not json\n")
+        Prometheus rule owns the threshold. The command's own docstring promises it.
+
+        The assertion names the FIELD: as first written this test only checked that
+        "CRITICAL" was absent from the health JSON, which held on a clean queue, on a
+        malformed one, and against a renderer that ignored the field entirely
+        (measured) -- true and empty.
+        """
+        (self.root / "picks.jsonl").write_bytes(b"not json\n{]\n")
         payload = self._json("--offline")
-        self.assertNotIn("CRITICAL", json.dumps(payload["health"]).upper())
+        withheld = payload["health"]["picks_malformed"]
+        # A plain integer, so the rule can compare it: not a bool, not a string, not
+        # a word. `isinstance(True, int)` is True in Python, hence the type check.
+        self.assertIsInstance(withheld, int)
+        self.assertNotIsInstance(withheld, bool)
+        self.assertEqual(withheld, 2)
+        for verdict in ("CRITICAL", "WARNING", "SEVERE", "DEGRADED"):
+            with self.subTest(verdict=verdict):
+                self.assertNotIn(verdict, json.dumps(payload["health"]).upper())
+
+    def test_a_journal_that_cannot_be_opened_still_reports_withheld_and_keeps_health(
+        self,
+    ) -> None:
+        """The state the new Prometheus rule pages on, end to end.
+
+        ``_placements_withheld`` publishes WITHHELD=1 when picks.jsonl cannot be
+        OPENED, because the drain reads that same journal through that same function.
+        Status must not answer the opposite question: before this test the OSError
+        escaped ``_health``, the whole section fell back to ``_unknown_health``, and
+        the operator paged by that rule saw no withheld line at all, a ``daemon
+        unknown`` row and a ``kill none`` row that no longer came from the KILL files.
+        """
+        (self.root / "picks.jsonl").mkdir()  # opening a directory raises OSError
+        (self.root / "KILL").write_text("", encoding="utf-8")
+        payload = self._json("--offline")
+        health = payload["health"]
+        self.assertIsNotNone(health["picks_journal_error"])
+        self.assertIn("picks.jsonl", health["picks_journal_error"])
+        # The count is unknown, not zero: zero would be the false green the gauge
+        # exists to remove.
+        self.assertIsNone(health["picks_malformed"])
+        # Every OTHER health fact survives the journal fault, the way the daemon's
+        # other three gauges keep publishing through it.
+        self.assertTrue(health["kill_instance"])
+        line = self._withheld_line(self._invoke("--offline").stdout) or ""
+        self.assertIn("cannot be read", line)
 
     def test_the_published_help_names_the_withheld_signal(self) -> None:
         """The status docstring IS the published `--help`, so the enumeration of what

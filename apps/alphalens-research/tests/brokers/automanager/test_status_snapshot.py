@@ -489,7 +489,7 @@ class TestHealth(unittest.TestCase):
         # `broker picks` prints -- read off PickFold.malformed rather than
         # decided a second time here, so the two surfaces cannot drift.
         (self.h.root / "picks.jsonl").write_bytes(b"not json\n{]\n")
-        self.assertEqual(self.h.build(_FakeBroker()).health.placements_withheld, 2)
+        self.assertEqual(self.h.build(_FakeBroker()).health.picks_malformed, 2)
 
     def test_a_queue_whose_every_line_folds_reports_nothing_withheld(self) -> None:
         from alphalens_pipeline.brokers.automanager.picks import arm_pick
@@ -497,7 +497,7 @@ class TestHealth(unittest.TestCase):
         from tests.brokers.automanager.test_picks import _intent
 
         arm_pick(_intent("KO", "2026-09-08"), path=self.h.root / "picks.jsonl")
-        self.assertEqual(self.h.build(_FakeBroker()).health.placements_withheld, 0)
+        self.assertEqual(self.h.build(_FakeBroker()).health.picks_malformed, 0)
 
     def test_an_unreadable_health_section_reports_the_count_as_unknown_not_as_zero(self) -> None:
         """A default of 0 would claim a clean queue during the one incident where
@@ -508,7 +508,36 @@ class TestHealth(unittest.TestCase):
         (self.h.root / "picks.jsonl").write_bytes(b"not json\n")
         with mock.patch.object(mod, "_token_health", side_effect=RuntimeError("store blew up")):
             snapshot = self.h.build(_FakeBroker())
-        self.assertIsNone(snapshot.health.placements_withheld)
+        self.assertIsNone(snapshot.health.picks_malformed)
+
+    def test_a_pick_journal_that_cannot_be_opened_does_not_cost_the_whole_section(
+        self,
+    ) -> None:
+        """An OSError on picks.jsonl is contained where the daemon contains it.
+
+        ``control_loop._placements_withheld`` catches it locally so the heartbeat,
+        KILL and chain gauges still publish -- a fault on one journal must not make a
+        ticking daemon read as stopped. ``_health`` used to let it escape, and
+        ``build_snapshot`` then replaced every health fact with ``_unknown_health``,
+        whose ``kill_instance=False`` is not a reading of the KILL files at all.
+        """
+        self.h.write_heartbeat(age_s=12.0)
+        (self.h.root / "KILL").write_text("", encoding="utf-8")
+        (self.h.root / "picks.jsonl").mkdir()
+        health = self.h.build(_FakeBroker()).health
+        self.assertIsNotNone(health.picks_journal_error)
+        self.assertIn("picks.jsonl", health.picks_journal_error or "")
+        self.assertIsNone(health.picks_malformed)
+        self.assertAlmostEqual(health.heartbeat_age_s, 12.0, places=0)
+        self.assertTrue(health.kill_instance)
+
+    def test_a_readable_journal_reports_no_journal_error(self) -> None:
+        """Positive control: the fault field must be absent on the normal path, or the
+        renderer's branch would claim an unreadable journal on every invocation."""
+        (self.h.root / "picks.jsonl").write_bytes(b"not json\n")
+        health = self.h.build(_FakeBroker()).health
+        self.assertIsNone(health.picks_journal_error)
+        self.assertEqual(health.picks_malformed, 1)
 
     def test_health_folds_the_pick_journal_once_rather_than_twice(self) -> None:
         """PR-T1 anti-torn-read rule, stated in this module's own docstring: each

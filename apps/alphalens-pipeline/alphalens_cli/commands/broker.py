@@ -2288,15 +2288,27 @@ def _render_status_health(health: Any, skewed: list[str]) -> None:
     if health.last_expiry:
         age = _age_phrase(health.last_expiry_age_s)
         typer.echo(f"expired   {age}{health.last_expiry}")
-    # #1822: guarded on a truthy count, like the two lines above, so a clean
+    # #1822: guarded on a truthy value, like the two lines above, so a clean
     # queue and an unreadable health section both print nothing rather than
     # "withheld  0" or "withheld  None". Same wording as `broker picks`, so one
-    # condition reads the same in both commands.
-    if health.placements_withheld:
+    # condition reads the same in both commands — including BOTH halves of the
+    # remedy: the hand repair and the re-arm. Stopping at "re-arming does not
+    # clear it" reads as "re-arming is not part of the fix", while the picks whose
+    # lines were torn do still have to be re-armed once the lines are repaired.
+    if health.picks_journal_error:
+        # The journal did not OPEN, so there is no count to state. The daemon
+        # publishes WITHHELD for this too, so saying nothing here would leave the
+        # operator paged by that rule with no line at all.
         typer.echo(
-            f"withheld  {health.placements_withheld} unreadable line(s) in picks.jsonl — "
-            "the drain places NOTHING; repair them by hand (the journal is "
-            "append-only), re-arming does not clear it"
+            f"withheld  picks.jsonl cannot be read AT ALL ({health.picks_journal_error}) — "
+            "the drain places NOTHING; how many lines are unreadable is unknown "
+            "until the file opens"
+        )
+    elif health.picks_malformed:
+        typer.echo(
+            f"withheld  {health.picks_malformed} unreadable line(s) in picks.jsonl — "
+            "the drain places NOTHING; repair them by hand and re-arm what was lost "
+            "(the journal is append-only, so re-arming alone does not clear it)"
         )
     if skewed:
         typer.echo(f"WARN      journal changed while reading the broker: {', '.join(skewed)}")

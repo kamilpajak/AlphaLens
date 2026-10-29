@@ -148,7 +148,7 @@ BASELINE: dict[str, int] = {
     # #1732 having removed that section), 7 for the rendered line beside
     # `refused` / `expired` and 4 of comment saying why the line is guarded on a
     # truthy count rather than on the field being present.
-    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3223,
+    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3235,
     "apps/alphalens-pipeline/alphalens_cli/commands/thematic.py": 1708,
     # Raised again, by 8, to say that the raise page's ticker fallback is
     # unreachable by construction. It sits beside the stop-PLACED page's

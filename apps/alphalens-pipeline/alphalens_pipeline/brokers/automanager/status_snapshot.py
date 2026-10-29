@@ -164,10 +164,21 @@ class Health:
     # (``picks.iter_picks`` fails closed since #1788), and the journal is
     # append-only so it never heals without a hand repair. The COUNT, never a
     # verdict — the Prometheus rule owns the threshold, like every other number
-    # in this record. ``None`` is "could not be read" (``_unknown_health``):
-    # defaulting to 0 would claim a clean queue during exactly the incident
-    # where nothing is known.
-    placements_withheld: int | None = None
+    # in this record. ``None`` is "could not be read" (``_unknown_health``, and
+    # the journal-fault path below): defaulting to 0 would claim a clean queue
+    # during exactly the incident where nothing is known.
+    #
+    # Named for ``PickFold.malformed``, which is where it comes from and the name
+    # `broker picks` publishes the same integer under. NOT ``placements_withheld``:
+    # that command also publishes a BOOLEAN ``placement_withheld``, and two keys
+    # in one CLI differing by one letter and a type is a trap for the agents and
+    # scripts this JSON is for.
+    picks_malformed: int | None = None
+    # The journal could not be OPENED at all (``"IsADirectoryError: /path"``), as
+    # opposed to holding lines the fold cannot parse. The daemon publishes
+    # WITHHELD for this state too, because the drain reads the same file through
+    # the same function, so status must report it rather than fall silent.
+    picks_journal_error: str | None = None
     as_of: str = ""
 
 
@@ -585,7 +596,22 @@ def _health(env: str, now: dt.datetime) -> Health:
     stream_age, stream_source = _price_stream(env, now)
     unit, unit_state, unit_since = _unit_health(env)
     # ONE fold, threaded into all three consumers (the module docstring's rule).
-    pick_fold = picks_mod.read_pick_fold(path=state_paths.picks_path(env=env))
+    #
+    # An OSError here is CONTAINED, exactly where the daemon contains it
+    # (``control_loop._placements_withheld``): a fault on picks.jsonl must not
+    # cost the heartbeat, the KILL reading, the price age or the token rows.
+    # Letting it escape sent the whole section to ``_unknown_health``, whose
+    # ``kill_instance=False`` is not a reading of the KILL files at all — so an
+    # operator paged by AlphalensBrokerPlacementsWithheld saw neither the
+    # withheld line nor a true KILL state.
+    picks_path = state_paths.picks_path(env=env)
+    picks_journal_error: str | None = None
+    try:
+        pick_fold = picks_mod.read_pick_fold(path=picks_path)
+    except OSError as exc:
+        logger.warning("status: pick journal %s could not be read", picks_path, exc_info=True)
+        pick_fold = picks_mod.PickFold(records=[], malformed=0)
+        picks_journal_error = f"{type(exc).__name__}: {picks_path}"
     last_refusal, last_refusal_age_s = _last_terminal(
         pick_fold, now, status="refused", ts_field="refused_ts"
     )
@@ -610,7 +636,10 @@ def _health(env: str, now: dt.datetime) -> Health:
         last_refusal_age_s=last_refusal_age_s,
         last_expiry=last_expiry,
         last_expiry_age_s=last_expiry_age_s,
-        placements_withheld=pick_fold.malformed,
+        # Unknown, never 0, when the file did not open: the count is genuinely
+        # not readable, and 0 would read as a clean queue.
+        picks_malformed=None if picks_journal_error else pick_fold.malformed,
+        picks_journal_error=picks_journal_error,
         as_of=_iso(now),
     )
 
