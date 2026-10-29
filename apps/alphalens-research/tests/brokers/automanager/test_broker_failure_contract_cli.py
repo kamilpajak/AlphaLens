@@ -18,7 +18,11 @@ Four rules:
   cannot rot into a tautology;
 * **a non-retryable code whose recovery is mechanical carries a runnable
   argv** — a machine reads ``retryable: false`` as "drop it", so
-  ``write_outcome_unknown`` without a reconcile command means "lose the intent".
+  ``write_outcome_unknown`` without a reconcile command means "lose the intent";
+* **a ``broker_auth`` emitter that KNOWS its rail says so** — the table default
+  can only promise that something runnable comes out, never that it is the most
+  specific thing, so "remember the per-rail constant" is checked here rather
+  than left to review (#1811).
 """
 
 from __future__ import annotations
@@ -170,6 +174,117 @@ def _fail_with_codes(tree: ast.Module) -> list[str | None]:
                 arg = keyword.value
         codes.append(arg.value if isinstance(arg, ast.Constant) else None)
     return codes
+
+
+#: The code whose per-cause recovery is a convention the table cannot enforce.
+_MULTI_CAUSE_CODE = "broker_auth"
+
+#: The per-rail recovery constants an emitter of :data:`_MULTI_CAUSE_CODE` may
+#: pass, matched by PREFIX rather than by exact name so a third rail's constant
+#: is accepted once it follows the same spelling. What each one contains is
+#: asserted behaviourally in ``test_broker_auth_suggestion_cli.py``; this walk
+#: only checks that a site which knows its rail named one.
+_AUTH_RECOVERY_PREFIXES = ("_SIM_AUTH_", "_LIVE_AUTH_")
+
+#: The five known ``broker_auth`` sites that know their own cause: two on the
+#: SIM store read (``broker.py`` ~495 and ~514) and three on the LIVE
+#: market-data read (~772, ~795 and the legacy-store branch at ~806). A floor,
+#: not an equality: a sixth site that passes its constant is fine, a deleted one
+#: must not leave this walk asserting a property of nothing.
+_KNOWN_AUTH_SITES = 5
+
+
+def _code_of(call: ast.Call) -> str | None:
+    """The literal failure code of a ``_fail_with`` call, or ``None``."""
+    arg: ast.expr | None = call.args[0] if call.args else None
+    for keyword in call.keywords:
+        if keyword.arg == "code":
+            arg = keyword.value
+    return arg.value if isinstance(arg, ast.Constant) and isinstance(arg.value, str) else None
+
+
+def _auth_recovery_names(tree: ast.Module) -> list[tuple[str | None, int]]:
+    """The ``suggestions=`` name each ``broker_auth`` site passes, one per site.
+
+    Each entry is ``(name, lineno)``. ``None`` marks a site that passed
+    nothing, or passed something this walk cannot read as a named constant —
+    the shape that silently degrades to the table's two store reads.
+    """
+    names: list[tuple[str | None, int]] = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+            continue
+        if node.func.id != "_fail_with" or _code_of(node) != _MULTI_CAUSE_CODE:
+            continue
+        passed = next((kw.value for kw in node.keywords if kw.arg == "suggestions"), None)
+        # The line number rides along so a refusal can say WHICH site is bare.
+        # Its sibling gate already subTests on the module name; a failure that
+        # names neither sends the reader to grep for five call sites.
+        names.append((passed.id if isinstance(passed, ast.Name) else None, node.lineno))
+    return names
+
+
+def _string_tuple(node: ast.expr | None) -> tuple[str, ...] | None:
+    """A literal tuple or list of string constants, or ``None``.
+
+    An EMPTY literal comes back as ``()``, not ``None``: "declared with nothing
+    to run" and "built at runtime, unreadable" are different observations and
+    both must fail, so they must not collapse into one value.
+    """
+    if not isinstance(node, ast.Tuple | ast.List):
+        return None
+    elements: list[str] = []
+    for elt in node.elts:
+        if not (isinstance(elt, ast.Constant) and isinstance(elt.value, str)):
+            return None
+        elements.append(elt.value)
+    return tuple(elements)
+
+
+def _module_level_string_tuples(tree: ast.Module) -> dict[str, tuple[str, ...]]:
+    """Module-level names bound to a tuple of string literals.
+
+    The argvs are extracted into constants beside the table they serve, so a
+    walk that only read literal tuples would call four of the nine resolvable
+    ``Suggestion`` argvs "unreadable" and go red on correct code.
+    """
+    bound: dict[str, tuple[str, ...]] = {}
+    for node in tree.body:
+        # BOTH binding forms. A review mutation showed the cost of reading only
+        # ``ast.Assign``: annotating one of these constants -- which is the style
+        # of its own neighbour, ``_SIM_AUTH_BOOTSTRAP: tuple[Suggestion, ...]``
+        # -- turned this gate red on correct code, blaming the ``Suggestion`` for
+        # an argv the walk simply could not read.
+        if isinstance(node, ast.AnnAssign):
+            target, value = node.target, node.value
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, value = node.targets[0], node.value
+        else:
+            continue
+        literal = _string_tuple(value)
+        if isinstance(target, ast.Name) and literal is not None:
+            bound[target.id] = literal
+    return bound
+
+
+def _suggestion_argvs(tree: ast.Module) -> list[tuple[str, ...] | None]:
+    """Every ``Suggestion(...)`` construction's argv, resolved where it can be.
+
+    One entry per construction, in walk order. ``None`` marks an argv this walk
+    cannot vouch for, which must not exist in these modules either.
+    """
+    bound = _module_level_string_tuples(tree)
+    argvs: list[tuple[str, ...] | None] = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+            continue
+        if node.func.id != "Suggestion":
+            continue
+        value = next((kw.value for kw in node.keywords if kw.arg == "argv"), None)
+        if value is None and node.args:
+            value = node.args[0]
+        argvs.append(bound.get(value.id) if isinstance(value, ast.Name) else _string_tuple(value))
+    return argvs
 
 
 class _FailureCliCase(unittest.TestCase):
@@ -497,6 +612,123 @@ class EveryEmittedCodeIsRegistered(unittest.TestCase):
         emitted = [code for tree in _module_asts() for code in _fail_with_codes(tree)]
 
         self.assertGreater(len(emitted), 5)
+
+
+class EveryAuthSiteNamesItsOwnRail(unittest.TestCase):
+    """The one gap the table default cannot close (#1811).
+
+    ``_SUGGESTIONS_BY_CODE["broker_auth"]`` guarantees that SOMETHING runnable
+    comes out of this code — it is the two offline store reads, true for all
+    five causes. It cannot guarantee the most SPECIFIC thing: a site that knows
+    it is on the LIVE market-data rail has to pass
+    ``_LIVE_AUTH_BOOTSTRAP`` itself, and a site added later that forgets
+    degrades to "read both stores first" with nothing going red.
+
+    So the convention is checked structurally instead, by the same walk that
+    already requires a literal code. The exception-classified path in
+    ``_fail_from_broker_error`` is not a site here and must not be: it holds a
+    ``BrokerAuthError`` whose rail it does not know, which is exactly the case
+    the table default exists for.
+    """
+
+    def test_every_broker_auth_site_passes_a_per_rail_recovery(self) -> None:
+        for path, tree in zip(EMITTING_CLI_MODULES, _module_asts(), strict=True):
+            for name, lineno in _auth_recovery_names(tree):
+                where = f"{path.name}:{lineno}"
+                with self.subTest(site=where):
+                    if name is None:
+                        self.fail(
+                            f"{where}: this {_MULTI_CAUSE_CODE} site passed no named "
+                            f"recovery; pass one of {_AUTH_RECOVERY_PREFIXES}*"
+                        )
+                    self.assertTrue(
+                        name.startswith(_AUTH_RECOVERY_PREFIXES),
+                        f"{where}: {name} is not a per-rail recovery constant",
+                    )
+
+    def test_the_walk_found_every_known_site(self) -> None:
+        """Non-vacuity: the assertions above hold trivially over an empty walk,
+        which is what deleting a site or renaming ``_fail_with`` would produce."""
+        found = [entry for tree in _module_asts() for entry in _auth_recovery_names(tree)]
+
+        self.assertGreaterEqual(len(found), _KNOWN_AUTH_SITES, found)
+
+    def test_the_walk_catches_a_site_that_forgot(self) -> None:
+        """Positive control: a site with no ``suggestions=`` must read as
+        ``None``, or a green run above means only that the walk matched nothing
+        it could object to."""
+        tree = ast.parse("_fail_with('broker_auth', 'refresh chain is dead')")
+
+        self.assertEqual([name for name, _line in _auth_recovery_names(tree)], [None])
+
+    def test_the_walk_catches_a_recovery_that_is_not_a_per_rail_constant(self) -> None:
+        """A name the walk CAN read but must still reject — otherwise the gate
+        would accept any constant at all and only check that one was passed."""
+        passed = "_SOMETHING_ELSE"
+        tree = ast.parse(f"_fail_with('broker_auth', 'boom', suggestions={passed})")
+
+        self.assertEqual([name for name, _line in _auth_recovery_names(tree)], [passed])
+        self.assertFalse(passed.startswith(_AUTH_RECOVERY_PREFIXES))
+
+    def test_the_walk_reads_the_keyword_code_form_too(self) -> None:
+        tree = ast.parse("_fail_with(code='broker_auth', message='boom')")
+
+        self.assertEqual([name for name, _line in _auth_recovery_names(tree)], [None])
+
+    def test_another_code_is_not_this_walks_business(self) -> None:
+        """Only a multi-cause code needs this; a single-cause code's default IS
+        its most specific answer, so requiring a constant there would be noise."""
+        tree = ast.parse("_fail_with('usage', 'boom')")
+
+        self.assertEqual(_auth_recovery_names(tree), [])
+
+
+class EverySuggestionCarriesARunnableArgv(unittest.TestCase):
+    """The hole next to the table: a NON-EMPTY tuple of EMPTY argvs.
+
+    ``test_every_code_that_demands_a_suggestion_has_one_in_the_table`` checks
+    that the entry exists. ``Suggestion(argv=(), why="...")`` would satisfy it
+    and publish a sentence with nothing to run, which is the shape the doctrine
+    forbids ("a runnable next command, not a sentence to parse"). Validating in
+    ``Suggestion.__post_init__`` would be cleaner and is deliberately not done:
+    that class is in the shared contract package.
+    """
+
+    def test_every_suggestion_in_the_cli_has_a_non_empty_argv(self) -> None:
+        for path, tree in zip(EMITTING_CLI_MODULES, _module_asts(), strict=True):
+            for argv in _suggestion_argvs(tree):
+                with self.subTest(module=path.name, argv=argv):
+                    self.assertTrue(argv, "a Suggestion must carry a runnable argv")
+
+    def test_the_walk_found_every_suggestion_the_cli_builds(self) -> None:
+        """Non-vacuity, with the measured count as the floor: eight entries in
+        ``_cli_envelope.py`` (two per-rail recoveries plus six table rows) and
+        ``_TEMPLATE_SUGGESTION`` in ``broker.py``."""
+        found = [argv for tree in _module_asts() for argv in _suggestion_argvs(tree)]
+
+        self.assertGreaterEqual(len(found), 9, found)
+
+    def test_the_walk_catches_a_declared_empty_argv(self) -> None:
+        tree = ast.parse("Suggestion(argv=(), why='read the docs')")
+
+        self.assertEqual(_suggestion_argvs(tree), [()])
+
+    def test_the_walk_catches_an_argv_it_cannot_read(self) -> None:
+        """An argv built at runtime is not something this walk can vouch for, so
+        it fails rather than passing on trust."""
+        tree = ast.parse("Suggestion(argv=tuple(parts), why='boom')")
+
+        self.assertEqual(_suggestion_argvs(tree), [None])
+
+    def test_the_walk_resolves_a_module_level_argv_constant(self) -> None:
+        """Positive control for the indirection the real modules use: without
+        this resolution the gate would call a correct argv unreadable."""
+        tree = ast.parse(
+            "_ARGV = ('alphalens', 'broker', 'auth', '--status')\n"
+            "S = Suggestion(argv=_ARGV, why='read the store')\n"
+        )
+
+        self.assertEqual(_suggestion_argvs(tree), [("alphalens", "broker", "auth", "--status")])
 
 
 class TheWalkedModuleListIsComplete(unittest.TestCase):

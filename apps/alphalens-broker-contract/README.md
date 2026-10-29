@@ -59,7 +59,7 @@ breaking change, so `unclassified` must never be a branch condition. Read it as
 | `broker_transient` | contract | **yes** | The request provably never landed (network retries exhausted, or a 5xx on an idempotent verb). Re-run when the outage clears. |
 | `broker_rate_limited` | contract | **yes** | The broker's throttle stayed exhausted after retries. Re-run later. |
 | `write_outcome_unknown` | contract | no | A write failed AFTER it may have reached the broker. Reconcile against live order state before re-running; never blind-retry. Carries a `suggestions` argv. |
-| `broker_auth` | contract | no | Credentials invalid, or the OAuth refresh chain is dead. Carries a `suggestions` argv. |
+| `broker_auth` | contract | no | Several causes: the credential is MISSING (the refresh chain may still be alive), the credential is invalid, or the refresh chain is dead. Carries a `suggestions` argv; it is a diagnostic READ, not a remedy, because the remedy depends on which cause it is. |
 | `instrument_not_found` | contract | no | Instrument resolution failed for this (ticker, MIC). |
 | `order_rejected` | contract | no | The broker rejected the order. `details.error_code` carries the vendor's structured code when the adapter could attach one. |
 | `broker_unsupported` | contract | no | This broker does not offer the capability the operation needs. |
