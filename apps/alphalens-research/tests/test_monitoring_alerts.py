@@ -25,6 +25,12 @@ silent drift:
 
 5. **Grafana dashboard JSON is well-formed + every active job appears
    in at least one panel target.**
+
+6. **Every ``alphalens_broker_manager_*`` series a rule watches is one the
+   daemon actually publishes.** The series name lives in one constant in the
+   emitting module and is re-typed in the rules file; nothing else compares the
+   two, so a rename leaves the rule watching a name nobody emits and the alert
+   never fires.
 """
 
 from __future__ import annotations
@@ -2269,6 +2275,79 @@ class TestTextfileInvalidSample(unittest.TestCase):
         for phrase in ("dropped", "logged once", "never raises", "#1462"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, description)
+
+
+def _broker_manager_series_in_rules() -> set[str]:
+    """Every ``alphalens_broker_manager_*`` series name any alert expression names."""
+    names: set[str] = set()
+    for rule in _load_rules()["groups"][0]["rules"]:
+        if "alert" not in rule:
+            continue
+        names |= set(re.findall(r"\balphalens_broker_manager_[a-z0-9_]+\b", rule["expr"]))
+    return names
+
+
+def _broker_manager_series_the_daemon_publishes() -> set[str]:
+    """Every such series the broker-manager actually emits, read off the ONE constant
+    each one has in the emitting module (never re-typed here — that would make this
+    file a second place the name can drift, which is the defect it exists to catch)."""
+    from alphalens_pipeline.brokers.automanager import control_loop, stream_handles
+
+    return {
+        value
+        for module in (control_loop, stream_handles)
+        for name, value in vars(module).items()
+        if name.endswith("_METRIC_NAME") and isinstance(value, str)
+    }
+
+
+class TestBrokerManagerSeriesNamesMatchTheEmitter(unittest.TestCase):
+    """A rule can only fire on a series that is actually published.
+
+    Nothing else in the repo compares the two: ``check rules`` only parses, the
+    promtool fixtures WRITE the series they then assert on, and every Python test
+    reaches the name through its builder function, so it follows a rename wherever
+    it goes. A renamed or typo'd constant therefore leaves the daemon publishing
+    series A while the rules watch series B, with all four gates green and the
+    alert silently never firing — measured on 2026-10-29 by renaming
+    ``_PLACEMENTS_WITHHELD_METRIC_NAME`` and seeing promtool lint, both promtool
+    fixtures, test_control_loop, test_monitoring_alerts and
+    test_promtool_lint_parity all stay green.
+
+    That failure is permanent and invisible, and for the withheld pair there is
+    nothing behind it: both rules deliberately ship with no ``absent()`` twin, so
+    a rule watching a name nobody emits looks exactly like a healthy queue.
+    """
+
+    def test_every_series_a_rule_watches_is_one_the_daemon_publishes(self) -> None:
+        published = _broker_manager_series_the_daemon_publishes()
+        for series in sorted(_broker_manager_series_in_rules()):
+            with self.subTest(series=series):
+                self.assertIn(series, published)
+
+    def test_the_withheld_rules_watch_the_name_the_loop_emits(self) -> None:
+        from alphalens_pipeline.brokers.automanager import control_loop
+
+        rules = {
+            rule["alert"]: rule for rule in _load_rules()["groups"][0]["rules"] if "alert" in rule
+        }
+        for alertname in (
+            "AlphalensBrokerPlacementsWithheld",
+            "AlphalensBrokerPlacementsWithheldLive",
+        ):
+            with self.subTest(alert=alertname):
+                self.assertIn(
+                    control_loop._PLACEMENTS_WITHHELD_METRIC_NAME, rules[alertname]["expr"]
+                )
+
+    def test_the_status_command_reads_the_gauge_names_the_loop_writes(self) -> None:
+        """``status_snapshot`` re-declares two of these names as its own literals to
+        parse the textfile. They are a THIRD spelling of the same series, with no
+        other gate holding them to the emitter's."""
+        from alphalens_pipeline.brokers.automanager import control_loop, status_snapshot
+
+        self.assertEqual(status_snapshot._HEARTBEAT_GAUGE, control_loop._HEARTBEAT_METRIC_NAME)
+        self.assertEqual(status_snapshot._KILL_ACTIVE_GAUGE, control_loop._KILL_ACTIVE_METRIC_NAME)
 
 
 if __name__ == "__main__":

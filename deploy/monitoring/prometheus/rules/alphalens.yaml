@@ -1757,9 +1757,15 @@ groups:
       # twin on purpose — this series only appears after the daemon runs the
       # code that emits it, the rules file reaches the VPS within ~1h of merge
       # while the pipeline image is a MANUAL rebuild (see the deploy-order note
-      # at the head of this file), and `== 1` stays quiet while the series does
+      # at the head of this file), and `>= 1` stays quiet while the series does
       # not exist. A {Stale, MetricMissing} pair for it belongs in a separate,
       # later PR, once the image carrying the gauge is deployed.
+      #
+      # `>= 1`, not `== 1`: the emitter publishes a LEVEL (0/1) and one unit test
+      # pins that, but a future change to publishing the COUNT would leave `== 1`
+      # matching nothing on two or more unreadable lines — a rule that silently
+      # never fires, with no absent() twin behind it. `>= 1` pages on any
+      # unreadable line and is just as quiet on 0 and on a missing series.
       #
       # for: 5m, matching that pair. The condition is binary and never
       # self-heals, so `for:` only sets how long a repair window stays quiet;
@@ -1768,7 +1774,7 @@ groups:
       # page.
       - alert: AlphalensBrokerPlacementsWithheld
         expr: >-
-          alphalens_broker_manager_placements_withheld{job="broker-manager-sim"} == 1
+          alphalens_broker_manager_placements_withheld{job="broker-manager-sim"} >= 1
           and (time() - alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-sim"}) < 300
         for: 5m
         labels:
@@ -1777,7 +1783,7 @@ groups:
           unit: broker-manager
         annotations:
           summary: "SIM broker-manager is withholding every placement — a line in picks.jsonl cannot be read"
-          description: "The SIM auto-manager's pick fold reports a line it cannot read, so `iter_picks` yields NOTHING and the placement drain places nothing at all (#1788) — including for pick keys whose own lines are perfectly readable. The loop keeps ticking, KILL is absent and the token chain is alive, so every other series on this instance reads green. This never heals by itself: the journal is append-only, so only a hand repair clears it, and re-arming does not. Run `alphalens broker picks` for the count, repair those lines in ~/.alphalens/broker_orders/sim/picks.jsonl by hand, and re-arm whatever was lost. The gauge clears on the next tick; no restart is needed."
+          description: "The SIM auto-manager's pick fold reports a line it cannot read, so `iter_picks` yields NOTHING and the placement drain places nothing at all (#1788) — including for pick keys whose own lines are perfectly readable. The loop keeps ticking, so nothing else carries this condition and this gauge is the only standing indication — which is why the rule exists. It makes no claim about KILL or the token chain: it fires whatever those read, and under either the queue still needs the same hand repair before placement resumes. This never heals by itself: the journal is append-only, so only a hand repair clears it, and re-arming does not. Run `alphalens broker picks --env sim` for the count, repair those lines in ~/.alphalens/broker_orders/sim/picks.jsonl by hand, and re-arm whatever was lost. The gauge clears on the next tick; no restart is needed."
 
 
       # --- SIM order/position stream breaker (rearm design memo §4.6) -------
@@ -1995,11 +2001,11 @@ groups:
       # gated on a FRESH heartbeat (a stopped daemon is HeartbeatStale's page,
       # and the textfile keeps re-serving its last sample), and NO absent()
       # twin, because the rules file reaches the VPS within ~1h of merge while
-      # the pipeline image is a manual rebuild, and `== 1` stays quiet while
+      # the pipeline image is a manual rebuild, and `>= 1` stays quiet while
       # the series does not exist.
       - alert: AlphalensBrokerPlacementsWithheldLive
         expr: >-
-          alphalens_broker_manager_placements_withheld{job="broker-manager-live"} == 1
+          alphalens_broker_manager_placements_withheld{job="broker-manager-live"} >= 1
           and (time() - alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-live"}) < 300
         for: 5m
         labels:
@@ -2008,7 +2014,7 @@ groups:
           unit: broker-manager-live
         annotations:
           summary: "LIVE broker-manager is withholding every placement — a line in picks.jsonl cannot be read (REAL MONEY)"
-          description: "The LIVE auto-manager's pick fold reports a line it cannot read, so `iter_picks` yields NOTHING and the placement drain places nothing at all (#1788) — including for pick keys whose own lines are perfectly readable. No NEW entry is placed. Stops already resting at Saxo still protect open positions, and the exit and protection passes are unaffected. The loop keeps ticking, KILL is absent and the token chain is alive, so every other series on this instance reads green. This never heals by itself: the journal is append-only, so only a hand repair clears it, and re-arming does not. Run `alphalens broker picks --env live` for the count, repair those lines in ~/.alphalens/broker_orders/live/picks.jsonl by hand, and re-arm whatever was lost. The gauge clears on the next tick; no restart is needed."
+          description: "The LIVE auto-manager's pick fold reports a line it cannot read, so `iter_picks` yields NOTHING and the placement drain places nothing at all (#1788) — including for pick keys whose own lines are perfectly readable. No NEW entry is placed. Stops already resting at Saxo still protect open positions, and the exit and protection passes are unaffected. The loop keeps ticking, so nothing else carries this condition and this gauge is the only standing indication — which is why the rule exists. It makes no claim about KILL or the token chain: it fires whatever those read, and under either the queue still needs the same hand repair before placement resumes. This never heals by itself: the journal is append-only, so only a hand repair clears it, and re-arming does not. Run `alphalens broker picks --env live` for the count, repair those lines in ~/.alphalens/broker_orders/live/picks.jsonl by hand, and re-arm whatever was lost. The gauge clears on the next tick; no restart is needed."
 
 
       - alert: AlphalensLivePriceStreamReaderDown

@@ -4337,6 +4337,14 @@ def run_daemon(
         # tick (deps.chain_state), never a second ensure_alive() call: on LIVE the
         # provider latches dead, so a re-read could disagree with the halt the loop
         # just applied — and on SIM it would cost a second token touch per tick.
+        # The withheld-queue gauge (#1822) rides along as a FOURTH series, and is the
+        # one value the emitter reads for ITSELF rather than taking it from here —
+        # so the "never a second read" rule above does not cover it. It cannot be
+        # handed down: the drain throws the malformed count away (it yields decoded
+        # intents), and run_once skips the drain entirely under KILL or a dead chain,
+        # so a count forwarded from here would be stale or zero in exactly the states
+        # an operator pages on. `_placements_withheld` carries the full argument, the
+        # reason the chain gauge's precedent does not apply, and the measured cost.
         heartbeat_fn(_kill_active(deps), deps.chain_state.get("alive", True))
         # #1172: and this instance's view of the shared price reader. A no-op on
         # the in-process path. Separate emit because it is a separate job — one
