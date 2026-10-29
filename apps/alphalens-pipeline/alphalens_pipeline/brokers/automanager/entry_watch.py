@@ -132,13 +132,19 @@ def _point_sample_bids(
     Those three symbols are the whole price side of a watch, so the claim is
     checkable without leaving them.
 
+    WHY the bid and not a trade price: §4d of
+    ``docs/research/entry_trailing_design_2026_08_12.md``. It separates what the
+    2026-08-12 L1 probe measured from what is inferred from it, and says plainly
+    that the reference rests on one observation plus one inference — read it
+    before changing the reference or defending it.
+
     (This docstring used to cite a "memo trap #8" for the same fact. The
     citation was dropped on 2026-10-28 because it could not be followed: as of
     that date no tracked markdown in any branch's history carried the phrase —
     only the two comments that cited it. Do NOT re-run that search expecting an
-    empty result: section 9 of
-    ``docs/research/replay_vs_live_panel_2026_10_11.md`` records the removal and
-    names the phrase, so it is the one tracked document that matches today.)
+    empty result: §4d and §9 of the memo above, and section 9 of
+    ``docs/research/replay_vs_live_panel_2026_10_11.md``, now name the phrase
+    themselves, so a search returns those documents and no third thing.)
 
     ONE shared sample per uic, for the same reason the drain above is once per
     uic: every tier of a laddered pick must read the SAME verdict, and the

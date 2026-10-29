@@ -165,8 +165,66 @@ first look at fires says the opposite.
   read as a verdict about how it would FILL. Verify at the state the claim is
   about.
 
+**2026-10-29 reference addendum (§4d) — why detection reads the BID, recovered rather than
+quoted. Status: PARTIALLY RECOVERED.**
+
+Two live-tier docstrings asserted the reference and cited a source that does not exist. This
+section records what survives, what is inference, and what nobody can recover — kept separate on
+purpose, because the thing being justified is a real-money path.
+
+**The citation was empty.** `entry_watch._point_sample_bids` and the `entry_trail_watcher` module
+docstring both cited a "memo trap #8". No tracked markdown in any branch's history has ever
+carried the phrase: `git log --all -S"trap #8" -- '*.md'` returns nothing and
+`grep -rn "trap #" docs/` finds nothing (run 2026-10-28). Only the two comments citing it matched.
+The numbering implies a list of traps in a memo that was never committed — the same failure
+§9 already records for `trailing_execution_design_2026_08_07.md`, and the one
+`docs/research/CLAUDE.md` exists to prevent.
+
+**EVIDENCE — what §4b actually recorded.** Probe L1, 2026-08-12, MARA uic 573264, 1 share,
+DayOrder, declining tape. Three facts, quoted from §4b above:
+
+* the request was composed as **"requested trigger 9.71 (bid 9.66 + 0.05)"** — the probe took the
+  bid as the reference when building the order;
+* **"the server had repositioned the trigger DOWN to the new low 9.65 + distance, unprompted"**;
+* the trigger **"correctly FROZE at 9.70 through bid oscillation 9.65-9.68"** — the oscillation
+  the freeze was measured against is stated in bid terms, and 9.65 is its floor.
+
+So the low the server ratcheted from, on the one occasion anyone watched it, is the floor of a
+range this memo states as a BID range.
+
+**INFERENCE — and it is an inference, not a measurement.** The server owns the ratchet once the
+order rests. If our touch detection read trades while the server ratchets on the bid, our arming
+decision and the trigger resting at the broker would be anchored to two different series: we
+would decide to arm on one price and the order would then follow another. Detection is
+bid-referenced to keep both on one series. That is the strongest rationale the record supports,
+and it is reconstructed here from §4b rather than quoted from any decision document.
+
+**NOT ESTABLISHED, and §4c is the warning.** §4c records this memo making exactly this mistake
+once already: a PREPARED state stood in for the TERMINAL one, and its lesson is "verify at the
+state the claim is about". The same discount applies here. Probe L1 watched a RESTING order being
+repositioned; it did not establish what the matching engine references, and n=1 against §4's own
+BLOCKING standard of n>=2. Saxo's own field is `TrailingStopDistanceToMarket`, whose name does not
+name a side, and no statement of the reference side is recorded anywhere in this repository.
+
+**What would settle it.** An attended LIVE probe at n>=2 that logs the bid series and the
+last-traded series side by side while a native trailing entry rests and ratchets, and records
+which one each repositioning follows. Until then the reference is a decision supported by one
+observation and one inference, which is what this section says and all it says.
+
+**Why this was asked on 2026-10-29.** On 2026-10-28 the reference gap produced the first
+outcome-word disagreement between the replay and a closed LIVE record: `VCYT:2026-09-29`, where
+the daemon's bid reached the 44.01 rung on 2026-10-06 and no trade of that session did. The
+measurement, its decomposition and the decision not to change either side are in
+[`replay_vs_live_panel_2026_10_11.md`](replay_vs_live_panel_2026_10_11.md) section 9.
+
+**What did NOT change.** The daemon keeps the bid. No harm is measured anywhere: on the only
+divergent record the bid reference earned **+0.5648 R** against the trade-referenced replay. The
+gap is reported, not closed — and the sign of the entry gap is not established, because a trade
+can print below the displayed bid, so the tape can reach a rung the bid has not.
+
 ## 9. Corrections to prior docs
 
+- The "memo trap #8" cited by `entry_watch._point_sample_bids` and the `entry_trail_watcher` module docstring is ABSENT from the repo and from every branch's history; the bid-reference rationale is recovered from §4b rather than quoted. See §4d.
 - `docs/research/trailing_execution_design_2026_08_07.md` is cited by the whatif memo but ABSENT from the repo (survivors: `trailing_sl_exit_policy_bot_amend_{design,plan}_2026_08_09.md`); the INC-4 rejection rationale is memory-sourced — restated self-contained here (§2 V2 row + the 45s-cadence facts).
 - No production code places any trailing order today: `TrailingStopIfTraded` exists only in recognition frozensets and an unconsumed wire primitive — Tor-B's LIVE validation (SELL ratchet n=2, amend repositioning) was probe-level. V1 is a contract extension (`SupportsTrailingStop` Protocol) + probe, not reuse.
 - The exit amend path (`_build_amend_stop_body`) stamps `_EXIT_DURATION` (GoodTillCancel) and defaults `StopIfTraded` — any entry amend needs its own GTD-preserving method; PATCHing an entry through the exit body would silently clobber its TTL.
