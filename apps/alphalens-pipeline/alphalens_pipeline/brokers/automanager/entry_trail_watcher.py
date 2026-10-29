@@ -42,12 +42,14 @@ bid-referenced. The sampling that makes it so is
 :func:`alphalens_pipeline.brokers.automanager.entry_watch._point_sample_bids`,
 which reads no other field; its docstring carries the rest.
 
-WHY the bid and not a trade price is NOT RECORDED anywhere; §4d of the same memo
-is the search rather than the answer. Note the tension it documents: the order
-placed here is ``TrailingStopIfTraded``, whose suffix names the TRADED series in
-a Saxo family that also offers ``StopIfBid``/``StopIfOffered``, while detection
-reads the bid. Nobody has checked which series the server's ratchet and its fire
-condition each follow. Read §4d before changing the reference or defending it.
+WHY the bid is §4d of the same memo: the feed contract carries no traded series,
+so the bid was the only declining side available. Note the tension §4d documents
+— the order placed here is ``TrailingStopIfTraded``, whose suffix names the
+TRADED series in a Saxo family that also offers ``StopIfBid``/``StopIfOffered``,
+while detection reads the bid, and the cache that feeds detection discards the
+non-quote block itself. Nobody has checked which series the server's ratchet and
+its fire condition each follow. Read §4d before changing the reference or
+defending it.
 
 This paragraph used to cite a "memo trap #8". The citation was dropped on
 2026-10-28 because it could not be followed: as of that date no tracked

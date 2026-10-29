@@ -166,7 +166,7 @@ first look at fires says the opposite.
   about.
 
 **2026-10-29 reference addendum (§4d) — why detection reads the BID, recovered rather than
-quoted. Status: NOT RECOVERED — the probe's FRAMING survives, the reason does not.**
+quoted. Status: PARTIALLY RECOVERED — a CONSTRAINT is recovered, the deliberation is not, and the reason first reached for is wrong.**
 
 Two live-tier docstrings asserted the reference and cited a source that does not exist. This
 section records what survives, what is inference, and what nobody can recover — kept separate on
@@ -211,10 +211,32 @@ anyone here has read; §4c is the standing reminder that reading a convention is
 the server re-anchors on its own, the price we compose the order from decides WHEN we place, not
 where the trigger ends up — which removes the premise that the two must agree.
 
-**So the reason is NOT recovered.** What §4b establishes is that the probe was conducted and
-written down in bid terms, by an author tracking the bid. Why DETECTION reads the bid is not
-recorded anywhere, and the first explanation anyone would reach for is contradicted by the order
-type we actually place.
+**WHAT IS RECOVERABLE IS A CONSTRAINT, AND IT IS SUFFICIENT.** The watch reads the
+`PriceFeed` contract, and `broker_contract/price_feed.py`'s `PricePoint` carries exactly `uic`,
+`bid`, `ask`, `event_time`, `received_at`, `source` and a `mid` property. **There is no traded
+series in it at all**, so a trade price was never a thing the watch could have read. Of the two
+sides it does have, the bid is the lower, so it is the side a DECLINING price reaches first —
+which is what a pullback rung needs. The analogous choice on the EXIT side has its reason written
+down, in
+[`../superpowers/plans/2026-08-07-saxo-live-price-feed.md`](../superpowers/plans/2026-08-07-saxo-live-price-feed.md):
+`price=point.bid,  # selling a long: the executable side is the BID`. Nothing comparable was ever
+written for the entry side, but the same contract bounded both.
+
+**And the constraint is OURS, not the vendor's.** The subscription asks for
+`FieldGroups: ["Quote", "PriceInfo", "DisplayAndFormat"]`
+(`data/alt_data/saxo_marketdata_client.py`) while the cache keeps only `row["Quote"]`
+(`QuoteCache.apply` in `data/alt_data/saxo_price_stream.py`), and `PriceInfoDetails` is reachable
+through a `GET /trade/v1/infoprices` snapshot — the session-OPEN read in `control_loop` does
+exactly that, live-verified 2026-08-11. Whether either block carries a last-traded price for
+stocks is NOT established here. What is established is that a second series was never plumbed
+into the watch path, so the reference is revisitable rather than fixed by the vendor.
+
+**So: the choice is explained, the deliberation is not.** Nobody recorded choosing the bid, and
+the first rationale anyone reaches for — matching the server's ratchet — is contradicted by the
+order type we place. The sharpened open question is worse than the original one: if the server's
+trigger is traded-referenced while our detection is quote-referenced **because our own cache
+discards the non-quote block**, then the mismatch between the two series is an accident of
+plumbing rather than a decision. That is what the probe below has to settle.
 
 **NOT ESTABLISHED, and §4c is the warning.** §4c records this memo making exactly this mistake
 once already: a PREPARED state stood in for the TERMINAL one, and its lesson is "verify at the
@@ -244,7 +266,8 @@ can print below the displayed bid, so the tape can reach a rung the bid has not.
 ## 9. Corrections to prior docs
 
 - The "memo trap #8" cited by `entry_watch._point_sample_bids` and the `entry_trail_watcher` module docstring is ABSENT from the repo and from every branch's history. The bid-reference rationale is NOT recorded anywhere: §4d says what §4b does and does not establish, and why the obvious reconstruction is contradicted by the order type we place.
-- `docs/research/trailing_execution_design_2026_08_07.md` is cited by the whatif memo but ABSENT from the repo (survivors: `trailing_sl_exit_policy_bot_amend_{design,plan}_2026_08_09.md`); the INC-4 rejection rationale is memory-sourced — restated self-contained here (§2 V2 row + the 45s-cadence facts).
+- **STALE, corrected 2026-10-29:** this bullet said `docs/research/trailing_execution_design_2026_08_07.md` is "ABSENT from the repo". It is tracked today (153 lines) — it was written 2026-08-07 and first committed 2026-08-23, 16 days later, which `docs/research/CLAUDE.md` now cites as its own example of why a finished memo is committed the same day. The rest of this bullet stands as written:
+- `docs/research/trailing_execution_design_2026_08_07.md` was cited by the whatif memo and was ABSENT from the repo when this memo was written (survivors: `trailing_sl_exit_policy_bot_amend_{design,plan}_2026_08_09.md`); the INC-4 rejection rationale is memory-sourced — restated self-contained here (§2 V2 row + the 45s-cadence facts).
 - No production code places any trailing order today: `TrailingStopIfTraded` exists only in recognition frozensets and an unconsumed wire primitive — Tor-B's LIVE validation (SELL ratchet n=2, amend repositioning) was probe-level. V1 is a contract extension (`SupportsTrailingStop` Protocol) + probe, not reuse.
 - The exit amend path (`_build_amend_stop_body`) stamps `_EXIT_DURATION` (GoodTillCancel) and defaults `StopIfTraded` — any entry amend needs its own GTD-preserving method; PATCHing an entry through the exit body would silently clobber its TTL.
 
