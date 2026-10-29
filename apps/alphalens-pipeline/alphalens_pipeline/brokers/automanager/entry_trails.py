@@ -736,7 +736,7 @@ class _CompactionTracker:
     # legitimately CLEARS both, and it is kept too, so the fold still comes out
     # right for the re-arm.
     latest_trail_armed: dict[str, int] = field(default_factory=dict)
-    # The latest ``touched``, kept for a reason the other four do NOT share: it
+    # The latest ``touched``, kept for a reason the other five do NOT share: it
     # is not needed for fold-equivalence at all. The fold reduces a ``touched``
     # line to ``latest_kind``, so ANY later line evicted it — measured
     # 2026-10-28 on the LIVE journal, which held 61 ``watch_open`` lines, 28
@@ -800,8 +800,8 @@ def compact_entry_trail_lines(raw_lines: Iterable[str]) -> list[str]:
     fold-equivalent choice), the latest ``trail_armed`` (it carries the resting
     order id, its ceiling and its trailing distance, which ``latest_state`` alone
     does not preserve), the latest ``touched`` (kept for EVIDENCE, not for the
-    fold — it carries the bid the touch was detected on and that number exists
-    nowhere else; see ``_CompactionTracker.latest_touched``), the
+    fold — it carries the bid the touch was detected on, which no other line
+    holds on the native path; see ``_CompactionTracker.latest_touched``), the
     latest non-terminal state record, and the latest terminal record — :data:`COMPACTED_LINES_PER_CRID_BOUND` lines at
     most, however long the input. UNKNOWN kinds and malformed/missing-crid
     lines are PRESERVED VERBATIM (memo G4 — dropping a malformed line would
