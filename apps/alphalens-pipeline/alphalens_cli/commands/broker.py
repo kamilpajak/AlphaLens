@@ -2478,9 +2478,9 @@ def status_command(
 
     The health half also reports the WITHHELD count: how many lines of
     ``picks.jsonl`` the pick fold cannot read. Any non-zero count means the
-    drain places NOTHING at all, for every pick in the queue (#1788), and only
-    a hand repair of those lines clears it — re-arming does not, because the
-    journal is append-only. ``alphalens broker picks`` names the same condition.
+    drain places NOTHING at all, for every pick in the queue (#1788). Repair
+    those lines by hand and re-arm what was lost; the journal is append-only, so
+    re-arming alone does not clear it. ``alphalens broker picks`` says the same.
 
     An unhealthy instance still exits 0 — health is content, and a Prometheus
     rule must not be duplicated in a CLI. Only a failed broker read exits 1.
