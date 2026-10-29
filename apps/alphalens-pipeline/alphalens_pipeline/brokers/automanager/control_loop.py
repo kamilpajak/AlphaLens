@@ -495,12 +495,23 @@ def _placements_withheld() -> int:
     a fault on ``picks.jsonl`` must not make a ticking daemon read as stopped."""
     try:
         malformed = picks.read_pick_fold().malformed
-    except OSError:
+    except OSError as exc:
+        # WARNING every tick, NOT latched: `picks.iter_picks` makes that argument
+        # for this same condition and rejects a once-per-process flag, because a
+        # latched line announces at daemon boot and then goes quiet, which reads
+        # as a condition that healed. It never heals by itself.
+        #
+        # But no exc_info: the cause is PERMANENT, so the stack repeated every
+        # ~45 s buries the transient causes next to it in journald (12 lines per
+        # tick, 10 of them frames, 23 040 a day — measured 2026-10-29). The two
+        # facts a stack would add here are the exception TYPE and the path, and
+        # both are in the message. `broker status` prints the same pair.
         logger.warning(
-            "broker-manager cannot read %s to report whether placements are withheld; "
-            "publishing WITHHELD, because the drain reads that same journal",
+            "broker-manager cannot read %s to report whether placements are withheld "
+            "(%s: %s); publishing WITHHELD, because the drain reads that same journal",
             state_paths.picks_path(),
-            exc_info=True,
+            type(exc).__name__,
+            exc,
         )
         return 1
     # int(), never the bool: emit_domain_metrics DROPS a bool sample (a True or "1"

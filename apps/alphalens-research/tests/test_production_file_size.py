@@ -291,7 +291,7 @@ BASELINE: dict[str, int] = {
     # are that docstring, and they are the measurement (the extra fold costs
     # 0.251 ms on a 75-line journal, 0.00056% of a 45 s tick) plus the reason
     # the chain gauge's "never a second read" argument does not carry over.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8110,
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8121,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3302,

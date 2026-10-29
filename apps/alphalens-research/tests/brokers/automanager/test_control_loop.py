@@ -10205,6 +10205,70 @@ class TestPlacementsWithheldMetric(IsolatedHomeTestCase):
         value = metrics[cl.placements_withheld_metric(self._JOB)]
         self.assertIs(type(value), int)
 
+    _LIVE_JOB = "broker-manager-live"
+
+    def _armed(self, path: Path) -> None:
+        """One readable armed line in ``path``, so the fold over it reports 0."""
+        from alphalens_pipeline.brokers.automanager.picks import arm_pick
+
+        from tests.brokers.automanager.test_picks import _intent
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        arm_pick(_intent("KO", "2026-07-20"), path=path)
+
+    def _torn(self, path: Path) -> None:
+        """One line the fold cannot read, which withholds that queue entirely."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"not json\n")
+
+    def _live_metrics(self) -> dict[str, Any]:
+        with mock.patch.dict(os.environ, {"ALPHALENS_BROKER_ENVIRONMENT": "live"}):
+            _, metrics = self._emitted()
+        return metrics
+
+    def test_an_unopenable_journal_logs_one_standing_line_and_not_a_traceback(self) -> None:
+        """The condition never self-heals, so the WARNING repeats every tick on
+        purpose — ``picks.iter_picks`` makes that argument for the same condition and
+        rejects a once-per-process latch, because a latched line announces at boot
+        and then goes quiet, which reads as a condition that healed.
+
+        What must NOT repeat is the stack. Measured 2026-10-29 with ``exc_info=True``
+        on this branch: 12 journald lines per tick, 10 of them traceback frames, so
+        23 040 lines a day at ``--poll-seconds 45`` for a permanent cause — which
+        buries the transient causes beside it. The two facts worth keeping, the
+        exception TYPE and the path, belong in the message.
+        """
+        with (
+            mock.patch.object(cl.picks, "read_pick_fold", side_effect=PermissionError("denied")),
+            self.assertLogs(cl.logger, level="WARNING") as logs,
+        ):
+            self._emitted()
+        self.assertEqual(len(logs.records), 1)
+        record = logs.records[0]
+        self.assertIsNone(record.exc_info, "no stack: the message carries the two useful facts")
+        message = record.getMessage()
+        self.assertIn("PermissionError", message)
+        self.assertIn("picks.jsonl", message)
+
+    def test_a_live_instance_reports_its_own_torn_queue(self) -> None:
+        """ADR 0016 D5: the journal PATH resolves per instance at call time, exactly
+        like the ``{job=...}`` label, because the two daemons run side by side on one
+        host. Reading a fixed env here would make
+        ``AlphalensBrokerPlacementsWithheldLive`` describe the SIM queue — silent
+        while REAL money stops being placed."""
+        self._armed(state_paths.picks_path(env="sim"))
+        self._torn(state_paths.picks_path(env="live"))
+        metrics = self._live_metrics()
+        self.assertEqual(metrics[cl.placements_withheld_metric(self._LIVE_JOB)], 1)
+
+    def test_a_live_instance_stays_green_while_only_the_sim_queue_is_torn(self) -> None:
+        """The discriminating half: a SIM journal nobody can read must not page the
+        REAL-MONEY unit, whose own queue is perfectly placeable."""
+        self._torn(state_paths.picks_path(env="sim"))
+        self._armed(state_paths.picks_path(env="live"))
+        metrics = self._live_metrics()
+        self.assertEqual(metrics[cl.placements_withheld_metric(self._LIVE_JOB)], 0)
+
 
 class TestKillEdgeAlert(IsolatedHomeTestCase):
     """Edge-triggered KILL alert (observability only — placement/protection gating is
