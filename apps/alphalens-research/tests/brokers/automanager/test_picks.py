@@ -1005,6 +1005,89 @@ class IterPicksFailsClosedWhileTheFoldReportsALineItCannotRead(unittest.TestCase
         self.assertEqual([r.ticker for r in read_pick_fold(path=self.path).records], ["AAA", "BBB"])
         self.assertEqual(self._tickers(), [])
 
+    def test_the_view_reads_the_same_decoder_without_the_withholding_gate(self) -> None:
+        """One decoder, two readers: the drain's one is gated, the view's is not.
+
+        ``broker picks`` resolves each row's state by asking which keys decode.
+        If it asked ``iter_picks``, every armed pick in the queue would read
+        UNREADABLE while ONE unrelated line is torn -- the view would call a
+        perfectly readable pick unreadable. Reproduced on a real armed KO line
+        with a torn ``ZZZ`` line beside it: ``unreadable 1`` where the pick
+        decodes. So the per-key decode is its own reader and the withholding
+        sits on top of it. A second decoder in the CLI is what this avoids:
+        it would be free to disagree about what the drain can place.
+        """
+        arm_pick(_intent("AAA", "2026-07-20"), path=self.path)
+        arm_pick(_intent("BBB", "2026-07-21"), path=self.path)
+
+        self._append_bytes(b"\xff\n")
+
+        self.assertEqual(self._tickers(), [], "the drain must still place nothing")
+        self.assertEqual(
+            [
+                intent.instrument.ticker
+                for intent in picks_module.iter_decodable_picks(path=self.path)
+            ],
+            ["AAA", "BBB"],
+            "both keys decode, and the ungated reader must say so",
+        )
+
+    def test_the_two_readers_differ_by_the_withholding_gate_and_nothing_else(self) -> None:
+        """One decoder, so the view can never disagree with the drain about
+        which intents decode.
+
+        The journal below holds every per-line rule at once: one armed pick
+        that decodes, an armed line with no intent, an armed line whose intent
+        does not decode, and a non-armed line that still carries an intent. On
+        a journal with nothing unreadable the two readers must be
+        indistinguishable -- a divergence on either side would make
+        ``broker picks`` render PENDING for a pick the drain skips for ever.
+        """
+        from broker_contract.trade_intent.codec import intent_to_jsonable
+
+        arm_pick(_intent("AAA", "2026-07-20"), path=self.path)
+        self._append_bytes(
+            json.dumps({"ticker": "BARE", "date": "2026-07-21", "status": STATUS_ARMED}).encode()
+            + b"\n"
+        )
+        self._append_bytes(
+            json.dumps(
+                {
+                    "ticker": "BAD",
+                    "date": "2026-07-22",
+                    "status": STATUS_ARMED,
+                    "intent": {"not": "a trade intent"},
+                }
+            ).encode()
+            + b"\n"
+        )
+        self._append_bytes(
+            json.dumps(
+                {
+                    "ticker": "GONE",
+                    "date": "2026-07-23",
+                    "status": STATUS_REFUSED,
+                    "reason": "gross cap",
+                    # A refusal that still carries the document it refused: a
+                    # reader that forgot the ARMED filter would emit it.
+                    "intent": intent_to_jsonable(_intent("GONE", "2026-07-23")),
+                }
+            ).encode()
+            + b"\n"
+        )
+        self.assertEqual(
+            [r.ticker for r in read_pick_fold(path=self.path).records],
+            ["AAA", "BARE", "BAD", "GONE"],
+            "all four fixtures must reach the fold, or an equality proves nothing",
+        )
+
+        gated = [intent.instrument.ticker for intent in iter_picks(path=self.path)]
+        ungated = [
+            intent.instrument.ticker for intent in picks_module.iter_decodable_picks(path=self.path)
+        ]
+        self.assertEqual(gated, ["AAA"], "the drain places the one decodable armed pick")
+        self.assertEqual(ungated, gated, "the ungated reader runs the SAME per-line rules")
+
     def test_a_blank_line_is_not_a_reason_to_close(self) -> None:
         """The gate is the malformed COUNT, not "anything unusual".
 

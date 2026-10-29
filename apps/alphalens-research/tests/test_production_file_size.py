@@ -128,7 +128,16 @@ BASELINE: dict[str, int] = {
     # four lines once it carries `suggestions=`. The constants themselves live
     # in `_cli_envelope.py` beside the table they override, so this file pays
     # for the call sites only.
-    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3181,
+    #
+    # Raised by 25 in #1788: `broker picks` now publishes `placement_withheld`
+    # and renders it, because the drain withholds every placement while a pick
+    # line cannot be read. Before this the view asked the GATED reader which
+    # keys decode, so one unrelated torn line made every armed pick render
+    # UNREADABLE -- a readable pick labelled unreadable. The room is 9 lines of
+    # published `--help` (the old text sent the operator to re-arm, which does
+    # not clear this condition), 6 for the rendering and 10 of comment saying
+    # which reader each surface asks and why.
+    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3206,
     "apps/alphalens-pipeline/alphalens_cli/commands/thematic.py": 1708,
     # Raised again, by 8, to say that the raise page's ticker fallback is
     # unreachable by construction. It sits beside the stop-PLACED page's

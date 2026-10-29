@@ -600,7 +600,9 @@ def iter_picks(*, path: Path | None = None) -> Iterator[TradeIntent]:
     :func:`read_pick_fold` itself is deliberately unchanged: the operator must
     still be able to see the queue and the count (`alphalens broker picks`) and
     repair the journal, and the arming door reads that same fold for its
-    pick-key check, so arming stays possible while a corrupt line stands.
+    pick-key check, so arming stays possible while a corrupt line stands. That
+    view asks :func:`iter_decodable_picks`, not this function, which keys
+    decode, so withholding the queue does not relabel a readable pick.
 
     The cost is a denial of service — one unreadable byte withholds every
     placement, including for keys that read perfectly — so the withholding is
@@ -630,6 +632,35 @@ def iter_picks(*, path: Path | None = None) -> Iterator[TradeIntent]:
             fold.malformed,
         )
         return
+    yield from _iter_decodable(fold)
+
+
+def iter_decodable_picks(*, path: Path | None = None) -> Iterator[TradeIntent]:
+    """Every ARMED pick whose own line decodes — the SAME per-line rules as
+    :func:`iter_picks`, WITHOUT its queue-wide withholding gate.
+
+    For READ-ONLY views, never for placing. ``alphalens broker picks`` asks
+    this which keys decode, so each row carries its OWN verdict: a pick whose
+    intent does not decode reads UNREADABLE, and one that decodes does not,
+    however many other lines in the journal are torn. Asking :func:`iter_picks`
+    instead made every armed pick in the queue read UNREADABLE as soon as one
+    unrelated line was unreadable — a readable pick labelled unreadable.
+
+    Why this is not a second decoder: both readers run one body, so the view
+    can never disagree with the drain about which intents decode. They differ
+    by the gate alone, and the gate is a fact about the QUEUE — the view
+    publishes it separately (``placement_withheld``) rather than smearing it
+    across every row.
+
+    The hazard the gate exists for still applies to anything that PLACES: an
+    unreadable line makes the fold fall back to a key's previous status line,
+    so a pick the operator had just disarmed reads ``armed`` here. That is why
+    only the read-only view may call this."""
+    yield from _iter_decodable(read_pick_fold(path=path))
+
+
+def _iter_decodable(fold: PickFold) -> Iterator[TradeIntent]:
+    """Decode the armed records of an already-read fold (see both callers)."""
     for pick in fold.records:
         ticker, parsed_date = pick.ticker, pick.trade_date
         if pick.status != STATUS_ARMED:
@@ -642,7 +673,7 @@ def iter_picks(*, path: Path | None = None) -> Iterator[TradeIntent]:
             # line is skipped forever until re-armed — never placed). Keep it at
             # DEBUG so troubleshooting can still surface it on demand.
             logger.debug(
-                "iter_picks %s/%s: armed line has no 'intent' (pre-PR-7 bare shape) — "
+                "pick fold %s/%s: armed line has no 'intent' (pre-PR-7 bare shape) — "
                 "skipped, arm a new document via `alphalens broker arm`",
                 ticker,
                 parsed_date,
@@ -655,7 +686,7 @@ def iter_picks(*, path: Path | None = None) -> Iterator[TradeIntent]:
             # ever; the drain refuses an unplaced one ONCE via
             # iter_legacy_size_pct_picks instead.
             logger.debug(
-                "iter_picks %s/%s: pre-#1467 percent-sized intent — not decoded",
+                "pick fold %s/%s: pre-#1467 percent-sized intent — not decoded",
                 ticker,
                 parsed_date,
             )
@@ -664,7 +695,7 @@ def iter_picks(*, path: Path | None = None) -> Iterator[TradeIntent]:
             yield intent_from_jsonable(raw_intent)
         except TradeIntentDecodeError as exc:
             logger.warning(
-                "iter_picks %s/%s: armed line's intent failed to decode — skipped: %s",
+                "pick fold %s/%s: armed line's intent failed to decode — skipped: %s",
                 ticker,
                 parsed_date,
                 exc,
@@ -701,6 +732,7 @@ __all__ = [
     "arm_pick",
     "generation_of",
     "identity_token",
+    "iter_decodable_picks",
     "iter_legacy_size_pct_picks",
     "iter_picks",
     "mark_disarmed",

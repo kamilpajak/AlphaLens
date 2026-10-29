@@ -26,7 +26,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from tests.brokers.automanager.home_isolation import isolate_home
-from tests.brokers.automanager.test_picks import _intent
+from tests.brokers.automanager.test_picks import _intent, _torn_utf8_bytes
 
 
 def _picks_path(home: Path, env: str = "sim") -> Path:
@@ -54,6 +54,12 @@ def _append_raw(path: Path, record: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(record) + "\n")
+
+
+def _append_bytes(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("ab") as fh:
+        fh.write(payload)
 
 
 def _run(runner: CliRunner, *args: str):
@@ -352,6 +358,88 @@ class PicksCommandOutputTest(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertEqual(json.loads(result.stdout)["malformed"], 1)
         self.assertIn("malformed", result.stderr)
+
+
+class PicksWhileAPickLineCannotBeReadTest(unittest.TestCase):
+    """#1788: the drain withholds EVERY placement while one line is unreadable.
+
+    That gate lives in ``iter_picks``, and this view asks the same module which
+    keys decode. Two facts must stay apart, or the view lies:
+
+    - whether THIS pick's own line decodes -- the row's state;
+    - whether the drain is placing anything at all -- one fact about the queue.
+
+    Reproduced before the split: a readable KO pick rendered UNREADABLE because
+    an unrelated ``ZZZ`` line was torn mid-multibyte.
+    """
+
+    def setUp(self) -> None:
+        self.runner = CliRunner()
+        self.home = isolate_home(self)
+        self.path = _picks_path(self.home)
+
+    def _tear(self, ticker: str = "ZZZ", trade_date: str = "2026-07-31") -> None:
+        _append_bytes(
+            self.path,
+            _torn_utf8_bytes({"ticker": ticker, "date": trade_date, "status": "armed"}),
+        )
+
+    def test_a_readable_pick_keeps_its_own_state_while_another_line_is_torn(self) -> None:
+        _arm(self.home, "KO", "2026-07-20")
+        self._tear()
+        result = _run(self.runner, "--format", "json")
+        self.assertEqual(result.exit_code, 0, result.output)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["malformed"], 1, "the fixture must reach the counter")
+        self.assertEqual(_rows(result)["KO"]["state"], "PENDING")
+        self.assertEqual(payload["counts"]["unreadable"], 0)
+
+    def test_a_pick_whose_own_intent_does_not_decode_still_reads_unreadable(self) -> None:
+        # The two facts, in one journal: BAD's own line is undecodable, KO's is
+        # fine, and a third line is torn. Each row must carry its own verdict.
+        _arm(self.home, "KO", "2026-07-20")
+        _append_raw(
+            self.path,
+            {
+                "ticker": "BAD",
+                "date": "2026-07-02",
+                "status": "armed",
+                "intent": {"not": "a trade intent"},
+            },
+        )
+        self._tear()
+        rows = _rows(_run(self.runner, "--format", "json"))
+        self.assertEqual(rows["KO"]["state"], "PENDING")
+        self.assertEqual(rows["BAD"]["state"], "UNREADABLE")
+
+    def test_the_report_says_the_queue_is_withheld_in_both_renderings(self) -> None:
+        _arm(self.home, "KO", "2026-07-20")
+        self._tear()
+        payload = json.loads(_run(self.runner, "--format", "json").stdout)
+        self.assertIs(payload["placement_withheld"], True)
+        human = _run(self.runner)
+        self.assertEqual(human.exit_code, 0, human.output)
+        self.assertIn("withheld", human.stdout.lower())
+
+    def test_a_clean_queue_does_not_claim_the_placements_are_withheld(self) -> None:
+        """Positive control: the new fact must be invisible on a real journal."""
+        _arm(self.home, "KO", "2026-07-20")
+        payload = json.loads(_run(self.runner, "--format", "json").stdout)
+        self.assertIs(payload["placement_withheld"], False)
+        self.assertEqual(payload["counts"]["pending"], 1)
+        human = _run(self.runner)
+        self.assertNotIn("withheld", human.stdout.lower())
+
+    def test_the_help_names_the_withholding_and_how_it_clears(self) -> None:
+        """The published remedy for UNREADABLE is re-arming, and re-arming does
+        NOT release a queue the unreadable-line gate holds -- only a hand
+        repair of the journal does. The help must not send the operator down a
+        path that cannot work."""
+        from alphalens_cli.commands.broker import picks_command
+
+        doc = (picks_command.__doc__ or "").lower()
+        self.assertIn("withh", doc, "the help must state that placements stop")
+        self.assertIn("repair", doc, "and that a hand repair of the journal is the way out")
 
 
 class PicksCommandEnvTest(unittest.TestCase):

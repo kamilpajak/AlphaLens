@@ -1751,6 +1751,14 @@ def _render_picks_human(result: dict[str, Any]) -> None:
     extra = sorted(name for name in counts if name not in _PICK_STATES)
     summary = "  ".join(f"{name} {counts[name]}" for name in (*_PICK_STATES, *extra))
     typer.echo(f"{summary}  ({sum(counts.values())} picks)")
+    if result["placement_withheld"]:
+        # Stdout, not stderr: the JSON carries it in the BODY, so it is part of
+        # the answer, and the two renderings must carry the same facts.
+        typer.echo(
+            f"placements WITHHELD: {result['malformed']} line(s) in "
+            f"{result['picks_journal']} cannot be read, so the drain places nothing — "
+            "repair them by hand (the journal is append-only) and re-arm what was lost"
+        )
 
 
 @broker_app.command(name="picks")
@@ -1783,8 +1791,15 @@ def picks_command(
     gross cap or the cash floor — with why, as of when; #1734), PLACED
     (already joined to a submission), REFUSED / DISARMED / EXPIRED (terminal,
     with the reason or note; EXPIRED = still unplaced when its validity window
-    ended), UNREADABLE (armed but the intent does not decode, so the drain
-    skips it forever — re-arm is the way back).
+    ended), UNREADABLE (armed but THIS pick's own line does not decode, so the
+    drain skips it forever — re-arm is the way back).
+
+    One fact is about the queue, not a row: while any line in ``picks.jsonl``
+    cannot be read at all (torn bytes, non-JSON), the drain withholds EVERY
+    placement (#1788) and the report says ``placement_withheld``. Re-arming
+    does NOT clear that — the journal is append-only, so only repairing those
+    lines by hand does. Rows keep their own states: a pick that decodes still
+    reads PENDING, it is simply not placed yet.
 
     An armed, unplaced row carries ``window_end`` (``order_ttl_days`` sessions
     after its trade date) and ``overdue``: only the daemon's drain expires a
@@ -1822,9 +1837,14 @@ def picks_command(
     fold = picks_mod.read_pick_fold(path=picks_target)
     submitted = picks_mod.submitted_pick_keys(iter_submission_records(submissions_target))
     # The REAL decoder decides decodability — a second one here would be free to
-    # disagree with the drain about which picks it can actually place.
+    # disagree with the drain about which picks it can place. The UNGATED reader
+    # on purpose: `iter_picks` withholds the WHOLE queue while any line is
+    # unreadable (#1788), so asking it would label every armed pick UNREADABLE
+    # over one unrelated torn line. That is a fact about the queue, not a row,
+    # and is published as `placement_withheld` below.
     decoded = {
-        picks_mod.pick_key(intent): intent for intent in picks_mod.iter_picks(path=picks_target)
+        picks_mod.pick_key(intent): intent
+        for intent in picks_mod.iter_decodable_picks(path=picks_target)
     }
     waits = pick_waits.open_waits(fold.records, submitted, pick_waits.read_waits(path=waits_target))
     now = _reading_now()
@@ -1899,6 +1919,11 @@ def picks_command(
         waits_journal=str(waits_target),
         counts=counts,
         malformed=fold.malformed,
+        # While the fold reports a line it cannot read, the drain places NOTHING
+        # (#1788), so a PENDING row is not a placement that is coming. Derived
+        # from `malformed`: the same condition `iter_picks` gates on, not a
+        # second decision that could drift from it.
+        placement_withheld=bool(fold.malformed),
         truncated=truncated,
         picks=selected[:limit],
     )
