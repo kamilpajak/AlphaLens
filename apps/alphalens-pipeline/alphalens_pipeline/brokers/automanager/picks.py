@@ -4,8 +4,15 @@ One JSON line per arm (`alphalens broker arm`) under
 ~/.alphalens/broker_orders/<env>/picks.jsonl (per-environment path,
 state_paths.picks_path, ADR 0016) — the durable human-intent inbox the
 control loop drains. Mirrors submission_log.py: the file is NEVER rewritten;
-status is a recorded fact per line (T8 cohort discipline). Malformed/undated
-lines are skipped; a missing file yields nothing.
+status is a recorded fact per line (T8 cohort discipline). A missing file
+yields nothing.
+
+A line the reader cannot read is COUNTED by :func:`read_pick_fold` and CLOSES
+:func:`iter_picks` (#1788): the fold keeps answering so the operator and the
+arming door can still work, while the drain places nothing at all until the
+journal is repaired. The reason is latest-wins — an unreadable line makes the
+fold fall back to the key's previous status, so a disarmed pick reads ``armed``
+again, and a torn line often names no key to withhold on its own.
 
 PR-7 (broker-manager extraction memo section 5): ``arm_pick`` now persists the
 FULL :class:`~broker_contract.trade_intent.schema.TradeIntent` on the armed
@@ -413,13 +420,14 @@ def read_pick_fold(*, path: Path | None = None) -> PickFold:
             line = _decoded_line(raw_line)
             if line is None:
                 malformed += 1
-                # DEBUG, not WARNING, for the reason :func:`iter_picks` states
-                # about the bare-shape line: the manager daemon re-folds this
-                # journal every ~45 s tick, and the journal is append-only, so
-                # an undecodable line is permanent — a WARNING would repeat for
-                # ever. The COUNT is the published report (the CLI prints
-                # "skipped N malformed line(s)"), and the sibling malformed
-                # shapes below are silent for the same reason.
+                # DEBUG, not WARNING: the COUNT is this function's published
+                # report (the CLI prints "skipped N malformed line(s)"), and the
+                # sibling malformed shapes below are silent for the same reason.
+                # The CONSEQUENCE of a line this fold cannot read — that no pick
+                # is placed until it is repaired — is announced at WARNING by
+                # :func:`iter_picks`, which is the half that withholds. Raising
+                # this line to WARNING would put the same fact in front of every
+                # read-only reader of the fold too.
                 logger.debug(
                     "%s line %d: bytes are not UTF-8 — counted as malformed", target, index
                 )
@@ -574,14 +582,55 @@ def iter_picks(*, path: Path | None = None) -> Iterator[TradeIntent]:
     """Yield ARMED picks as decoded :class:`TradeIntent`; the LATEST status
     line per (ticker, date, generation) wins.
 
-    Malformed/undated lines are skipped, and a pick whose latest line is
-    non-armed (refused / cancelled / filled / expired) is never yielded — the
-    control-loop drain places whatever this emits, so the ARMED filter lives
-    here (defence in depth against re-placing a retired intent). An armed line
-    with no ``"intent"`` key (the pre-PR-7 bare shape) or an undecodable one
-    is skipped with a warning — no back-compat, re-arm is the human path
-    back."""
-    for pick in read_pick_fold(path=path).records:
+    FAILS CLOSED while the fold reports a line it could not read (#1788): this
+    yields NOTHING, so the drain places nothing. A line the fold cannot read
+    makes it fall back to the key's PREVIOUS status line, so a pick the
+    operator had just DISARMED reads ``armed`` again and the drain would place
+    real money for a cancelled intent — measured on a real armed line. The
+    scope is the WHOLE queue rather than the affected key because a torn line
+    often names no key at all: a tear keeps the line's prefix, so ``ticker``
+    and ``date`` may be the part that is gone.
+
+    The gate is on :attr:`PickFold.malformed`, which is why it also covers the
+    non-JSON shape — that one has reverted a key to ``armed`` since long before
+    #1788, so failing closed here repairs a hazard older than this change
+    rather than only the byte case. A blank line is NOT malformed and does not
+    close the drain.
+
+    :func:`read_pick_fold` itself is deliberately unchanged: the operator must
+    still be able to see the queue and the count (`alphalens broker picks`) and
+    repair the journal, and the arming door reads that same fold for its
+    pick-key check, so arming stays possible while a corrupt line stands.
+
+    The cost is a denial of service — one unreadable byte withholds every
+    placement, including for keys that read perfectly — so the withholding is
+    announced at WARNING and is NOT throttled. One line per call is O(1) in the
+    queue size (about one per ~45 s tick), while a "say it once per process"
+    flag would announce it at daemon boot and then go quiet for as long as
+    placements stayed withheld, which reads as a condition that healed. It
+    never heals by itself: the journal is append-only, so only a hand edit
+    clears it.
+
+    Otherwise: a pick whose latest line is non-armed (refused / cancelled /
+    filled / expired) is never yielded — the control-loop drain places whatever
+    this emits, so the ARMED filter lives here (defence in depth against
+    re-placing a retired intent). An armed line with no ``"intent"`` key (the
+    pre-PR-7 bare shape) or an undecodable one is skipped with a warning — no
+    back-compat, re-arm is the human path back."""
+    fold = read_pick_fold(path=path)
+    if fold.malformed:
+        logger.warning(
+            "iter_picks %s: %d line(s) cannot be read, so NO pick is placed while that "
+            "stands — one of them may BE the disarm of a pick this queue still shows as "
+            "armed, and a torn line often names no key, so none can be cleared on its own. "
+            "Repair those lines by hand (the journal is append-only, nothing rewrites it "
+            "for you) and re-arm whatever was lost; `alphalens broker picks` still reports "
+            "the queue and the count.",
+            path or state_paths.picks_path(),
+            fold.malformed,
+        )
+        return
+    for pick in fold.records:
         ticker, parsed_date = pick.ticker, pick.trade_date
         if pick.status != STATUS_ARMED:
             continue

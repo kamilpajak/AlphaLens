@@ -77,6 +77,28 @@ def _intent(ticker: str = "KO", trade_date: str = "2026-07-20", generation: int 
     )
 
 
+def _torn_utf8_bytes(record: dict) -> bytes:
+    """``record`` rendered and cut on the lead byte of its last multibyte
+    sequence, so the line's bytes are not UTF-8.
+
+    The non-ASCII character is written as an escape and the cut is made on its
+    MEASURED lead byte, so this test file stays ASCII and the English-only gate
+    (``tests.test_no_polish_chars``) has nothing to find.
+    """
+    euro_sign = "€"  # -> b"\xe2\x82\xac"
+    whole = json.dumps({**record, "note": euro_sign}, ensure_ascii=False).encode("utf-8")
+    torn = whole[: whole.rindex(b"\xe2") + 1]
+    assert torn != whole
+    assert torn.endswith(b"\xe2")
+    return torn + b"\n"
+
+
+#: One armed line whose bytes are not UTF-8 -- the #1788 shape, as a constant so
+#: the fold tests and the fail-closed tests cannot drift apart on what "an
+#: unreadable line" means.
+_TORN_ARMED_LINE = _torn_utf8_bytes({"ticker": "TORN", "date": "2026-07-21", "status": "armed"})
+
+
 class ArmPickTest(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = TemporaryDirectory()
@@ -368,47 +390,61 @@ class IterPicksTest(unittest.TestCase):
             [(i.instrument.ticker, i.meta.trade_date) for i in intents], [("KO", "2026-07-29")]
         )
 
-    def test_iter_skips_malformed_and_undated_lines(self) -> None:
+    def test_iter_yields_nothing_while_a_malformed_or_undated_line_stands(self) -> None:
+        """Was ``test_iter_skips_malformed_and_undated_lines``.
+
+        The drain no longer skips past a malformed line to the good ones below
+        it: any line the fold cannot read may BE the disarm of a key the fold
+        still shows as armed, so the whole queue is withheld. See
+        ``IterPicksFailsClosedWhileTheFoldReportsALineItCannotRead``, which
+        proves the same journal yields GOOD once the bad lines are gone.
+        """
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        good_line = json.dumps(
+            {
+                "ticker": "GOOD",
+                "date": "2026-07-20",
+                "armed_ts": "2026-07-20T00:00:00+00:00",
+                "status": "armed",
+                "intent": {
+                    "intent_id": "GOOD:2026-07-20",
+                    "instrument": {"ticker": "GOOD", "mic": "XNYS"},
+                    "spec": {
+                        "entry_tiers": [{"limit_price": 100.0, "alloc_pct": 100.0, "tag": ""}],
+                        "disaster_stop": 90.0,
+                        "tp_tranches": [],
+                        "size": {"notional_acct": 2000.0, "currency": "USD"},
+                        "order_ttl_days": 7,
+                        "side": "long",
+                        "schema_version": "3",
+                    },
+                    "meta": {
+                        "armed_ts": "2026-07-20T00:00:00+00:00",
+                        "trade_date": "2026-07-20",
+                        "schema_version": "1",
+                    },
+                    "exit": None,
+                    "account_id": "default",
+                },
+            }
+        )
+        # The good line ALONE is yielded, so the empty result below is the gate
+        # firing and not a broken fixture.
+        self.path.write_text(good_line + "\n", encoding="utf-8")
+        self.assertEqual([i.instrument.ticker for i in iter_picks(path=self.path)], ["GOOD"])
+
         self.path.write_text(
             "not json\n"
             + json.dumps(["a", "list"])
             + "\n"
             + json.dumps({"ticker": "NODATE", "status": "armed"})
             + "\n"
-            + json.dumps(
-                {
-                    "ticker": "GOOD",
-                    "date": "2026-07-20",
-                    "armed_ts": "2026-07-20T00:00:00+00:00",
-                    "status": "armed",
-                    "intent": {
-                        "intent_id": "GOOD:2026-07-20",
-                        "instrument": {"ticker": "GOOD", "mic": "XNYS"},
-                        "spec": {
-                            "entry_tiers": [{"limit_price": 100.0, "alloc_pct": 100.0, "tag": ""}],
-                            "disaster_stop": 90.0,
-                            "tp_tranches": [],
-                            "size": {"notional_acct": 2000.0, "currency": "USD"},
-                            "order_ttl_days": 7,
-                            "side": "long",
-                            "schema_version": "3",
-                        },
-                        "meta": {
-                            "armed_ts": "2026-07-20T00:00:00+00:00",
-                            "trade_date": "2026-07-20",
-                            "schema_version": "1",
-                        },
-                        "exit": None,
-                        "account_id": "default",
-                    },
-                }
-            )
+            + good_line
             + "\n",
             encoding="utf-8",
         )
-        intents = list(iter_picks(path=self.path))
-        self.assertEqual([i.instrument.ticker for i in intents], ["GOOD"])
+        self.assertEqual(read_pick_fold(path=self.path).malformed, 3)
+        self.assertEqual(list(iter_picks(path=self.path)), [])
 
     def test_armed_line_without_intent_key_is_skipped(self) -> None:
         # The pre-PR-7 bare (ticker, date) line shape — no back-compat per
@@ -793,6 +829,340 @@ class AnUnreadableLineIsCountedAndNeverRaisedOutOfThePickFold(unittest.TestCase)
                 names = [node.id for node in ast.walk(handler.type) if isinstance(node, ast.Name)]
                 self.assertNotIn("Exception", names)
                 self.assertNotIn("BaseException", names)
+
+
+class IterPicksFailsClosedWhileTheFoldReportsALineItCannotRead(unittest.TestCase):
+    """The drain yields NOTHING while the fold reports an unreadable line.
+
+    Counting an unreadable line (#1788) made the fold fall back to the key's
+    PREVIOUS status line, so a pick the operator had just DISARMED read
+    ``armed`` again and the drain would place real money for a cancelled
+    intent. Before #1788 the fold raised, the daemon crash-looped and nothing
+    was placed -- a loud failure traded for a silent resurrection, which on the
+    money path is the worse trade.
+
+    So the rule is on the COUNT, not on a key: while ``malformed > 0`` the
+    drain emits no pick at all. Attribution was considered and rejected -- a
+    torn line often cannot be assigned to a key at all, because the key field
+    may be the torn part (``test_a_torn_line_often_names_no_key_at_all``).
+
+    The cost is a denial of service: one unreadable byte withholds every
+    placement, including for keys that read perfectly. What makes that
+    acceptable is only that the operator LEARNS about it, which is what
+    ``test_the_withholding_warns_on_every_call_rather_than_once_per_process``
+    pins.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.path = Path(self._tmp.name) / "picks.jsonl"
+        # Every test here provokes the fail-closed WARNING on purpose, so left
+        # alone this class prints the same long message a dozen times into the
+        # suite's output. `assertLogs` / `assertNoLogs` set the level they need
+        # for their own duration, so the two tests that assert on the log are
+        # unaffected by this.
+        self._logger = logging.getLogger(picks_module.__name__)
+        self._level = self._logger.level
+        self._logger.setLevel(logging.CRITICAL)
+
+    def tearDown(self) -> None:
+        self._logger.setLevel(self._level)
+        self._tmp.cleanup()
+
+    def _append_bytes(self, payload: bytes) -> None:
+        with self.path.open("ab") as fh:
+            fh.write(payload)
+
+    _torn = staticmethod(_torn_utf8_bytes)
+
+    def _tickers(self) -> list[str]:
+        return [intent.instrument.ticker for intent in iter_picks(path=self.path)]
+
+    def test_a_torn_disarm_line_no_longer_leaves_the_cancelled_pick_live(self) -> None:
+        """The reproduction the owner ran on a real armed line.
+
+        Arm KO, disarm it, and tear the disarm line mid-multibyte: the fold
+        counts the torn line and falls back to the ARMED line, so before this
+        change ``iter_picks`` still emitted KO and the drain would have placed
+        an intent the operator cancelled.
+        """
+        arm_pick(_intent("KO", "2026-07-20"), path=self.path)
+        self.assertEqual(self._tickers(), ["KO"], "the pick must be live before the tear")
+
+        self._append_bytes(
+            self._torn(
+                {
+                    "ticker": "KO",
+                    "date": "2026-07-20",
+                    "disarmed_ts": "2026-07-20T15:00:00+00:00",
+                    "status": STATUS_DISARMED,
+                }
+            )
+        )
+
+        fold = read_pick_fold(path=self.path)
+        # The fold still reads the pick as armed -- that is the hazard, and it
+        # is deliberately NOT what this change repairs (the CLI needs the row).
+        self.assertEqual(fold.malformed, 1)
+        self.assertEqual([(r.ticker, r.status) for r in fold.records], [("KO", STATUS_ARMED)])
+        # What changes is what the DRAIN is allowed to act on.
+        self.assertEqual(self._tickers(), [])
+
+    def test_a_torn_line_often_names_no_key_at_all(self) -> None:
+        """Why the gate is on the count and not on the affected key.
+
+        A journal line is torn by a partial write, so what survives is its
+        PREFIX. ``ticker`` and ``date`` sit wherever the writer put them, so a
+        tear can remove both -- there is then no key to withhold, and the only
+        safe scope is the whole queue.
+        """
+        arm_pick(_intent("KO", "2026-07-20"), path=self.path)
+        whole = json.dumps(
+            {
+                "status": STATUS_DISARMED,
+                "disarmed_ts": "2026-07-20T15:00:00+00:00",
+                "ticker": "KO",
+                "date": "2026-07-20",
+            }
+        ).encode("utf-8")
+        prefix = whole[: whole.index(b'"ticker"')]
+        # Neither key FIELD survived the tear, so nothing in the line says
+        # which pick it was about. (``disarmed_ts`` happens to carry the same
+        # date text; a timestamp is not a key, and no reader folds on one.)
+        self.assertNotIn(b'"ticker"', prefix)
+        self.assertNotIn(b'"date"', prefix)
+        self.assertNotIn(b"KO", prefix)
+
+        self._append_bytes(prefix + b"\n")
+
+        self.assertEqual(read_pick_fold(path=self.path).malformed, 1)
+        self.assertEqual(self._tickers(), [])
+
+    def test_a_non_json_line_closes_the_drain_the_same_way(self) -> None:
+        """The pre-existing JSON shape gets the same treatment (behaviour change).
+
+        A disarm line cut before its closing brace is not JSON, and that has
+        reverted a key to ``armed`` since long before #1788 -- the byte case
+        only made the hazard easier to reach. Failing closed on the COUNT
+        therefore fixes a hazard that predates this PR, which is the right
+        outcome and is a change beyond #1788's own scope.
+        """
+        arm_pick(_intent("MU", "2026-07-20"), path=self.path)
+        self.assertEqual(self._tickers(), ["MU"], "the pick must be live before the tear")
+        whole = json.dumps(
+            {
+                "ticker": "MU",
+                "date": "2026-07-20",
+                "disarmed_ts": "2026-07-20T15:00:00+00:00",
+                "status": STATUS_DISARMED,
+            }
+        ).encode("utf-8")
+
+        self._append_bytes(whole[: len(whole) // 2] + b"\n")
+
+        fold = read_pick_fold(path=self.path)
+        self.assertEqual(fold.malformed, 1)
+        self.assertEqual([(r.ticker, r.status) for r in fold.records], [("MU", STATUS_ARMED)])
+        self.assertEqual(self._tickers(), [])
+
+    def test_every_malformed_shape_closes_the_drain(self) -> None:
+        """One case per route into the malformed counter.
+
+        Each subtest proves the pick is yielded WITHOUT the bad line first, so
+        an empty result cannot pass because the good line was broken too.
+        """
+        shapes = {
+            "not json": b"not json\n",
+            "json but not an object": b'["a", "list"]\n',
+            "undated": b'{"ticker": "NODATE", "status": "armed"}\n',
+            "generation below one": (
+                b'{"ticker": "GEN", "date": "2026-07-20", "status": "armed", "generation": 0}\n'
+            ),
+            "bytes that are not utf-8": b"\xff\n",
+            "torn mid-multibyte": _TORN_ARMED_LINE,
+        }
+        for label, payload in shapes.items():
+            with self.subTest(shape=label):
+                self.path.unlink(missing_ok=True)
+                arm_pick(_intent("AAA", "2026-07-20"), path=self.path)
+                self.assertEqual(self._tickers(), ["AAA"])
+                self._append_bytes(payload)
+                self.assertEqual(read_pick_fold(path=self.path).malformed, 1)
+                self.assertEqual(self._tickers(), [])
+
+    def test_a_readable_pick_on_another_key_is_withheld_too(self) -> None:
+        """The deliberate cost, stated as a test rather than discovered in prod.
+
+        BBB's line is perfect and BBB is not placed, because nothing in the
+        journal says the unreadable line is not BBB's disarm.
+        """
+        arm_pick(_intent("AAA", "2026-07-20"), path=self.path)
+        arm_pick(_intent("BBB", "2026-07-21"), path=self.path)
+        self.assertEqual(self._tickers(), ["AAA", "BBB"])
+
+        self._append_bytes(b"\xff\n")
+
+        self.assertEqual([r.ticker for r in read_pick_fold(path=self.path).records], ["AAA", "BBB"])
+        self.assertEqual(self._tickers(), [])
+
+    def test_a_blank_line_is_not_a_reason_to_close(self) -> None:
+        """The gate is the malformed COUNT, not "anything unusual".
+
+        Trailing newlines are ordinary in an append-only journal and are
+        skipped WITHOUT being counted, so they must not stop the drain. Without
+        this, every journal written by every appender would place nothing.
+        """
+        arm_pick(_intent("KO", "2026-07-20"), path=self.path)
+        for blank in ("\n", "   \n", "\t\n", " \n", "\u0085\n", " \n", "　\n"):
+            with self.subTest(blank=blank.strip("\n").encode("unicode_escape")):
+                self._append_bytes(blank.encode("utf-8"))
+                self.assertEqual(read_pick_fold(path=self.path).malformed, 0)
+                self.assertEqual(self._tickers(), ["KO"])
+
+    def test_the_withholding_warns_on_every_call_rather_than_once_per_process(self) -> None:
+        """WARNING, unthrottled, naming the file, the count and the remedy.
+
+        DEBUG is what the sibling skips use, and their comments justify it by
+        the condition being INERT and self-healing. This one is neither: it
+        withholds every placement until a human edits the file.
+
+        Unthrottled is the deliberate half. The daemon re-folds this journal
+        every ~45 s tick, so the line repeats -- about one per tick, O(1) in
+        the queue size, not one per pick. A process-wide "say it once" flag
+        would emit it at boot and then never again while placements stayed
+        withheld, which is ``fb_warning_lifetime_260925`` exactly: a permanent
+        condition that disappears from the log reads as a fixed one. The
+        control loop's ``alert_throttled`` keys are the other precedent, and
+        their own comment says collapsing two distinct conditions hides the
+        second. So the repeat is the signal, and the test asserts the SECOND
+        call warns too.
+        """
+        arm_pick(_intent("KO", "2026-07-20"), path=self.path)
+        self._append_bytes(_TORN_ARMED_LINE)
+
+        with self.assertLogs(picks_module.__name__, level="DEBUG") as captured:
+            self.assertEqual(self._tickers(), [])
+            self.assertEqual(self._tickers(), [])
+
+        warnings = [record for record in captured.records if record.levelno == logging.WARNING]
+        self.assertEqual(len(warnings), 2, "the warning must repeat, never fire once per process")
+        message = warnings[0].getMessage()
+        self.assertIn(str(self.path), message, "the operator must be told WHICH journal")
+        self.assertIn("1", message, "the operator must be told HOW MANY lines")
+        # The remedy, not just the symptom: the file is append-only, so nothing
+        # heals this but a hand edit, and nothing is placed until it is made.
+        self.assertIn("repair", message.lower())
+        self.assertRegex(message, r"(?i)no pick|nothing")
+
+    def test_a_clean_journal_warns_nothing_and_still_yields(self) -> None:
+        """Positive control: the gate must be invisible on every real journal."""
+        arm_pick(_intent("KO", "2026-07-20"), path=self.path)
+        arm_pick(_intent("MU", "2026-07-21"), path=self.path)
+        mark_disarmed("MU", dt.date(2026, 7, 21), note="by hand", path=self.path)
+
+        with self.assertNoLogs(picks_module.__name__, level="WARNING"):
+            self.assertEqual(self._tickers(), ["KO"])
+
+    def test_the_legacy_percent_size_reader_is_deliberately_left_open(self) -> None:
+        """``iter_legacy_size_pct_picks`` is NOT closed, and that is the choice.
+
+        It is the other fold reader on the daemon path, but the only thing the
+        drain does with it is append a TERMINAL ``refused`` line -- it never
+        places. A pick whose disarm line is torn would be refused instead of
+        disarmed, which is terminal either way and moves no money. Closing it
+        would instead leave a pre-#1467 percent-sized pick armed and invisible,
+        which is the exact state #1467 built this reader to prevent.
+        """
+        legacy = {
+            "ticker": "OLD",
+            "date": "2026-07-20",
+            "armed_ts": "2026-07-20T00:00:00+00:00",
+            "status": STATUS_ARMED,
+            "intent": {
+                "instrument": {"ticker": "OLD", "mic": "XNYS"},
+                # LEGACY(size_pct_v2): a percent and no `spec.size` is what
+                # `_carries_size_pct` recognises.
+                "spec": {"suggested_size_pct": 10.0},
+                "meta": {"trade_date": "2026-07-20"},
+            },
+        }
+        self.path.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
+        self.assertEqual(
+            [p.ticker for p in picks_module.iter_legacy_size_pct_picks(path=self.path)],
+            ["OLD"],
+            "the fixture must be a percent-sized pick this reader sees",
+        )
+
+        self._append_bytes(b"\xff\n")
+
+        self.assertEqual(read_pick_fold(path=self.path).malformed, 1)
+        self.assertEqual(
+            [p.ticker for p in picks_module.iter_legacy_size_pct_picks(path=self.path)], ["OLD"]
+        )
+
+    def test_the_fold_itself_still_answers_with_the_queue_and_its_count(self) -> None:
+        """Rule one: ``read_pick_fold`` is unchanged.
+
+        The whole point of failing closed in ``iter_picks`` rather than in the
+        fold is that the operator can still SEE the queue and the count and fix
+        the journal. Measured on the parent commit (one journal holding every
+        shape): eight records in first-seen key order, six malformed.
+        """
+        arm_pick(_intent("AAA", "2026-07-20"), path=self.path)
+        arm_pick(_intent("BBB", "2026-07-20"), path=self.path)
+        mark_disarmed("BBB", dt.date(2026, 7, 20), note="by hand", path=self.path)
+        arm_pick(_intent("CCC", "2026-07-20"), path=self.path)
+        mark_refused("CCC", dt.date(2026, 7, 20), "cap", path=self.path)
+        arm_pick(_intent("DDD", "2026-07-20"), path=self.path)
+        mark_disarmed("DDD", dt.date(2026, 7, 20), path=self.path)
+        arm_pick(_intent("DDD", "2026-07-20", generation=2), path=self.path)
+        self._append_bytes(b"\n   \n")
+        self._append_bytes("　\n".encode())
+        self._append_bytes(b"not json\n")
+        self._append_bytes(b'["a","list"]\n')
+        self._append_bytes(b'{"ticker": "NODATE", "status": "armed"}\n')
+        self._append_bytes(
+            b'{"ticker": "GEN", "date": "2026-07-20", "status": "armed", "generation": 0}\n'
+        )
+        self._append_bytes(self._torn({"ticker": "TORN", "date": "2026-07-21", "status": "armed"}))
+        self._append_bytes(b"\xff\n")
+        self._append_bytes(
+            json.dumps({"ticker": "EEE", "date": "2026-07-22", "status": "armed"}).encode()
+            + b"\r"
+            + json.dumps({"ticker": "FFF", "date": "2026-07-23", "status": "armed"}).encode()
+            + b"\n"
+        )
+        self._append_bytes(
+            json.dumps(
+                {
+                    "ticker": "BARE",
+                    "date": "2026-07-24",
+                    "status": "armed",
+                    "armed_ts": "2026-07-24T00:00:00+00:00",
+                }
+            ).encode()
+            + b"\n"
+        )
+
+        fold = read_pick_fold(path=self.path)
+
+        self.assertEqual(fold.malformed, 6)
+        self.assertEqual(
+            [(r.ticker, r.trade_date.isoformat(), r.generation, r.status) for r in fold.records],
+            [
+                ("AAA", "2026-07-20", 1, STATUS_ARMED),
+                ("BBB", "2026-07-20", 1, STATUS_DISARMED),
+                ("CCC", "2026-07-20", 1, STATUS_REFUSED),
+                ("DDD", "2026-07-20", 1, STATUS_DISARMED),
+                ("DDD", "2026-07-20", 2, STATUS_ARMED),
+                ("EEE", "2026-07-22", 1, STATUS_ARMED),
+                ("FFF", "2026-07-23", 1, STATUS_ARMED),
+                ("BARE", "2026-07-24", 1, STATUS_ARMED),
+            ],
+        )
+        # Same journal, the other half of the change: the drain places nothing.
+        # On the parent commit this yielded ["AAA", "DDD"].
+        self.assertEqual(self._tickers(), [])
 
 
 class JoinHelperTest(unittest.TestCase):
