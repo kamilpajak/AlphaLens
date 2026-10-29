@@ -29,14 +29,26 @@ Two units, mirroring the exit side but INVERTED:
 The journal KINDS are imported from :mod:`entry_trails` — never re-declared
 here, so the fold/compaction whitelist and the emitter can never drift.
 
-**Price side (memo notes trap #8, pinned here):** the exit peak reads
-``point.bid`` (selling a long executes at the bid). The entry watcher tracks
-the running low and the touch/trigger comparison on the SAME reference the LIVE
-V1 probe used (bid + distance; the server repositioned the trigger off the new
-bid low — memo §4b L1). The CALLER extracts the reference scalar from the
-``PricePoint`` (``point.bid``) and passes it in as ``TickInput.price``; a
-``None`` price is the freshness/trust veto. The eventual FILL side is the ask —
-T2 pins the exact executor semantics; T1 detection is bid-referenced.
+**Price side — the reference is the BID, and this is where that is pinned:**
+the exit peak reads ``point.bid`` (selling a long executes at the bid). The
+entry watcher tracks the running low and the touch/trigger comparison on the
+SAME reference the LIVE V1 probe used (bid + distance; the server repositioned
+the trigger off the new bid low — ``docs/research/entry_trailing_design_2026_08_12.md``
+§4b, probe L1, which this paragraph used to cite as just "memo"). The CALLER extracts the
+reference scalar from the ``PricePoint`` (``point.bid``) and passes it in as
+``TickInput.price``; a ``None`` price is the freshness/trust veto. The eventual
+FILL side is the ask — T2 pins the exact executor semantics; T1 detection is
+bid-referenced. The sampling that makes it so is
+:func:`alphalens_pipeline.brokers.automanager.entry_watch._point_sample_bids`,
+which reads no other field; its docstring carries the rest.
+
+This paragraph used to cite a "memo trap #8". The citation was dropped on
+2026-10-28 because it could not be followed: as of that date no tracked
+markdown in any branch's history carried the phrase — only the two comments
+that cited it. The fact it stood for is stated above instead. Do NOT re-run
+that search expecting an empty result: section 9 of
+``docs/research/replay_vs_live_panel_2026_10_11.md`` records the removal and
+names the phrase, so it is the one tracked document that matches today.
 """
 
 from __future__ import annotations
