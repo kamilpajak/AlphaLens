@@ -280,7 +280,7 @@ tests:
               job: broker-manager-sim
             exp_annotations:
               summary: "SIM broker-manager is withholding every placement — a line in picks.jsonl cannot be read"
-              description: "The SIM auto-manager's pick fold reports a line it cannot read, so `iter_picks` yields NOTHING and the placement drain places nothing at all (#1788) — including for pick keys whose own lines are perfectly readable. The loop keeps ticking, so nothing else carries this condition and this gauge is the only standing indication — which is why the rule exists. It makes no claim about KILL or the token chain: it fires whatever those read, and under either the queue still needs the same hand repair before placement resumes. This never heals by itself: the journal is append-only, so only a hand repair clears it, and re-arming does not. Run `alphalens broker picks --env sim` for the count, repair those lines in ~/.alphalens/broker_orders/sim/picks.jsonl by hand, and re-arm whatever was lost. The gauge clears on the next tick; no restart is needed."
+              description: "The SIM auto-manager's pick fold reports a line it cannot read, so `iter_picks` yields NOTHING and the placement drain places nothing at all (#1788) — including for pick keys whose own lines are perfectly readable. The loop keeps ticking, so nothing else carries this condition and this gauge is the only standing indication — which is why the rule exists. It makes no claim about KILL or the token chain: it fires whatever those read, and under either the queue still needs the same hand repair before placement resumes. This never heals by itself: the journal is append-only, so only a hand repair clears it, and re-arming does not. Run `alphalens broker status --env sim --offline` for the count beside the rest of the instance's health, or `alphalens broker picks --env sim` for the queue itself. On a journal that cannot be OPENED at all, `broker picks` exits 1 without reporting it and only `broker status` names the condition. Repair those lines in ~/.alphalens/broker_orders/sim/picks.jsonl by hand, and re-arm whatever was lost. The gauge clears on the next tick; no restart is needed."
 
   # SIM freshness gate: the SAME withheld queue with a heartbeat frozen at 0 is
   # a STOPPED daemon, which HeartbeatStale already pages. Without the gate the
@@ -333,7 +333,7 @@ tests:
               job: broker-manager-live
             exp_annotations:
               summary: "LIVE broker-manager is withholding every placement — a line in picks.jsonl cannot be read (REAL MONEY)"
-              description: "The LIVE auto-manager's pick fold reports a line it cannot read, so `iter_picks` yields NOTHING and the placement drain places nothing at all (#1788) — including for pick keys whose own lines are perfectly readable. No NEW entry is placed. Stops already resting at Saxo still protect open positions, and the exit and protection passes are unaffected. The loop keeps ticking, so nothing else carries this condition and this gauge is the only standing indication — which is why the rule exists. It makes no claim about KILL or the token chain: it fires whatever those read, and under either the queue still needs the same hand repair before placement resumes. This never heals by itself: the journal is append-only, so only a hand repair clears it, and re-arming does not. Run `alphalens broker picks --env live` for the count, repair those lines in ~/.alphalens/broker_orders/live/picks.jsonl by hand, and re-arm whatever was lost. The gauge clears on the next tick; no restart is needed."
+              description: "The LIVE auto-manager's pick fold reports a line it cannot read, so `iter_picks` yields NOTHING and the placement drain places nothing at all (#1788) — including for pick keys whose own lines are perfectly readable. No NEW entry is placed. Stops already resting at Saxo still protect open positions, and the exit and protection passes are unaffected. The loop keeps ticking, so nothing else carries this condition and this gauge is the only standing indication — which is why the rule exists. It makes no claim about KILL or the token chain: it fires whatever those read, and under either the queue still needs the same hand repair before placement resumes. This never heals by itself: the journal is append-only, so only a hand repair clears it, and re-arming does not. Run `alphalens broker status --env live --offline` for the count beside the rest of the instance's health, or `alphalens broker picks --env live` for the queue itself. On a journal that cannot be OPENED at all, `broker picks` exits 1 without reporting it and only `broker status` names the condition. Repair those lines in ~/.alphalens/broker_orders/live/picks.jsonl by hand, and re-arm whatever was lost. The gauge clears on the next tick; no restart is needed."
 
   # LIVE freshness gate: a frozen heartbeat is a stopped daemon, not a
   # withheld queue.
@@ -363,9 +363,9 @@ tests:
         alertname: AlphalensBrokerPlacementsWithheldLive
         exp_alerts: []
 
-  # The SIM rule must not fire on the LIVE series and vice versa: both carry
-  # the same metric name and differ only by the {job=...} label, so a copied
-  # rule with the neighbour's job would page the wrong unit.
+  # The SIM rule must not fire on the LIVE series: both carry the same metric
+  # name and differ only by the {job=...} label, so a copied rule with the
+  # neighbour's job would page the wrong unit.
   - interval: 1m
     input_series:
       - series: 'alphalens_broker_manager_placements_withheld{job="broker-manager-live"}'
@@ -375,6 +375,23 @@ tests:
     alert_rule_test:
       - eval_time: 6m
         alertname: AlphalensBrokerPlacementsWithheld
+        exp_alerts: []
+
+  # And the other direction, which the block above cannot see: `alert_rule_test`
+  # filters by alertname, so the LIVE alert firing during any SIM-series block is
+  # never asserted. Without this block, dropping BOTH {job="broker-manager-live"}
+  # selectors from the LIVE rule passes `check rules` and this whole fixture
+  # (measured 2026-10-29), while the REAL-MONEY alert starts paging on the SIM
+  # queue and reporting unit=broker-manager-live for it.
+  - interval: 1m
+    input_series:
+      - series: 'alphalens_broker_manager_placements_withheld{job="broker-manager-sim"}'
+        values: '1x20'
+      - series: 'alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-sim"}'
+        values: '0+60x20'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: AlphalensBrokerPlacementsWithheldLive
         exp_alerts: []
 
   # SIM with a REALISTIC heartbeat lag, which is what pins the freshness
@@ -402,7 +419,7 @@ tests:
               job: broker-manager-sim
             exp_annotations:
               summary: "SIM broker-manager is withholding every placement — a line in picks.jsonl cannot be read"
-              description: "The SIM auto-manager's pick fold reports a line it cannot read, so `iter_picks` yields NOTHING and the placement drain places nothing at all (#1788) — including for pick keys whose own lines are perfectly readable. The loop keeps ticking, so nothing else carries this condition and this gauge is the only standing indication — which is why the rule exists. It makes no claim about KILL or the token chain: it fires whatever those read, and under either the queue still needs the same hand repair before placement resumes. This never heals by itself: the journal is append-only, so only a hand repair clears it, and re-arming does not. Run `alphalens broker picks --env sim` for the count, repair those lines in ~/.alphalens/broker_orders/sim/picks.jsonl by hand, and re-arm whatever was lost. The gauge clears on the next tick; no restart is needed."
+              description: "The SIM auto-manager's pick fold reports a line it cannot read, so `iter_picks` yields NOTHING and the placement drain places nothing at all (#1788) — including for pick keys whose own lines are perfectly readable. The loop keeps ticking, so nothing else carries this condition and this gauge is the only standing indication — which is why the rule exists. It makes no claim about KILL or the token chain: it fires whatever those read, and under either the queue still needs the same hand repair before placement resumes. This never heals by itself: the journal is append-only, so only a hand repair clears it, and re-arming does not. Run `alphalens broker status --env sim --offline` for the count beside the rest of the instance's health, or `alphalens broker picks --env sim` for the queue itself. On a journal that cannot be OPENED at all, `broker picks` exits 1 without reporting it and only `broker status` names the condition. Repair those lines in ~/.alphalens/broker_orders/sim/picks.jsonl by hand, and re-arm whatever was lost. The gauge clears on the next tick; no restart is needed."
 
   # LIVE with the same realistic heartbeat lag.
   - interval: 1m
@@ -422,7 +439,7 @@ tests:
               job: broker-manager-live
             exp_annotations:
               summary: "LIVE broker-manager is withholding every placement — a line in picks.jsonl cannot be read (REAL MONEY)"
-              description: "The LIVE auto-manager's pick fold reports a line it cannot read, so `iter_picks` yields NOTHING and the placement drain places nothing at all (#1788) — including for pick keys whose own lines are perfectly readable. No NEW entry is placed. Stops already resting at Saxo still protect open positions, and the exit and protection passes are unaffected. The loop keeps ticking, so nothing else carries this condition and this gauge is the only standing indication — which is why the rule exists. It makes no claim about KILL or the token chain: it fires whatever those read, and under either the queue still needs the same hand repair before placement resumes. This never heals by itself: the journal is append-only, so only a hand repair clears it, and re-arming does not. Run `alphalens broker picks --env live` for the count, repair those lines in ~/.alphalens/broker_orders/live/picks.jsonl by hand, and re-arm whatever was lost. The gauge clears on the next tick; no restart is needed."
+              description: "The LIVE auto-manager's pick fold reports a line it cannot read, so `iter_picks` yields NOTHING and the placement drain places nothing at all (#1788) — including for pick keys whose own lines are perfectly readable. No NEW entry is placed. Stops already resting at Saxo still protect open positions, and the exit and protection passes are unaffected. The loop keeps ticking, so nothing else carries this condition and this gauge is the only standing indication — which is why the rule exists. It makes no claim about KILL or the token chain: it fires whatever those read, and under either the queue still needs the same hand repair before placement resumes. This never heals by itself: the journal is append-only, so only a hand repair clears it, and re-arming does not. Run `alphalens broker status --env live --offline` for the count beside the rest of the instance's health, or `alphalens broker picks --env live` for the queue itself. On a journal that cannot be OPENED at all, `broker picks` exits 1 without reporting it and only `broker status` names the condition. Repair those lines in ~/.alphalens/broker_orders/live/picks.jsonl by hand, and re-arm whatever was lost. The gauge clears on the next tick; no restart is needed."
 
   # The gauge publishes a LEVEL (0/1) today, pinned by
   # TestPlacementsWithheldMetric in test_control_loop.py. This block pins the OTHER
@@ -446,7 +463,7 @@ tests:
               job: broker-manager-sim
             exp_annotations:
               summary: "SIM broker-manager is withholding every placement — a line in picks.jsonl cannot be read"
-              description: "The SIM auto-manager's pick fold reports a line it cannot read, so `iter_picks` yields NOTHING and the placement drain places nothing at all (#1788) — including for pick keys whose own lines are perfectly readable. The loop keeps ticking, so nothing else carries this condition and this gauge is the only standing indication — which is why the rule exists. It makes no claim about KILL or the token chain: it fires whatever those read, and under either the queue still needs the same hand repair before placement resumes. This never heals by itself: the journal is append-only, so only a hand repair clears it, and re-arming does not. Run `alphalens broker picks --env sim` for the count, repair those lines in ~/.alphalens/broker_orders/sim/picks.jsonl by hand, and re-arm whatever was lost. The gauge clears on the next tick; no restart is needed."
+              description: "The SIM auto-manager's pick fold reports a line it cannot read, so `iter_picks` yields NOTHING and the placement drain places nothing at all (#1788) — including for pick keys whose own lines are perfectly readable. The loop keeps ticking, so nothing else carries this condition and this gauge is the only standing indication — which is why the rule exists. It makes no claim about KILL or the token chain: it fires whatever those read, and under either the queue still needs the same hand repair before placement resumes. This never heals by itself: the journal is append-only, so only a hand repair clears it, and re-arming does not. Run `alphalens broker status --env sim --offline` for the count beside the rest of the instance's health, or `alphalens broker picks --env sim` for the queue itself. On a journal that cannot be OPENED at all, `broker picks` exits 1 without reporting it and only `broker status` names the condition. Repair those lines in ~/.alphalens/broker_orders/sim/picks.jsonl by hand, and re-arm whatever was lost. The gauge clears on the next tick; no restart is needed."
 
   # The DEPLOY-ORDER property, which is the whole reason these two rules ship with
   # no absent() twin: the rules file reaches the VPS within ~1h of merge while the
