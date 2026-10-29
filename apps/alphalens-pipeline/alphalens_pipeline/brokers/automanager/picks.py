@@ -4,8 +4,15 @@ One JSON line per arm (`alphalens broker arm`) under
 ~/.alphalens/broker_orders/<env>/picks.jsonl (per-environment path,
 state_paths.picks_path, ADR 0016) — the durable human-intent inbox the
 control loop drains. Mirrors submission_log.py: the file is NEVER rewritten;
-status is a recorded fact per line (T8 cohort discipline). Malformed/undated
-lines are skipped; a missing file yields nothing.
+status is a recorded fact per line (T8 cohort discipline). A missing file
+yields nothing.
+
+A line the reader cannot read is COUNTED by :func:`read_pick_fold` and CLOSES
+:func:`iter_picks` (#1788): the fold keeps answering so the operator and the
+arming door can still work, while the drain places nothing at all until the
+journal is repaired. The reason is latest-wins — an unreadable line makes the
+fold fall back to the key's previous status, so a disarmed pick reads ``armed``
+again, and a torn line often names no key to withhold on its own.
 
 PR-7 (broker-manager extraction memo section 5): ``arm_pick`` now persists the
 FULL :class:`~broker_contract.trade_intent.schema.TradeIntent` on the armed
@@ -52,7 +59,7 @@ import logging
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from broker_contract.trade_intent.codec import (
     TradeIntentDecodeError,
@@ -253,6 +260,79 @@ def mark_disarmed(
 
 _PickFoldKey = tuple[str, dt.date, int]
 
+#: What READING one journal line can raise, beside the shape checks
+#: :func:`_parse_record` already reports as malformed. Named member by member
+#: rather than covered by ``except Exception``: this queue's value is that a
+#: defect in the parser announces itself while corruption on disk is counted,
+#: and a blanket handler would turn the first into the second on the one
+#: journal the money path writes to. Three members, each with a measured route
+#: and a test of its own:
+#:
+#: * :class:`UnicodeDecodeError` — bytes that are not UTF-8 (#1788). In text
+#:   mode the decode happened while the ``for`` statement advanced the file,
+#:   OUTSIDE any guard, so one such line raised out of the whole fold and lost
+#:   every pick in the queue rather than one line.
+#: * :class:`json.JSONDecodeError` — a line that is not JSON. The torn-write
+#:   shape of #1421, and the only member the guard used to name.
+#: Both ARE ``ValueError`` subclasses, and a bare ``ValueError`` is
+#: DELIBERATELY NOT a third member. It would catch both regardless of what
+#: else the tuple named -- making this a blanket wearing a named set's
+#: clothes, and no test could kill either member. It would also move a shape
+#: #1788 does not name: an integer literal longer than
+#: ``sys.get_int_max_str_digits()`` (4300 by default) raises a plain
+#: ``ValueError`` out of ``json.loads``, and MEASURED against the parent
+#: commit that line raises there and counts here. Counting it may well be the
+#: better answer -- a fold reporting a line it cannot read is this function's
+#: own rule -- but it is a second behaviour change on the live arming path and
+#: belongs to its own issue and its own review, which is the argument #1788
+#: makes for keeping this change narrow in the first place.
+#:
+#: ``OverflowError``, which the cash-book precedent needs, has no route here
+#: either: ``_parse_record`` reads two fields and converts neither to a float.
+_UNREADABLE_LINE: tuple[type[BaseException], ...] = (
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+)
+
+
+def _journal_lines(fh: BinaryIO) -> Iterator[bytes]:
+    """The journal's lines as BYTES, split exactly where text mode splits them.
+
+    Iterating the binary handle alone would break on ``b"\\n"`` only, which is
+    NOT what this reader used to do: text mode's universal newlines make a
+    lone ``\\r`` a line boundary too, so a journal holding two good records
+    separated by one bare ``\\r`` folded to two picks and read as a single
+    line would fold to ONE malformed line and lose BOTH. Splitting each chunk
+    again with :meth:`bytes.splitlines` restores that, and measured on
+    CPython 3.13 it splits on the same three boundaries text mode does
+    (``\\r\\n``, ``\\r``, ``\\n``) and on no others — ``\\x0b``, ``\\x0c``,
+    ``\\x1c`` and U+0085 stay inside a line in both.
+
+    Why bytes at all: so the UTF-8 decode happens inside a guard the fold can
+    write. See :data:`_UNREADABLE_LINE`.
+    """
+    for chunk in fh:
+        yield from chunk.splitlines()
+
+
+def _decoded_line(raw_line: bytes) -> str | None:
+    """One journal line's bytes -> its stripped text; None if UNDECODABLE.
+
+    The decode sits here, inside a guard, instead of happening while the
+    ``for`` statement advances a text-mode file, where no caller could guard
+    it (#1788).
+
+    A line that decodes is stripped as a ``str`` and NOT as bytes, because the
+    two disagree about what is blank: ``str.strip()`` treats U+00A0, U+0085,
+    U+2028 and U+3000 as whitespace and ``bytes.strip()`` does not. Testing
+    the bytes would count each of those as corruption and move a count this
+    fold publishes as zero.
+    """
+    try:
+        return raw_line.decode("utf-8").strip()
+    except _UNREADABLE_LINE:
+        return None
+
 
 def _parse_record(raw_line: str) -> tuple[_PickFoldKey, dict] | None:
     """One well-formed status line -> ((TICKER, date, generation), record);
@@ -263,7 +343,7 @@ def _parse_record(raw_line: str) -> tuple[_PickFoldKey, dict] | None:
         return None
     try:
         record = json.loads(line)
-    except json.JSONDecodeError:
+    except _UNREADABLE_LINE:
         return None
     if not isinstance(record, dict):
         return None
@@ -319,17 +399,42 @@ def read_pick_fold(*, path: Path | None = None) -> PickFold:
     applies, computed here ONCE so the queue view and the drain can never
     disagree about which line is current. Records keep first-seen key order
     (the order the CLI renders). A missing file folds empty.
+
+    A line this fold cannot read is COUNTED, never raised: the whole reason
+    :attr:`PickFold.malformed` exists is that a reader of the queue must be
+    able to say how much of the journal it could not account for. That rule
+    only held for the shapes :func:`_parse_record` sees. The journal is opened
+    in BINARY mode so that a line whose bytes are not UTF-8 reaches the same
+    counter (#1788) instead of raising out of the fold — which, since this
+    fold is the reader's half of the arming join, stopped the arming door,
+    `alphalens broker picks` and the daemon's drain on one bad byte and lost
+    every pick in the queue rather than one line.
     """
     target = path or state_paths.picks_path()
     if not target.exists():
         return PickFold(records=[], malformed=0)
     latest: dict[_PickFoldKey, dict] = {}
     malformed = 0
-    with target.open("r", encoding="utf-8") as fh:
-        for raw_line in fh:
-            if not raw_line.strip():
+    with target.open("rb") as fh:
+        for index, raw_line in enumerate(_journal_lines(fh), start=1):
+            line = _decoded_line(raw_line)
+            if line is None:
+                malformed += 1
+                # DEBUG, not WARNING: the COUNT is this function's published
+                # report (the CLI prints "skipped N malformed line(s)"), and the
+                # sibling malformed shapes below are silent for the same reason.
+                # The CONSEQUENCE of a line this fold cannot read — that no pick
+                # is placed until it is repaired — is announced at WARNING by
+                # :func:`iter_picks`, which is the half that withholds. Raising
+                # this line to WARNING would put the same fact in front of every
+                # read-only reader of the fold too.
+                logger.debug(
+                    "%s line %d: bytes are not UTF-8 — counted as malformed", target, index
+                )
                 continue
-            parsed = _parse_record(raw_line)
+            if not line:
+                continue
+            parsed = _parse_record(line)
             if parsed is None:
                 malformed += 1
                 continue
@@ -477,14 +582,86 @@ def iter_picks(*, path: Path | None = None) -> Iterator[TradeIntent]:
     """Yield ARMED picks as decoded :class:`TradeIntent`; the LATEST status
     line per (ticker, date, generation) wins.
 
-    Malformed/undated lines are skipped, and a pick whose latest line is
-    non-armed (refused / cancelled / filled / expired) is never yielded — the
-    control-loop drain places whatever this emits, so the ARMED filter lives
-    here (defence in depth against re-placing a retired intent). An armed line
-    with no ``"intent"`` key (the pre-PR-7 bare shape) or an undecodable one
-    is skipped with a warning — no back-compat, re-arm is the human path
-    back."""
-    for pick in read_pick_fold(path=path).records:
+    FAILS CLOSED while the fold reports a line it could not read (#1788): this
+    yields NOTHING, so the drain places nothing. A line the fold cannot read
+    makes it fall back to the key's PREVIOUS status line, so a pick the
+    operator had just DISARMED reads ``armed`` again and the drain would place
+    real money for a cancelled intent — measured on a real armed line. The
+    scope is the WHOLE queue rather than the affected key because a torn line
+    often names no key at all: a tear keeps the line's prefix, so ``ticker``
+    and ``date`` may be the part that is gone.
+
+    The gate is on :attr:`PickFold.malformed`, which is why it also covers the
+    non-JSON shape — that one has reverted a key to ``armed`` since long before
+    #1788, so failing closed here repairs a hazard older than this change
+    rather than only the byte case. A blank line is NOT malformed and does not
+    close the drain.
+
+    :func:`read_pick_fold` itself is deliberately unchanged: the operator must
+    still be able to see the queue and the count (`alphalens broker picks`) and
+    repair the journal, and the arming door reads that same fold for its
+    pick-key check, so arming stays possible while a corrupt line stands. That
+    view asks :func:`iter_decodable_picks`, not this function, which keys
+    decode, so withholding the queue does not relabel a readable pick.
+
+    The cost is a denial of service — one unreadable byte withholds every
+    placement, including for keys that read perfectly — so the withholding is
+    announced at WARNING and is NOT throttled. One line per call is O(1) in the
+    queue size (about one per ~45 s tick), while a "say it once per process"
+    flag would announce it at daemon boot and then go quiet for as long as
+    placements stayed withheld, which reads as a condition that healed. It
+    never heals by itself: the journal is append-only, so only a hand edit
+    clears it.
+
+    Otherwise: a pick whose latest line is non-armed (refused / cancelled /
+    filled / expired) is never yielded — the control-loop drain places whatever
+    this emits, so the ARMED filter lives here (defence in depth against
+    re-placing a retired intent). An armed line with no ``"intent"`` key (the
+    pre-PR-7 bare shape) or an undecodable one is skipped with a warning — no
+    back-compat, re-arm is the human path back."""
+    fold = read_pick_fold(path=path)
+    if fold.malformed:
+        logger.warning(
+            "iter_picks %s: %d line(s) cannot be read, so NO pick is placed while that "
+            "stands — one of them may BE the disarm of a pick this queue still shows as "
+            "armed, and a torn line often names no key, so none can be cleared on its own. "
+            "Repair those lines by hand (the journal is append-only, nothing rewrites it "
+            "for you) and re-arm whatever was lost; `alphalens broker picks` still reports "
+            "the queue and the count.",
+            path or state_paths.picks_path(),
+            fold.malformed,
+        )
+        return
+    yield from _iter_decodable(fold)
+
+
+def iter_decodable_picks(*, path: Path | None = None) -> Iterator[TradeIntent]:
+    """Every ARMED pick whose own line decodes — the SAME per-line rules as
+    :func:`iter_picks`, WITHOUT its queue-wide withholding gate.
+
+    For READ-ONLY views, never for placing. ``alphalens broker picks`` asks
+    this which keys decode, so each row carries its OWN verdict: a pick whose
+    intent does not decode reads UNREADABLE, and one that decodes does not,
+    however many other lines in the journal are torn. Asking :func:`iter_picks`
+    instead made every armed pick in the queue read UNREADABLE as soon as one
+    unrelated line was unreadable — a readable pick labelled unreadable.
+
+    Why this is not a second decoder: both readers run one body, so the view
+    can never disagree with the drain about which intents decode. They differ
+    by the gate alone, and the gate is a fact about the QUEUE — the view
+    publishes it separately (``placement_withheld``) rather than smearing it
+    across every row.
+
+    The hazard the gate exists for still applies to anything that PLACES: an
+    unreadable line makes the fold fall back to a key's previous status line,
+    so a pick the operator had just disarmed reads ``armed`` here. That is why
+    only the read-only view may call this."""
+    yield from _iter_decodable(read_pick_fold(path=path))
+
+
+def _iter_decodable(fold: PickFold) -> Iterator[TradeIntent]:
+    """Decode the armed records of an already-read fold (see both callers)."""
+    for pick in fold.records:
         ticker, parsed_date = pick.ticker, pick.trade_date
         if pick.status != STATUS_ARMED:
             continue
@@ -496,7 +673,7 @@ def iter_picks(*, path: Path | None = None) -> Iterator[TradeIntent]:
             # line is skipped forever until re-armed — never placed). Keep it at
             # DEBUG so troubleshooting can still surface it on demand.
             logger.debug(
-                "iter_picks %s/%s: armed line has no 'intent' (pre-PR-7 bare shape) — "
+                "pick fold %s/%s: armed line has no 'intent' (pre-PR-7 bare shape) — "
                 "skipped, arm a new document via `alphalens broker arm`",
                 ticker,
                 parsed_date,
@@ -509,7 +686,7 @@ def iter_picks(*, path: Path | None = None) -> Iterator[TradeIntent]:
             # ever; the drain refuses an unplaced one ONCE via
             # iter_legacy_size_pct_picks instead.
             logger.debug(
-                "iter_picks %s/%s: pre-#1467 percent-sized intent — not decoded",
+                "pick fold %s/%s: pre-#1467 percent-sized intent — not decoded",
                 ticker,
                 parsed_date,
             )
@@ -518,7 +695,7 @@ def iter_picks(*, path: Path | None = None) -> Iterator[TradeIntent]:
             yield intent_from_jsonable(raw_intent)
         except TradeIntentDecodeError as exc:
             logger.warning(
-                "iter_picks %s/%s: armed line's intent failed to decode — skipped: %s",
+                "pick fold %s/%s: armed line's intent failed to decode — skipped: %s",
                 ticker,
                 parsed_date,
                 exc,
@@ -555,6 +732,7 @@ __all__ = [
     "arm_pick",
     "generation_of",
     "identity_token",
+    "iter_decodable_picks",
     "iter_legacy_size_pct_picks",
     "iter_picks",
     "mark_disarmed",
