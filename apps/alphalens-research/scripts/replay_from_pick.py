@@ -63,6 +63,11 @@ __all__ = [
     "OFF_GRID_BEFORE_OPEN",
     "OFF_GRID_NOT_A_SESSION",
     "PROVENANCE_SCHEMA",
+    "TOUCH_CORROBORATED",
+    "TOUCH_TAPE_LATE",
+    "TOUCH_TAPE_NEVER",
+    "TOUCH_UNKNOWN",
+    "TOUCH_VERDICTS",
     "BarRefusal",
     "BarWindow",
     "BuiltBars",
@@ -93,6 +98,7 @@ __all__ = [
     "run_configuration",
     "session_grid",
     "stated_facts",
+    "touch_audit",
 ]
 
 SCHEMA = "alphalens.research.replay_from_pick/v1"
@@ -1806,6 +1812,470 @@ def check_corporate_actions(
     )
 
 
+# ---------------------------------------------------------------------------
+# The touch audit. The daemon and the replay detect an entry TOUCH on two
+# different price series, and NEITHER side is being changed: the replay's
+# stated purpose is to answer "what would this document have done" against real
+# bars, so it answers to the MARKET and the daemon is the comparison baseline.
+# What this join owes a reader is therefore the SIZE of that gap on the record
+# in front of them, measured here because this is the only code that holds BOTH
+# the LIVE record and the session-filtered bars it just wrote. The engine takes
+# eight closed configuration keys and never sees the record, and that
+# separation is deliberate.
+# ---------------------------------------------------------------------------
+
+# The two series, named rather than left to a reader to infer. The daemon folds
+# ``quote.bid`` into a running-low latch (``saxo_price_stream`` into
+# ``entry_watch._point_sample_bids``); the walk compares a minute bar's LOW,
+# which is the lowest TRADE of that minute.
+_TOUCH_DAEMON_REFERENCE = "the running low of quote.bid, latched by keeper.entry_watch"
+_TOUCH_TAPE_REFERENCE = "bar.low, the lowest TRADE of the minute, from the vendor's aggregates"
+# The walk's own test, as an expression a reader can apply to the written bars
+# themselves, and the symbol that applies it -- named by SYMBOL and not by line,
+# because a line anchor in a comment rots within days and this one has to still
+# point somewhere in a year.
+_TOUCH_TAPE_TEST = "bar.low <= tier_limit"
+# The BAR HALF, said so. ``_reachable`` is two rules: this comparison, and a
+# rung at or below the resting stop, which it SKIPS -- the price cannot reach
+# such a rung without passing the stop first. The audit applies the first only,
+# so citing the whole function would make this block claim a reach the walk
+# would not have taken.
+_TOUCH_TAPE_TEST_SOURCE = (
+    "the bar half of intent_replay.walk._reachable; that function also skips a rung at or "
+    "below the resting stop, which this audit does not model"
+)
+
+# What the tape can say about one journalled bid touch. A closed vocabulary.
+TOUCH_CORROBORATED = "corroborated"
+TOUCH_TAPE_LATE = "tape_late"
+TOUCH_TAPE_NEVER = "tape_never"
+TOUCH_UNKNOWN = "unknown"
+TOUCH_VERDICTS = (TOUCH_CORROBORATED, TOUCH_TAPE_LATE, TOUCH_TAPE_NEVER, TOUCH_UNKNOWN)
+
+# Why the audit has no touch to measure against. Each is the record's, the
+# document's or the calendar's answer and none of them is a defect of this run,
+# so they are published as a ``null_reason`` and never as a refusal. One name
+# per CAUSE: "the daemon journalled no touch" and "the stamp it journalled is
+# not an instant" send a reader to different places, which is the distinction
+# this module's refusal vocabulary already exists to keep.
+_TOUCH_NOT_STATED = "the record states no touched_at for this tier"
+_TOUCH_NO_RECORD_ROW = "the record carries no entry row for this tier"
+_TOUCH_NOT_AN_INSTANT = "the record's touched_at is not an instant with a zone"
+_TOUCH_OUTSIDE_EVERY_SESSION = (
+    "the journalled touch lies in no session of the bar window; the grid is half-open "
+    f"({GRID_PREDICATE}), and a touch latched after a close is in none of them"
+)
+_TOUCH_SESSION_UNOBSERVED = (
+    "the touch session holds no kept bars, so nothing observed it; a halt, a vendor gap "
+    "or a trimmed --bars file all produce this"
+)
+_TOUCH_NO_REACH = f"no bar inside the entry window has `{_TOUCH_TAPE_TEST}`"
+_TOUCH_NO_LIMIT = "the document's tier states no limit price the tape could be compared against"
+_TOUCH_TIER_UNREADABLE = "the document's entry tier is not an object a limit can be read off"
+
+_MS_PER_MINUTE = 60_000
+# The unit of the lag. ``intent_replay.units`` publishes none, because no
+# engine-side number is denominated in minutes.
+_MINUTES = "minutes"
+
+
+def _price_unit(currency: str) -> str:
+    """A price's unit, spelled the way ``broker trades`` spells it.
+
+    Driven by the record's own ``instrument.instrument_currency`` rather than
+    written out per field, so one pick cannot carry two spellings.
+    """
+    return f"price:{currency}"
+
+
+def _stated(
+    kind: str,
+    value: Any,
+    *,
+    unit: str | None,
+    source: str,
+    formula: str,
+    null_reason: str | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    """One derived value with its construction, and its reason for being absent.
+
+    The engine's own ``Translated`` five keys (``units.TRANSLATED_KEYS``), which
+    is the shape ``run_configuration`` publishes a derived number in, plus the
+    record's ``null_reason``: every field of this block can be absent for a
+    reason that is about the record or the calendar rather than about this run,
+    and a bare ``null`` reads as "measured, and zero".
+    """
+    return {
+        "kind": kind,
+        "value": value,
+        "unit": unit,
+        "source": source,
+        "formula": formula,
+        "null_reason": null_reason,
+        **extra,
+    }
+
+
+def _mapping(value: Any) -> Mapping[str, Any] | None:
+    """``value`` when it is an object this block can read keys off, else ``None``.
+
+    Nothing upstream validates either side's shape: the audit reads
+    ``spec.entry_tiers`` from a document the engine parses only later, and
+    ``entries[]`` from a report that may have been hand-trimmed. Every read of
+    either goes through here, so a member that is a string, a list or ``null``
+    becomes a published reason instead of an ``AttributeError`` on a run that
+    has already written all four input files.
+    """
+    return value if isinstance(value, Mapping) else None
+
+
+def _record_fact(node: Any, *, unit: str | None, absent: str) -> dict[str, Any]:
+    """One ``Measured`` node of the record, COPIED rather than re-derived.
+
+    The record's own unit, source and row reference travel with the value, so a
+    reader can see which journal line the number came off. A tier the record
+    holds no readable node for gets the same shape with this join's own reason,
+    because "the daemon journalled no touch" and "the report has no row for this
+    tier" send a reader to different places.
+    """
+    mapping = _mapping(node)
+    if mapping is None:
+        return {
+            "value": None,
+            "unit": unit,
+            "source": None,
+            "ref": None,
+            "null_reason": absent,
+        }
+    return {key: mapping.get(key) for key in ("value", "unit", "source", "ref", "null_reason")}
+
+
+def _touch_instant(node: Any, *, absent: str) -> tuple[dt.datetime | None, str | None]:
+    """The journalled touch instant, or ``None`` with the reason there is none.
+
+    Never raises. This block is an ANNOTATION beside a result, and refusing the
+    whole run over an unreadable stamp would drop the one record the annotation
+    exists for. The reason is returned rather than folded into ``absent``: a
+    reader sent to look for a touch the daemon never journalled never finds the
+    one that is there and unparseable, and ``journaled_touch_at`` shows the
+    stamp in both cases.
+    """
+    mapping = _mapping(node)
+    value = None if mapping is None else mapping.get("value")
+    if value is None:
+        return None, absent
+    if isinstance(value, str):
+        with contextlib.suppress(ValueError):
+            moment = dt.datetime.fromisoformat(value)
+            if moment.tzinfo is not None:
+                return moment, None
+    return None, f"{_TOUCH_NOT_AN_INSTANT} ({value!r})"
+
+
+def _tape_low(bars: Sequence[Mapping[str, Any]], bounds: SessionBounds) -> tuple[float, int] | None:
+    """The lowest TRADE of one session, with the stamp of the bar that held it.
+
+    ``min`` over the kept bars of that session, so the stamp is the FIRST bar
+    reaching that low when two of them tie -- a tie is a real shape and picking
+    either one silently would make the stamp depend on the sort.
+    """
+    lows = [
+        (low, bar["t"])
+        for bar in bars
+        if bounds.member(bar["t"]) and (low := _price(bar, "low")) is not None
+    ]
+    return min(lows) if lows else None
+
+
+def _first_tape_reach(
+    bars: Sequence[Mapping[str, Any]], limit: float, *, deadline_t: int
+) -> int | None:
+    """The first kept bar INSIDE the entry window whose low reaches ``limit``.
+
+    Bounded by the entry deadline, because the walked series runs two margin
+    sessions past it: a tier the tape only reaches there is a tier the resting
+    ladder had already expired on, and publishing that as a late reach would
+    claim the replay entered later when what the replay publishes is
+    ``entry_expired``. The bound is half-open like the grid, so the deadline
+    instant itself is outside.
+
+    Not bounded on the LEFT by the touch: a reach before the journalled touch is
+    a fact a reader wants, and the lag's sign carries it.
+    """
+    reaches = [
+        bar["t"]
+        for bar in bars
+        if bar["t"] < deadline_t and (low := _price(bar, "low")) is not None and low <= limit
+    ]
+    return min(reaches) if reaches else None
+
+
+def _tier_limit(tier: Mapping[str, Any] | None) -> float | None:
+    """The tier's declared limit as a number the tape can be compared against.
+
+    Nothing upstream of here validates ``spec.entry_tiers``: ``run_configuration``
+    never reads them and the engine refuses them when it parses the document,
+    which is AFTER this answer is printed. So a tier whose limit is absent, text
+    or ``NaN`` reaches the audit, and the audit publishes that as a reason
+    rather than raising -- an annotation that raises turns a run which wrote all
+    four input files into a traceback with an empty stdout, which is worse than
+    the silence it exists to replace. ``bool`` is excluded for the same reason
+    ``_measured_number`` excludes it.
+    """
+    value = None if tier is None else tier.get("limit_price")
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value) if math.isfinite(value) else None
+
+
+def _touch_verdict(
+    touched: dt.datetime | None,
+    bounds: SessionBounds | None,
+    first_reach_t: int | None,
+    *,
+    limit: float | None,
+    touch_absent: str | None,
+    observed: bool,
+) -> tuple[str, str]:
+    """One tier's verdict and the branch that produced it.
+
+    ``corroborated`` is "the tape reached the tier no LATER than the touch's own
+    session", which folds in a reach in an EARLIER session: the tier was
+    reachable by a trade by the time the daemon's bid said it was, and that is
+    not lateness. The in-session boolean beside the verdict tells the two
+    sub-cases apart, and ``tape_late`` is therefore never published next to a
+    negative lag.
+
+    ``unknown`` is only ever "the question has no subject": no limit, no touch,
+    no session holding the touch, or a touch session nothing observed. A session
+    the tape carries no bar for cannot answer "did a trade reach the tier here",
+    and answering it ``false`` would be a measurement over zero observations.
+    """
+    if limit is None:
+        return TOUCH_UNKNOWN, _TOUCH_NO_LIMIT
+    if touched is None:
+        return TOUCH_UNKNOWN, touch_absent or _TOUCH_NOT_STATED
+    if bounds is None:
+        return TOUCH_UNKNOWN, _TOUCH_OUTSIDE_EVERY_SESSION
+    if not observed:
+        return TOUCH_UNKNOWN, _TOUCH_SESSION_UNOBSERVED
+    if first_reach_t is None:
+        return TOUCH_TAPE_NEVER, _TOUCH_NO_REACH
+    if first_reach_t < bounds.open_t:
+        return (
+            TOUCH_CORROBORATED,
+            f"the first bar with `{_TOUCH_TAPE_TEST}` is in a session before the touch "
+            "session, so the tape reached the tier earlier than the daemon's bid did and "
+            "the lag is negative",
+        )
+    if first_reach_t < bounds.close_t:
+        return (
+            TOUCH_CORROBORATED,
+            f"a bar of the touch session itself has `{_TOUCH_TAPE_TEST}`",
+        )
+    return (
+        TOUCH_TAPE_LATE,
+        f"no bar of the touch session has `{_TOUCH_TAPE_TEST}`; a later bar inside the "
+        "entry window does",
+    )
+
+
+def _tier_touch_audit(
+    index: int,
+    tier: Any,
+    entry: Any,
+    built: BuiltBars,
+    *,
+    currency: str,
+) -> dict[str, Any]:
+    """The reference gap on ONE entry tier, each field with its construction."""
+    unit = _price_unit(currency)
+    declared = _mapping(tier)
+    row = _mapping(entry)
+    limit = _tier_limit(declared)
+    absent = _TOUCH_NO_RECORD_ROW if row is None else _TOUCH_NOT_STATED
+
+    touched, touch_absent = _touch_instant(
+        None if row is None else row.get("touched_at"), absent=absent
+    )
+    bounds = (
+        None
+        if touched is None
+        else next(
+            (
+                candidate
+                for candidate in built.grid.sessions
+                if candidate.member(_epoch_ms(touched))
+            ),
+            None,
+        )
+    )
+    low = None if bounds is None else _tape_low(built.series, bounds)
+    first_reach_t = (
+        None
+        if limit is None
+        else _first_tape_reach(
+            built.series, limit, deadline_t=_epoch_ms(built.window.entry_deadline)
+        )
+    )
+    verdict, why = _touch_verdict(
+        touched,
+        bounds,
+        first_reach_t,
+        limit=limit,
+        touch_absent=touch_absent,
+        observed=low is not None,
+    )
+    # Three reasons a tape field can be empty, each naming its own cause: no
+    # instant to find a session for, an instant in no session, or a session the
+    # written series carries no bar for.
+    session_absent = (
+        (touch_absent or absent)
+        if touched is None
+        else (_TOUCH_OUTSIDE_EVERY_SESSION if bounds is None else _TOUCH_SESSION_UNOBSERVED)
+    )
+    # Every field that needs the limit shares one reason for not having it, so
+    # a reader is not sent to a different explanation per field.
+    reach_absent = _TOUCH_NO_LIMIT if limit is None else _TOUCH_NO_REACH
+    return {
+        "tier_index": index,
+        "tag": None if declared is None else declared.get("tag"),
+        "tier_limit": _stated(
+            "entry_tier_limit",
+            limit,
+            unit=unit,
+            source=f"document.spec.entry_tiers[{index}].limit_price",
+            formula=f"the limit the walk's own test compares a bar's low against ({unit})",
+            null_reason=(
+                None
+                if limit is not None
+                else (_TOUCH_TIER_UNREADABLE if declared is None else _TOUCH_NO_LIMIT)
+            ),
+        ),
+        "journaled_touch": _record_fact(
+            None if row is None else row.get("touch_price"), unit=unit, absent=absent
+        ),
+        "journaled_touch_at": _record_fact(
+            None if row is None else row.get("touched_at"), unit=None, absent=absent
+        ),
+        "touch_session": _stated(
+            "touch_session",
+            None if bounds is None else bounds.session.isoformat(),
+            unit=None,
+            source="entries[].touched_at + the venue's own calendar",
+            formula=(
+                f"the session of {built.mic} whose interval holds the journalled touch "
+                f"({GRID_PREDICATE}), which is the membership rule the bars obey"
+            ),
+            null_reason=None if bounds is not None else session_absent,
+        ),
+        "tape_low_touch_session": _stated(
+            "session_low_trade",
+            None if low is None else low[0],
+            unit=unit,
+            source="the written bars file",
+            formula="min(bar.low) over the kept bars of the touch session",
+            null_reason=None if low is not None else session_absent,
+            at_t=None if low is None else low[1],
+            at_utc=None if low is None else format_time(_instant(low[1])),
+        ),
+        "tape_reaches_limit_in_touch_session": _stated(
+            "session_reaches_limit",
+            # Derived from the session's LOW and not from a second pass over the
+            # same bars: the minimum of the session's lows is at or below the
+            # limit exactly when one of those lows is, so one comparison cannot
+            # come out differently from the other -- and a session with no kept
+            # bars has no low, which is what keeps this from answering `false`
+            # over zero observations.
+            None if low is None or limit is None else low[0] <= limit,
+            unit=None,
+            source="the written bars file",
+            formula=f"`tape_low_touch_session <= tier_limit`, equivalently any(`{_TOUCH_TAPE_TEST}`)",
+            null_reason=(
+                None
+                if low is not None and limit is not None
+                else (_TOUCH_NO_LIMIT if limit is None else session_absent)
+            ),
+        ),
+        "first_tape_reach_at": _stated(
+            "first_limit_reach",
+            None if first_reach_t is None else format_time(_instant(first_reach_t)),
+            unit=None,
+            source="the written bars file",
+            formula=(
+                f"the first kept bar with `{_TOUCH_TAPE_TEST}` whose t is before the entry "
+                "deadline; the walked series runs past that deadline, and the resting ladder "
+                "does not"
+            ),
+            null_reason=None if first_reach_t is not None else reach_absent,
+            t=first_reach_t,
+        ),
+        "touch_to_tape_lag_minutes": _stated(
+            "touch_to_tape_lag",
+            None
+            if touched is None or first_reach_t is None
+            else round((first_reach_t - _epoch_ms(touched)) / _MS_PER_MINUTE, 3),
+            unit=_MINUTES,
+            source="entries[].touched_at + the written bars file",
+            formula=(
+                "(first_tape_reach_at - journaled_touch_at) / 60000 ms; NEGATIVE when the "
+                "tape reached the tier before the daemon's bid did"
+            ),
+            null_reason=(
+                None
+                if touched is not None and first_reach_t is not None
+                else ((touch_absent or absent) if touched is None else reach_absent)
+            ),
+        ),
+        "verdict": verdict,
+        "verdict_formula": why,
+    }
+
+
+def touch_audit(
+    trade: Mapping[str, Any],
+    document: Mapping[str, Any],
+    built: BuiltBars,
+    *,
+    currency: str,
+) -> dict[str, Any]:
+    """Per entry tier, how this record's bid touch stands against the tape.
+
+    Keyed on the DOCUMENT's tiers and not on the record's rows, because the
+    limit a reader must judge the tape against is the one the walk compares
+    against; the record's row for the same ``tier_index`` supplies the touch.
+
+    Neither side is trusted to be the shape it should be: a tier or a row that
+    is not an object becomes a published reason on that tier rather than a
+    traceback, because by the time this runs the four input files are written
+    and the only thing left to lose is the answer that names them.
+    """
+    spec = _mapping(document.get("spec")) or {}
+    tiers = spec.get("entry_tiers")
+    tiers = tiers if isinstance(tiers, list) else []
+    rows = {
+        mapped["tier_index"]: mapped
+        for entry in (trade.get("entries") or [])
+        if (mapped := _mapping(entry)) is not None
+        and isinstance(mapped.get("tier_index"), int)
+        and not isinstance(mapped.get("tier_index"), bool)
+    }
+    return {
+        "daemon_reference": _TOUCH_DAEMON_REFERENCE,
+        "tape_reference": _TOUCH_TAPE_REFERENCE,
+        "tape_test": _TOUCH_TAPE_TEST,
+        "tape_test_source": _TOUCH_TAPE_TEST_SOURCE,
+        # Published once, so a caller can branch on the word without reading
+        # this source to learn which words exist.
+        "verdicts": list(TOUCH_VERDICTS),
+        "entries": [
+            _tier_touch_audit(index, tier, rows.get(index), built, currency=currency)
+            for index, tier in enumerate(tiers)
+        ],
+    }
+
+
 def _assert_comparable(trade: Mapping[str, Any]) -> None:
     """Refuse a record the report itself marks as not comparable.
 
@@ -2582,6 +3052,13 @@ def main(
             "entry_trail_bps": distance,
         },
         "configuration": inputs.configuration,
+        # An ADDED OPTIONAL field inside the same major version, so `schema`
+        # does not change: within a major version only optional fields are
+        # added. A TOP-LEVEL block and never part of `configuration`, which is
+        # the engine's own eight-key object and refuses a key it does not model.
+        "touch_audit": touch_audit(
+            trade, inputs.document, built, currency=facts.instrument_currency
+        ),
         "replay_argv": [
             sys.executable,
             "-m",
@@ -2605,6 +3082,17 @@ def main(
     )
     for name, value in answer["facts"].items():
         print(f"  {name}: {value}")
+    # Rendered here too, because the verdict is a FACT about this record and a
+    # CLI is one result object rendered two ways. The operator who runs the join
+    # by hand is the reader who has to see `tape_late` before quoting the R the
+    # replay then produces.
+    for tier in answer["touch_audit"]["entries"]:
+        print(
+            f"  touch tier {tier['tier_index']}: {tier['verdict']}"
+            f" (limit {tier['tier_limit']['value']},"
+            f" journalled touch {tier['journaled_touch']['value']},"
+            f" tape lag {tier['touch_to_tape_lag_minutes']['value']} {_MINUTES})"
+        )
     print("  next: " + " ".join(answer["replay_argv"]))
     return 0
 
