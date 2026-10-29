@@ -166,7 +166,7 @@ first look at fires says the opposite.
   about.
 
 **2026-10-29 reference addendum (§4d) — why detection reads the BID, recovered rather than
-quoted. Status: PARTIALLY RECOVERED.**
+quoted. Status: NOT RECOVERED — the probe's FRAMING survives, the reason does not.**
 
 Two live-tier docstrings asserted the reference and cited a source that does not exist. This
 section records what survives, what is inference, and what nobody can recover — kept separate on
@@ -192,12 +192,29 @@ DayOrder, declining tape. Three facts, quoted from §4b above:
 So the low the server ratcheted from, on the one occasion anyone watched it, is the floor of a
 range this memo states as a BID range.
 
-**INFERENCE — and it is an inference, not a measurement.** The server owns the ratchet once the
-order rests. If our touch detection read trades while the server ratchets on the bid, our arming
-decision and the trigger resting at the broker would be anchored to two different series: we
-would decide to arm on one price and the order would then follow another. Detection is
-bid-referenced to keep both on one series. That is the strongest rationale the record supports,
-and it is reconstructed here from §4b rather than quoted from any decision document.
+**THE OBVIOUS INFERENCE, AND WHY IT DOES NOT HOLD.** The reconstruction this section was written
+to record ran: the server owns the ratchet once the order rests, so if detection read trades while
+the server ratcheted on the bid, our arming decision and the resting trigger would sit on two
+different series — therefore detection is bid-referenced to keep both on one. **Two facts in this
+repository defeat it, and they were found by the adversarial pass on this very section.**
+
+*The order type names a different series than the bid.* We place `TrailingStopIfTraded`, and
+[`saxo_live_followup_tests_2026_07_20.md`](saxo_live_followup_tests_2026_07_20.md) records, in its `## T3` order-type list,
+Saxo's family as "**StopLimit**, **TrailingStop / TrailingStopIfTraded**, StopIfBid/Offered" — so
+the suffix names the series the trigger is evaluated against, and ours says TRADED. If that is what
+it means, bid-referenced detection and the server's trigger sit on DIFFERENT series, which is the
+opposite of the inference. This is the naming convention's implication, not a vendor statement
+anyone here has read; §4c is the standing reminder that reading a convention is not an observation.
+
+*And our reference may not be load-bearing after placement anyway.* §4b's own L1 result is that
+"the server had repositioned the trigger DOWN to the new low 9.65 + distance, **unprompted**". If
+the server re-anchors on its own, the price we compose the order from decides WHEN we place, not
+where the trigger ends up — which removes the premise that the two must agree.
+
+**So the reason is NOT recovered.** What §4b establishes is that the probe was conducted and
+written down in bid terms, by an author tracking the bid. Why DETECTION reads the bid is not
+recorded anywhere, and the first explanation anyone would reach for is contradicted by the order
+type we actually place.
 
 **NOT ESTABLISHED, and §4c is the warning.** §4c records this memo making exactly this mistake
 once already: a PREPARED state stood in for the TERMINAL one, and its lesson is "verify at the
@@ -207,9 +224,11 @@ BLOCKING standard of n>=2. Saxo's own field is `TrailingStopDistanceToMarket`, w
 name a side, and no statement of the reference side is recorded anywhere in this repository.
 
 **What would settle it.** An attended LIVE probe at n>=2 that logs the bid series and the
-last-traded series side by side while a native trailing entry rests and ratchets, and records
-which one each repositioning follows. Until then the reference is a decision supported by one
-observation and one inference, which is what this section says and all it says.
+last-traded series side by side while a native trailing entry rests and ratchets, recording
+(a) which series each server repositioning follows, and (b) which series the FIRE condition
+reacts to — the two can differ inside one order type, and the `IfTraded` suffix is a claim about
+(b) that nobody here has checked against (a). Until then the reference is a decision with no
+recorded reason, which is what this section says and all it says.
 
 **Why this was asked on 2026-10-29.** On 2026-10-28 the reference gap produced the first
 outcome-word disagreement between the replay and a closed LIVE record: `VCYT:2026-09-29`, where
@@ -224,7 +243,7 @@ can print below the displayed bid, so the tape can reach a rung the bid has not.
 
 ## 9. Corrections to prior docs
 
-- The "memo trap #8" cited by `entry_watch._point_sample_bids` and the `entry_trail_watcher` module docstring is ABSENT from the repo and from every branch's history; the bid-reference rationale is recovered from §4b rather than quoted. See §4d.
+- The "memo trap #8" cited by `entry_watch._point_sample_bids` and the `entry_trail_watcher` module docstring is ABSENT from the repo and from every branch's history. The bid-reference rationale is NOT recorded anywhere: §4d says what §4b does and does not establish, and why the obvious reconstruction is contradicted by the order type we place.
 - `docs/research/trailing_execution_design_2026_08_07.md` is cited by the whatif memo but ABSENT from the repo (survivors: `trailing_sl_exit_policy_bot_amend_{design,plan}_2026_08_09.md`); the INC-4 rejection rationale is memory-sourced — restated self-contained here (§2 V2 row + the 45s-cadence facts).
 - No production code places any trailing order today: `TrailingStopIfTraded` exists only in recognition frozensets and an unconsumed wire primitive — Tor-B's LIVE validation (SELL ratchet n=2, amend repositioning) was probe-level. V1 is a contract extension (`SupportsTrailingStop` Protocol) + probe, not reuse.
 - The exit amend path (`_build_amend_stop_body`) stamps `_EXIT_DURATION` (GoodTillCancel) and defaults `StopIfTraded` — any entry amend needs its own GTD-preserving method; PATCHing an entry through the exit body would silently clobber its TTL.

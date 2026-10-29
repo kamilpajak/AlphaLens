@@ -132,11 +132,14 @@ def _point_sample_bids(
     Those three symbols are the whole price side of a watch, so the claim is
     checkable without leaving them.
 
-    WHY the bid and not a trade price: §4d of
-    ``docs/research/entry_trailing_design_2026_08_12.md``. It separates what the
-    2026-08-12 L1 probe measured from what is inferred from it, and says plainly
-    that the reference rests on one observation plus one inference — read it
-    before changing the reference or defending it.
+    WHY the bid and not a trade price is NOT RECORDED anywhere. §4d of
+    ``docs/research/entry_trailing_design_2026_08_12.md`` is the search: it keeps
+    what the 2026-08-12 L1 probe established apart from what was inferred from
+    it, and shows the obvious reconstruction — "both must read one series" —
+    being contradicted by the order type the daemon actually places,
+    ``TrailingStopIfTraded``. Read it before changing the reference OR defending
+    it; no harm from the bid is measured either, so this is an open question and
+    not a known defect.
 
     (This docstring used to cite a "memo trap #8" for the same fact. The
     citation was dropped on 2026-10-28 because it could not be followed: as of
