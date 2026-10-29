@@ -4016,6 +4016,61 @@ class TheTouchAuditMeasuresTheReferenceGapPerRecordTest(_FetchingTestCase):
             self.assertIsNone(tier["touch_to_tape_lag_minutes"]["null_reason"])
             self.assertEqual(tier["touch_to_tape_lag_minutes"]["unit"], "minutes")
 
+    def test_every_document_tier_is_answered_and_a_tier_with_no_row_says_so(self) -> None:
+        """TWO tiers is the ordinary shape, not an edge case: all three
+        hand-written pick examples in `apps/alphalens-broker-contract/examples/
+        manual-pick/` declare two. Both fixtures here declare one, so the per-tier
+        keying -- one published entry per DOCUMENT tier, the record's row for the
+        same `tier_index` supplying the touch -- is exercised on a single tier
+        only, and the reason a tier with no row carries is published but never
+        reached.
+
+        A tier the record has no row for is NOT the same as a tier the daemon
+        journalled no touch for, and it is not an error either: the record holds
+        a row per rung the keeper rested, and a document tier it never got to
+        rest has none. The tape's own answer is still stated for it, because that
+        half needs no record."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            report = self._report_with_touch(directory, touch=135.0, touched_at=self._TOUCH_AT)
+            body = json.loads(report.read_text())
+            record = next(row for row in body["trades"] if row["pick_key"] == self._PICK)
+            tiers = record["plan"]["spec"]["entry_tiers"]
+            tiers[0]["alloc_pct"] = 50.0
+            # `_late_tape`'s middle segment is priced at 10.0, so its bars' lows
+            # are exactly 9.5: the second tier is reached and the first is not.
+            tiers.append(
+                {"alloc_pct": 50.0, "entry_mode": "pullback", "limit_price": 9.5, "tag": "T2"}
+            )
+            report.write_text(json.dumps(body))
+
+            status, out, err = self._run(
+                str(report),
+                self._PICK,
+                "--out",
+                str(directory),
+                "--entry-trail-bps",
+                "50",
+                "--bar-cache",
+                str(directory / "cache"),
+                "--format",
+                "json",
+                **self._seams(self._late_tape()),
+            )
+
+            self.assertEqual(status, 0, err)
+            entries = json.loads(out)["touch_audit"]["entries"]
+            self.assertEqual([tier["tier_index"] for tier in entries], [0, 1])
+            self.assertEqual([tier["tag"] for tier in entries], ["T1", "T2"])
+            self.assertEqual(entries[0]["verdict"], "tape_late")
+            self.assertEqual(entries[1]["verdict"], "unknown")
+            self.assertEqual(entries[1]["tier_limit"]["value"], 9.5)
+            self.assertIn("no entry row", entries[1]["journaled_touch"]["null_reason"])
+            self.assertIn("no entry row", entries[1]["touch_session"]["null_reason"])
+            self.assertEqual(
+                entries[1]["first_tape_reach_at"]["value"], format_time(self.LATE_REACH)
+            )
+
 
 class TheHelpTextIsThePublishedSurfaceTest(unittest.TestCase):
     """``usage=argparse.SUPPRESS`` with a raw-description formatter means
