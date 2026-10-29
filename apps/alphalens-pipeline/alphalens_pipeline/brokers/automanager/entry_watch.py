@@ -118,10 +118,24 @@ def _point_sample_bids(
     feed: PriceFeed, uic_to_instrument: Mapping[int, tuple[str, str]]
 ) -> dict[int, float | None]:
     """Point-sample the fresh reference bid ONCE per DISTINCT watched uic this
-    tick (memo trap #8: detection is bid-referenced, matching the LIVE V1
-    probe). ``None`` on any doubt — a vetoed/None point or a non-finite/
+    tick. ``None`` on any doubt — a vetoed/None point or a non-finite/
     non-positive bid — which the engine treats as the freshness/trust veto (no
     watch progress this tick).
+
+    DETECTION IS BID-REFERENCED, and this function is where that is decided:
+    the only field it reads off a ``PricePoint`` is ``bid``, so no trade price
+    ever reaches a watch. The entry-side consequence is stated in
+    :mod:`alphalens_pipeline.brokers.automanager.entry_trail_watcher`'s module
+    docstring, and the same reference is what the quote cache folds into its
+    running low (``saxo_price_stream._LatchAccumulator.fold`` takes a bid, and
+    its caller passes ``quote.bid``); :func:`_drain_session_lows` pops that low.
+    Those three symbols are the whole price side of a watch, so the claim is
+    checkable without leaving them.
+
+    (This docstring used to cite a "memo trap #8" for the same fact. The
+    citation is dropped because it cannot be followed: ``git log --all -S"trap
+    #8" -- '*.md'`` prints nothing and ``grep -rn "trap #" docs/`` finds
+    nothing.)
 
     ONE shared sample per uic, for the same reason the drain above is once per
     uic: every tier of a laddered pick must read the SAME verdict, and the
