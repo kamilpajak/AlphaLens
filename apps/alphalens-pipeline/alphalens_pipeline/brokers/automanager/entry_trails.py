@@ -19,7 +19,8 @@ keyed by the per-tier ``crid`` (client request id, the ``-entry-`` family —
 PR-T0 defines only the schema, nothing generates them yet). Kinds:
 ``watch_open`` / ``touched`` / ``trough`` / ``trail_armed`` plus the terminal
 ``fired`` / ``expired`` / ``suspended`` / ``cancelled``. The compactor keeps a
-minimal fold-equivalent set per crid and PRESERVES UNKNOWN KINDS VERBATIM —
+fold-equivalent set per crid, plus the latest ``touched`` line for its bid
+(the one retained line the fold does not need), and PRESERVES UNKNOWN KINDS VERBATIM —
 the standalone-stops compactor eats unknown kinds (memo G4) and that bug
 class must not recur here. The file also carries the two observability-only
 #1402 probe kinds (:data:`KIND_FILL_PROBE` /
@@ -193,16 +194,21 @@ measured fill) -- this is an in-flight book reading, not a settled fill."""
 OBSERVATION_ORDER_ABSENT = "order_absent"
 OBSERVATION_FILLED_QTY_GREW = "filled_qty_grew"
 
-# Compaction growth bound: per crid the minimal fold-equivalent set is at most
-# the latest watch_open + the min-trough record + the latest trail_armed + the
-# latest non-terminal state record + the latest terminal record (memo G4
-# "growth bound from day one"). Unknown/malformed lines are preserved verbatim
-# ON TOP of this bound — they are an alarm state, not steady-state growth.
+# Compaction growth bound: per crid the kept set is at most the latest
+# watch_open + the latest touched + the min-trough record + the latest
+# trail_armed + the latest non-terminal state record + the latest terminal
+# record (memo G4 "growth bound from day one") — one tracked slot per kept
+# reason, so no ordering of the input can produce a seventh line.
+# Unknown/malformed lines are preserved verbatim ON TOP of this bound — they
+# are an alarm state, not steady-state growth.
 #
 # 4 -> 5 on 2026-09-04: the latest trail_armed is kept in its own right, so a
 # later non-terminal line cannot evict the resting order's id and ceiling (see
 # _CompactionTracker.latest_trail_armed).
-COMPACTED_LINES_PER_CRID_BOUND = 5
+# 5 -> 6 on 2026-10-29: the latest touched is kept in its own right — the ONLY
+# retained line that fold-equivalence does not demand (see
+# _CompactionTracker.latest_touched).
+COMPACTED_LINES_PER_CRID_BOUND = 6
 
 _CRID_KEY = "crid"
 
@@ -705,11 +711,23 @@ def cancel_open_watches(pick_key: str, *, note: str, path: Path | None = None) -
 class _CompactionTracker:
     """The per-crid latest/min index bookkeeping behind
     :func:`compact_entry_trail_lines` — which known-kind line indexes must
-    survive compaction for the fold to come out identical.
+    survive compaction. Five of the six reasons are what the fold needs to come
+    out identical; ``latest_touched`` is the one kept for EVIDENCE instead (see
+    its own note below).
+
+    ONE dict PER KEPT REASON, each holding at most ONE index per crid, and
+    every field of this dataclass is such a dict (``min_trough`` is one too: it
+    carries its index inside a tuple, beside the trough that index won on).
+    That is what makes :data:`COMPACTED_LINES_PER_CRID_BOUND` equal the field
+    count, and a test pins the two together so a new reason cannot be added
+    without raising the bound. The bound is the field count, not a proof about
+    a future field: a single field holding TWO indexes per crid would keep 7
+    lines and pass that test — measured 2026-10-29 — and is caught by the
+    every-ordering test instead.
 
     MUTABLE by design (unlike this module's frozen dataclasses): ``note()``
-    updates the four index dicts in place across a single compaction pass and
-    the instance is discarded after ``kept_indexes()``."""
+    updates those dicts in place across a single compaction pass and the
+    instance is discarded after ``kept_indexes()``."""
 
     latest_watch_open: dict[str, int] = field(default_factory=dict)
     min_trough: dict[str, tuple[float, int]] = field(default_factory=dict)
@@ -723,6 +741,28 @@ class _CompactionTracker:
     # legitimately CLEARS both, and it is kept too, so the fold still comes out
     # right for the re-arm.
     latest_trail_armed: dict[str, int] = field(default_factory=dict)
+    # The latest ``touched``, kept for a reason the other five do NOT share: it
+    # is not needed for fold-equivalence at all. The fold reduces a ``touched``
+    # line to ``latest_kind``, so ANY later line evicted it — measured
+    # 2026-10-28 on the LIVE journal, which held 61 ``watch_open`` lines, 28
+    # ``fired`` lines and ZERO ``touched`` lines.
+    #
+    # What that evicts is ``touch_price`` / ``touch_ts``, the BID the watcher
+    # detected the touch on (``control_loop`` stamps both onto this line). They
+    # are recoverable from no other line on the normal native path: the
+    # reconcile pass writes the ``fired`` line out of band, from the FOLD rather
+    # than from the watcher runtime, and sets both marks to ``None`` on purpose
+    # — "Touch marks are the ``touched`` line's job (the offline join reads them
+    # there)". Only the terminals the watcher itself writes (expired / cancelled
+    # / suspended) carry them in their measurement blob, and only while the
+    # process that saw the touch is still alive.
+    #
+    # The bid matters beyond the daemon: the intent-replay backtester detects a
+    # touch on the trade tape (``bar.low``), not on the book, so without this
+    # line a tier can never be asked whether its bid touch had a counterpart on
+    # the tape. Retention here is therefore deliberately WIDER than the minimal
+    # fold-equivalent set, and the bound above counts it.
+    latest_touched: dict[str, int] = field(default_factory=dict)
 
     def note(self, crid: str, kind: str, record: Mapping[str, Any], index: int) -> None:
         """Track one known-kind record at ``index`` (file order = time order)."""
@@ -734,6 +774,8 @@ class _CompactionTracker:
             self.latest_watch_open[crid] = index
         elif kind == KIND_TRAIL_ARMED:
             self.latest_trail_armed[crid] = index
+        elif kind == KIND_TOUCHED:
+            self.latest_touched[crid] = index
         elif kind == KIND_TROUGH:
             trough = _finite_positive_float(record.get(KIND_TROUGH))
             if trough is not None:
@@ -746,21 +788,25 @@ class _CompactionTracker:
         kept = set(self.latest_watch_open.values())
         kept.update(index for _trough, index in self.min_trough.values())
         kept.update(self.latest_trail_armed.values())
+        kept.update(self.latest_touched.values())
         kept.update(self.latest_state.values())
         kept.update(self.latest_terminal.values())
         return kept
 
 
 def compact_entry_trail_lines(raw_lines: Iterable[str]) -> list[str]:
-    """The MINIMAL set of raw lines that folds IDENTICALLY to ``raw_lines``,
-    in their original relative order (the fold's latest-kind semantics are
-    file-order based).
+    """The raw lines that must survive compaction — every line the fold needs
+    to come out IDENTICAL to ``raw_lines``, plus the latest ``touched`` line per
+    crid — in their original relative order (the fold's latest-kind semantics
+    are file-order based).
 
     Kept per crid: the latest ``watch_open``, the record achieving the MIN
     trough (equals the latest under the ratchet invariant, but min is the
     fold-equivalent choice), the latest ``trail_armed`` (it carries the resting
     order id, its ceiling and its trailing distance, which ``latest_state`` alone
-    does not preserve), the
+    does not preserve), the latest ``touched`` (kept for EVIDENCE, not for the
+    fold — it carries the bid the touch was detected on, which no other line
+    holds on the native path; see ``_CompactionTracker.latest_touched``), the
     latest non-terminal state record, and the latest terminal record — :data:`COMPACTED_LINES_PER_CRID_BOUND` lines at
     most, however long the input. UNKNOWN kinds and malformed/missing-crid
     lines are PRESERVED VERBATIM (memo G4 — dropping a malformed line would

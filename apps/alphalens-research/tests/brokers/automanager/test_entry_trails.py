@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import json
 import unittest
+from dataclasses import fields
+from itertools import permutations
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -55,6 +57,20 @@ def _watch_open(
         fx_rate=fx_rate,
         **extra,
     )
+
+
+def _latest_touched_record(raw_lines: list[str], crid: str) -> dict[str, Any] | None:
+    """The record ``trades._build_trail_tiers`` reads a tier's ``touch_price``
+    and ``touched_at`` from: the LAST ``touched`` line of ``crid``, in file
+    order. Spelled here the way that consumer spells it, so a retention change
+    is checked against the reader rather than against the compactor."""
+    records = [json.loads(line) for line in raw_lines if line.strip()]
+    touched = [
+        record
+        for record in records
+        if record.get("crid") == crid and record.get("kind") == et.KIND_TOUCHED
+    ]
+    return touched[-1] if touched else None
 
 
 class TestEntryTrailBpsReader(unittest.TestCase):
@@ -656,6 +672,176 @@ class TestCompactionKeepsTheArmedLine(unittest.TestCase):
             lines.append(_line(et.KIND_TOUCHED))
         self.assertLessEqual(
             len(et.compact_entry_trail_lines(lines)), et.COMPACTED_LINES_PER_CRID_BOUND
+        )
+
+
+class TestCompactionKeepsTheTouchedLine(unittest.TestCase):
+    """The ``touched`` line is the ONLY place the BID the daemon acted on
+    survives, and the fold does not carry it.
+
+    The fold reduces a ``touched`` line to ``latest_kind``, so a later
+    non-terminal line (``trough``, ``trail_armed``) or a terminal line left the
+    compactor with no reason to keep it: on 2026-10-28 the LIVE entry-trail
+    journal held 61 ``watch_open`` lines, 28 ``fired`` lines and ZERO
+    ``touched`` lines.
+
+    The evicted fields are ``touch_price`` / ``touch_ts``, and on the normal
+    native path no other line holds them: the reconcile pass writes the
+    ``fired`` line from the FOLD, not from the watcher runtime, and sets both
+    marks to ``None`` on purpose. The replay detects its touch on the trade
+    tape instead of the bid, so without this line a tier can never be asked
+    whether its bid touch had a counterpart on the tape.
+
+    Retention here is therefore WIDER than fold-equivalence demands. That is
+    deliberate: the compactor's docstring already concedes it deletes "history
+    that exists nowhere else" (#1648), and this is the one line whose loss
+    cannot be repaired from any other file.
+    """
+
+    def test_touched_survives_a_later_non_terminal_and_a_terminal(self) -> None:
+        # Given the full state machine of one tier, with the touch price on it.
+        lines = [
+            _watch_open(),
+            _line(et.KIND_TOUCHED, touch_price=44.00, touch_ts="2026-10-06T19:05:54.861Z"),
+            _line(et.KIND_TROUGH, trough=43.90),
+            _line(et.KIND_TRAIL_ARMED, order_id="O-1", trigger=43.95, ceiling=43.97),
+            _line(et.KIND_FIRED, avg_price=44.43, realized_qty=100),
+        ]
+        # When the journal is compacted.
+        compacted = et.compact_entry_trail_lines(lines)
+        # Then the touch line is still there, verbatim.
+        self.assertIn(
+            _line(et.KIND_TOUCHED, touch_price=44.00, touch_ts="2026-10-06T19:05:54.861Z"),
+            compacted,
+            "the touched line carries the bid the daemon acted on and exists nowhere else",
+        )
+
+    def test_the_latest_touched_wins_when_a_tier_is_re_touched(self) -> None:
+        # A memo §5 CRITICAL-2 re-arm re-opens the watch, so one crid can be
+        # touched twice. Keeping the LATEST mirrors latest_watch_open.
+        lines = [
+            _watch_open(),
+            _line(et.KIND_TOUCHED, touch_price=44.00, touch_ts="2026-10-06T19:05:54.861Z"),
+            _watch_open(),
+            _line(et.KIND_TOUCHED, touch_price=43.10, touch_ts="2026-10-07T13:31:00.000Z"),
+            _line(et.KIND_TROUGH, trough=43.00),
+        ]
+        compacted = et.compact_entry_trail_lines(lines)
+        self.assertIn(
+            _line(et.KIND_TOUCHED, touch_price=43.10, touch_ts="2026-10-07T13:31:00.000Z"),
+            compacted,
+        )
+
+    def test_the_record_the_trades_reader_reads_survives_compaction(self) -> None:
+        # Retention is only worth the kept line if the CONSUMER still gets the
+        # number. ``trades._build_trail_tiers`` builds the entry record's
+        # ``touch_price`` / ``touched_at`` from the LAST ``touched`` record of
+        # the crid, so that is the expression asserted here — not merely "some
+        # touched line survived". Measured 2026-10-29 over 14573 generated
+        # journals carrying a touch: this expression came out identical to the
+        # full journal on all of them, where the pre-fix compactor lost it on
+        # 8235 (56.5%).
+        other = "KO:2026-08-12:T2-entry-0"
+        lines = [
+            _watch_open(),
+            _line(et.KIND_TOUCHED, touch_price=44.00, touch_ts="2026-10-06T19:05:54.861Z"),
+            _watch_open(other),
+            _line(et.KIND_TOUCHED, other, touch_price=12.00, touch_ts="2026-10-06T19:06:00.000Z"),
+            _line(et.KIND_TROUGH, trough=43.90),
+            _watch_open(),  # memo §5 CRITICAL-2 re-arm: this tier is touched twice
+            _line(et.KIND_TOUCHED, touch_price=43.80, touch_ts="2026-10-07T13:31:00.000Z"),
+            _line(et.KIND_TRAIL_ARMED, order_id="O-1", trigger=43.58, ceiling=43.60),
+            _line(et.KIND_FIRED, avg_price=44.43, realized_qty=100),
+            _line(et.KIND_CANCELLED, other, note="day order"),
+        ]
+        compacted = et.compact_entry_trail_lines(lines)
+        for crid in (_CRID, other):
+            self.assertEqual(
+                _latest_touched_record(compacted, crid),
+                _latest_touched_record(lines, crid),
+                f"{crid}: the record trades._build_trail_tiers reads must survive verbatim",
+            )
+        # Pinned explicitly, so the loop above cannot pass by comparing two
+        # Nones: the LATEST touch is the one the reader must see.
+        self.assertEqual(_latest_touched_record(compacted, _CRID)["touch_price"], 43.80)
+
+    def test_touched_retention_stays_fold_equivalent(self) -> None:
+        lines = [
+            _watch_open(),
+            _line(et.KIND_TOUCHED, touch_price=44.00, touch_ts="2026-10-06T19:05:54.861Z"),
+            _line(et.KIND_TROUGH, trough=43.90),
+            _line(et.KIND_TRAIL_ARMED, order_id="O-1", trigger=43.95, ceiling=43.97),
+            _line(et.KIND_TROUGH, trough=43.80),
+        ]
+        compacted = et.compact_entry_trail_lines(lines)
+        self.assertEqual(
+            _fold_data(et.fold_entry_trail_lines(lines)),
+            _fold_data(et.fold_entry_trail_lines(compacted)),
+        )
+
+    def test_the_touched_line_costs_at_most_one_extra_kept_line(self) -> None:
+        # The growth bound is a contract (memo G4 "growth bound from day one"):
+        # the extra kept record must be counted, not smuggled in. Several
+        # touched, several trough and several arm lines, interleaved, plus a
+        # terminal — the worst shape for the keep set.
+        lines = [_watch_open()]
+        for i in range(30):
+            lines.append(_line(et.KIND_TOUCHED, touch_price=9.99 - i * 0.01))
+            lines.append(_line(et.KIND_TROUGH, trough=9.9 - i * 0.01))
+            lines.append(_line(et.KIND_TRAIL_ARMED, order_id=f"O-{i}", trigger=9.5, ceiling=9.52))
+        lines.append(_line(et.KIND_FIRED, avg_price=9.6, realized_qty=100))
+        self.assertLessEqual(
+            len(et.compact_entry_trail_lines(lines)), et.COMPACTED_LINES_PER_CRID_BOUND
+        )
+
+    def test_the_bound_is_REACHED_exactly_by_the_six_reason_shape(self) -> None:
+        # `<=` alone leaves the bound untested from below: a bound nobody
+        # reaches is not a measured bound. This is the shape that hits all six
+        # reasons at once — the second trough is ABOVE the minimum, so the
+        # min-trough record and the latest non-terminal record are different
+        # lines.
+        lines = [
+            _watch_open(),
+            _line(et.KIND_TOUCHED, touch_price=9.8),
+            _line(et.KIND_TROUGH, trough=9.5),
+            _line(et.KIND_TRAIL_ARMED, order_id="O-1", trigger=9.6, ceiling=9.62),
+            _line(et.KIND_TROUGH, trough=9.9),
+            _line(et.KIND_FIRED, avg_price=9.65, realized_qty=100),
+        ]
+        self.assertEqual(
+            len(et.compact_entry_trail_lines(lines)), et.COMPACTED_LINES_PER_CRID_BOUND
+        )
+
+    def test_the_bound_holds_under_every_ordering_of_a_seven_line_journal(self) -> None:
+        # No input shape may produce one more line than the stated bound. The
+        # pool carries a SECOND touched and a SECOND trough on purpose: with one
+        # line per kind the keep set maxes out at 5, one under the bound, and a
+        # compactor that kept the two latest touched lines would still pass.
+        # Measured 2026-10-29: that mutant keeps 7 lines on this shape.
+        pool = [
+            _watch_open(),
+            _line(et.KIND_TOUCHED, touch_price=9.9),
+            _line(et.KIND_TOUCHED, touch_price=9.8),
+            _line(et.KIND_TROUGH, trough=9.5),
+            _line(et.KIND_TROUGH, trough=9.9),
+            _line(et.KIND_TRAIL_ARMED, order_id="O-1", trigger=9.6, ceiling=9.62),
+            _line(et.KIND_FIRED, avg_price=9.65, realized_qty=100),
+        ]
+        worst = max(len(et.compact_entry_trail_lines(list(p))) for p in permutations(pool))
+        self.assertEqual(worst, et.COMPACTED_LINES_PER_CRID_BOUND)
+
+    def test_the_stated_bound_equals_the_number_of_keep_reasons(self) -> None:
+        # The drift this pins: the bound is a comment-level claim that nothing
+        # enforced. `latest_trail_armed` was added in 2026-09 while the tracker
+        # docstring still said "four index dicts", so the file has already
+        # drifted once. Every field of _CompactionTracker is one keep reason
+        # holding at most one index per crid, so the field count IS the bound.
+        reasons = [f.name for f in fields(et._CompactionTracker)]
+        self.assertEqual(
+            len(reasons),
+            et.COMPACTED_LINES_PER_CRID_BOUND,
+            f"keep reasons {reasons} — a new one must raise "
+            "COMPACTED_LINES_PER_CRID_BOUND in the same commit",
         )
 
 
