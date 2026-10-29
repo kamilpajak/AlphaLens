@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from dataclasses import fields
 from itertools import permutations
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -746,23 +747,55 @@ class TestCompactionKeepsTheTouchedLine(unittest.TestCase):
             len(et.compact_entry_trail_lines(lines)), et.COMPACTED_LINES_PER_CRID_BOUND
         )
 
-    def test_the_bound_holds_under_every_ordering_of_the_kinds(self) -> None:
-        # No input shape may produce one more line than the stated bound. One
-        # tracked slot per kept reason, so the keep set cannot exceed the
-        # number of reasons however the kinds are ordered.
-        kinds = [
+    def test_the_bound_is_REACHED_exactly_by_the_six_reason_shape(self) -> None:
+        # `<=` alone leaves the bound untested from below: a bound nobody
+        # reaches is not a measured bound. This is the shape that hits all six
+        # reasons at once — the second trough is ABOVE the minimum, so the
+        # min-trough record and the latest non-terminal record are different
+        # lines.
+        lines = [
             _watch_open(),
             _line(et.KIND_TOUCHED, touch_price=9.8),
-            _line(et.KIND_TROUGH, trough=9.7),
+            _line(et.KIND_TROUGH, trough=9.5),
+            _line(et.KIND_TRAIL_ARMED, order_id="O-1", trigger=9.6, ceiling=9.62),
+            _line(et.KIND_TROUGH, trough=9.9),
+            _line(et.KIND_FIRED, avg_price=9.65, realized_qty=100),
+        ]
+        self.assertEqual(
+            len(et.compact_entry_trail_lines(lines)), et.COMPACTED_LINES_PER_CRID_BOUND
+        )
+
+    def test_the_bound_holds_under_every_ordering_of_a_seven_line_journal(self) -> None:
+        # No input shape may produce one more line than the stated bound. The
+        # pool carries a SECOND touched and a SECOND trough on purpose: with one
+        # line per kind the keep set maxes out at 5, one under the bound, and a
+        # compactor that kept the two latest touched lines would still pass.
+        # Measured 2026-10-29: that mutant keeps 7 lines on this shape.
+        pool = [
+            _watch_open(),
+            _line(et.KIND_TOUCHED, touch_price=9.9),
+            _line(et.KIND_TOUCHED, touch_price=9.8),
+            _line(et.KIND_TROUGH, trough=9.5),
+            _line(et.KIND_TROUGH, trough=9.9),
             _line(et.KIND_TRAIL_ARMED, order_id="O-1", trigger=9.6, ceiling=9.62),
             _line(et.KIND_FIRED, avg_price=9.65, realized_qty=100),
         ]
-        for ordering in permutations(kinds):
-            with self.subTest(ordering=[json.loads(line)["kind"] for line in ordering]):
-                self.assertLessEqual(
-                    len(et.compact_entry_trail_lines(list(ordering))),
-                    et.COMPACTED_LINES_PER_CRID_BOUND,
-                )
+        worst = max(len(et.compact_entry_trail_lines(list(p))) for p in permutations(pool))
+        self.assertEqual(worst, et.COMPACTED_LINES_PER_CRID_BOUND)
+
+    def test_the_stated_bound_equals_the_number_of_keep_reasons(self) -> None:
+        # The drift this pins: the bound is a comment-level claim that nothing
+        # enforced. `latest_trail_armed` was added in 2026-09 while the tracker
+        # docstring still said "four index dicts", so the file has already
+        # drifted once. Every field of _CompactionTracker is one keep reason
+        # holding at most one index per crid, so the field count IS the bound.
+        reasons = [f.name for f in fields(et._CompactionTracker)]
+        self.assertEqual(
+            len(reasons),
+            et.COMPACTED_LINES_PER_CRID_BOUND,
+            f"keep reasons {reasons} — a new one must raise "
+            "COMPACTED_LINES_PER_CRID_BOUND in the same commit",
+        )
 
 
 class TestCompactEntryTrailJournalFile(unittest.TestCase):

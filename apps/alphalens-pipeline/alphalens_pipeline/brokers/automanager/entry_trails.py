@@ -711,11 +711,18 @@ def cancel_open_watches(pick_key: str, *, note: str, path: Path | None = None) -
 class _CompactionTracker:
     """The per-crid latest/min index bookkeeping behind
     :func:`compact_entry_trail_lines` — which known-kind line indexes must
-    survive compaction for the fold to come out identical.
+    survive compaction. Five of the six reasons are what the fold needs to come
+    out identical; ``latest_touched`` is the one kept for EVIDENCE instead (see
+    its own note below).
+
+    ONE index dict PER KEPT REASON, and every field of this dataclass is such a
+    dict: that is what makes :data:`COMPACTED_LINES_PER_CRID_BOUND` equal the
+    field count, and a test pins the two together so a new reason cannot be
+    added without raising the bound.
 
     MUTABLE by design (unlike this module's frozen dataclasses): ``note()``
-    updates the four index dicts in place across a single compaction pass and
-    the instance is discarded after ``kept_indexes()``."""
+    updates those dicts in place across a single compaction pass and the
+    instance is discarded after ``kept_indexes()``."""
 
     latest_watch_open: dict[str, int] = field(default_factory=dict)
     min_trough: dict[str, tuple[float, int]] = field(default_factory=dict)
