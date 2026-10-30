@@ -138,7 +138,17 @@ BASELINE: dict[str, int] = {
     # not clear this condition), 7 for the rendering (above the empty-queue
     # early return, or a journal whose only line is unreadable renders as an
     # EMPTY queue) and 10 of comment saying which reader each surface asks.
-    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3207,
+    #
+    # Raised again, by 16, in #1822: `broker status` now reports the same
+    # withheld condition. #1788 left it visible only in `broker picks` and in
+    # journald, so a daemon that could place nothing read green on every gauge
+    # and on the one command an operator runs during an incident. The room is 5
+    # lines of published `--help` (the enumeration of what status reports is a
+    # claim about the command; the stale `slot /` came out in the same edit,
+    # #1732 having removed that section), 7 for the rendered line beside
+    # `refused` / `expired` and 4 of comment saying why the line is guarded on a
+    # truthy count rather than on the field being present.
+    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3241,
     "apps/alphalens-pipeline/alphalens_cli/commands/thematic.py": 1708,
     # Raised again, by 8, to say that the raise page's ticker fallback is
     # unreachable by construction. It sits beside the stop-PLACED page's
@@ -269,7 +279,19 @@ BASELINE: dict[str, int] = {
     # token provider latches dead and keeps refusing to place. The lines are the
     # metric builder, the third key in the one emit call, and the docstrings
     # recording that correction.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8028,
+    #
+    # Raised again, by 74, for the placements-withheld gauge (#1822). It is the
+    # FOURTH key in that same emit call -- a second emit_domain_metrics call to
+    # this domain would atomically erase the other three and the daemon would
+    # read as dead rather than as withholding. The room is the metric name, the
+    # builder, the fourth key, and `_placements_withheld`, which is the one
+    # value this function READS rather than being handed: the drain throws the
+    # count away and is skipped entirely under KILL or a dead chain, so a
+    # forwarded count would be stale exactly when it matters. Most of the lines
+    # are that docstring, and they are the measurement (the extra fold costs
+    # 0.251 ms on a 75-line journal, 0.00056% of a 45 s tick) plus the reason
+    # the chain gauge's "never a second read" argument does not carry over.
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8121,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3302,

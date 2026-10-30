@@ -2288,6 +2288,28 @@ def _render_status_health(health: Any, skewed: list[str]) -> None:
     if health.last_expiry:
         age = _age_phrase(health.last_expiry_age_s)
         typer.echo(f"expired   {age}{health.last_expiry}")
+    # #1822: guarded on a truthy value, like the two lines above, so a clean
+    # queue and an unreadable health section both print nothing rather than
+    # "withheld  0" or "withheld  None". Same wording as `broker picks`, so one
+    # condition reads the same in both commands — including BOTH halves of the
+    # remedy: the hand repair and the re-arm. Stopping at "re-arming does not
+    # clear it" reads as "re-arming is not part of the fix", while the picks whose
+    # lines were torn do still have to be re-armed once the lines are repaired.
+    if health.picks_journal_error:
+        # The journal did not OPEN, so there is no count to state. The daemon
+        # publishes WITHHELD for this too, so saying nothing here would leave the
+        # operator paged by that rule with no line at all.
+        typer.echo(
+            f"withheld  picks.jsonl cannot be read AT ALL ({health.picks_journal_error}) — "
+            "the drain places NOTHING; how many lines are unreadable is unknown "
+            "until the file opens"
+        )
+    elif health.picks_malformed:
+        typer.echo(
+            f"withheld  {health.picks_malformed} unreadable line(s) in picks.jsonl — "
+            "the drain places NOTHING; repair them by hand and re-arm what was lost "
+            "(the journal is append-only, so re-arming alone does not clear it)"
+        )
     if skewed:
         typer.echo(f"WARN      journal changed while reading the broker: {', '.join(skewed)}")
 
@@ -2448,11 +2470,23 @@ def status_command(
 ) -> None:
     """One read-only snapshot of a broker instance — READ-ONLY (issue #1378).
 
-    Account, gross / slot / cash-floor headroom, the resting orders, the open
+    Account, gross and cash-floor headroom, the resting orders, the open
     entry-trail tiers and the daemon's health, in one invocation. The headroom
     numbers come from the DAEMON'S OWN folds with the candidate set to zero, so
     what is printed is what the gate will subtract; a state the gate could not
     value is rendered as ``BLOCKED`` with that reason rather than as a number.
+
+    The health half also reports the WITHHELD count: how many lines of
+    ``picks.jsonl`` the pick fold cannot read. Any non-zero count means the
+    drain places NOTHING at all, for every pick in the queue (#1788). Repair
+    those lines by hand and re-arm what was lost; the journal is append-only, so
+    re-arming alone does not clear it. The count is a fresh fold of the journal,
+    taken WHEN THE COMMAND RUNS; the Prometheus gauge is the daemon's view as of
+    its last tick, so the two can legitimately disagree for one tick. A journal
+    that cannot be OPENED at all has no count: it is reported as unknown, and
+    the line names the fault instead of a number. ``alphalens broker picks``
+    shows the queue itself, but it EXITS 1 on a journal that cannot be opened,
+    so for that state this command is the only one that reports it.
 
     An unhealthy instance still exits 0 — health is content, and a Prometheus
     rule must not be duplicated in a CLI. Only a failed broker read exits 1.

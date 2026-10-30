@@ -55,9 +55,15 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from alphalens_pipeline.brokers.automanager import entry_trails, safety, state_paths
+
+if TYPE_CHECKING:
+    # Type-only: ``picks`` stays a lazy in-body import at the two call sites, so
+    # the annotation costs no import at runtime but pyright still checks that
+    # ``_last_terminal`` is handed a fold and not the env string it used to take.
+    from alphalens_pipeline.brokers.automanager.picks import PickFold
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +159,26 @@ class Health:
     # with its age from the line's own ``expired_ts`` (the #1385 rule).
     last_expiry: str | None = None
     last_expiry_age_s: float | None = None
+    # #1822: how many lines of picks.jsonl the fold cannot read. Any non-zero
+    # value means the drain places NOTHING at all, for every key in the queue
+    # (``picks.iter_picks`` fails closed since #1788), and the journal is
+    # append-only so it never heals without a hand repair. The COUNT, never a
+    # verdict — the Prometheus rule owns the threshold, like every other number
+    # in this record. ``None`` is "could not be read" (``_unknown_health``, and
+    # the journal-fault path below): defaulting to 0 would claim a clean queue
+    # during exactly the incident where nothing is known.
+    #
+    # Named for ``PickFold.malformed``, which is where it comes from and the name
+    # `broker picks` publishes the same integer under. NOT ``placements_withheld``:
+    # that command also publishes a BOOLEAN ``placement_withheld``, and two keys
+    # in one CLI differing by one letter and a type is a trap for the agents and
+    # scripts this JSON is for.
+    picks_malformed: int | None = None
+    # The journal could not be OPENED at all (``"IsADirectoryError: /path"``), as
+    # opposed to holding lines the fold cannot parse. The daemon publishes
+    # WITHHELD for this state too, because the drain reads the same file through
+    # the same function, so status must report it rather than fall silent.
+    picks_journal_error: str | None = None
     as_of: str = ""
 
 
@@ -184,6 +210,17 @@ def _mtimes(paths: dict[str, Path]) -> dict[str, float | None]:
         except OSError:
             out[name] = None
     return out
+
+
+def _skew(before: dict[str, float | None], watched: dict[str, Path]) -> list[str]:
+    """The watched journals whose mtime moved since ``before`` was taken.
+
+    One helper rather than the comparison written inline, because BOTH returns of
+    :func:`build_snapshot` need it — the offline one answered ``[]`` for as long as
+    the comparison lived only on the online path.
+    """
+    after = _mtimes(watched)
+    return [name for name, stamp in before.items() if after.get(name) != stamp]
 
 
 def _filter_open_records(records: list[dict[str, Any]], open_ids: set[str]) -> list[dict[str, Any]]:
@@ -476,16 +513,20 @@ def _refusal_age_s(raw_ts: Any, now: dt.datetime) -> float | None:
 
 
 def _last_terminal(
-    env: str, now: dt.datetime, *, status: str, ts_field: str
+    fold: PickFold, now: dt.datetime, *, status: str, ts_field: str
 ) -> tuple[str | None, float | None]:
     """``(rendered line, age in seconds)`` for the latest pick in ``status``.
 
     The age is derived from the line's own timestamp (``refused_ts`` /
     ``expired_ts``) — the moment the daemon wrote it — never from the brief
-    date the text renders, which is a different thing entirely."""
-    from alphalens_pipeline.brokers.automanager import picks as picks_mod
+    date the text renders, which is a different thing entirely.
 
-    fold = picks_mod.read_pick_fold(path=state_paths.picks_path(env=env))
+    Takes the already-read ``PickFold`` rather than reading one. It used to fold
+    the journal itself, so ``_health`` read picks.jsonl TWICE — once for the
+    refusal and once for the expiry — against this module's own rule that each
+    journal is read ONCE and threaded into every consumer (the docstring above,
+    the daemon's PR-T1 anti-torn-read rule). Threading it also makes #1822's
+    withheld count free: it comes off the same fold."""
     for record in reversed(fold.records):
         if record.status != status:
             continue
@@ -493,10 +534,6 @@ def _last_terminal(
         text = f"{record.ticker} {record.trade_date.isoformat()}: {reason}".strip()
         return (text, _refusal_age_s(record.record.get(ts_field), now))
     return (None, None)
-
-
-def _last_refusal(env: str, now: dt.datetime) -> tuple[str | None, float | None]:
-    return _last_terminal(env, now, status="refused", ts_field="refused_ts")
 
 
 def _waiting_picks(
@@ -560,6 +597,7 @@ def _unknown_health(env: str, now: dt.datetime) -> Health:
 
 
 def _health(env: str, now: dt.datetime) -> Health:
+    from alphalens_pipeline.brokers.automanager import picks as picks_mod
     from alphalens_pipeline.observability import textfile
 
     gauges = parse_prom_gauges(
@@ -568,9 +606,28 @@ def _health(env: str, now: dt.datetime) -> Health:
     heartbeat = gauges.get(_HEARTBEAT_GAUGE)
     stream_age, stream_source = _price_stream(env, now)
     unit, unit_state, unit_since = _unit_health(env)
-    last_refusal, last_refusal_age_s = _last_refusal(env, now)
+    # ONE fold, threaded into all three consumers (the module docstring's rule).
+    #
+    # An OSError here is CONTAINED, exactly where the daemon contains it
+    # (``control_loop._placements_withheld``): a fault on picks.jsonl must not
+    # cost the heartbeat, the KILL reading, the price age or the token rows.
+    # Letting it escape sent the whole section to ``_unknown_health``, whose
+    # ``kill_instance=False`` is not a reading of the KILL files at all — so an
+    # operator paged by AlphalensBrokerPlacementsWithheld saw neither the
+    # withheld line nor a true KILL state.
+    picks_path = state_paths.picks_path(env=env)
+    picks_journal_error: str | None = None
+    try:
+        pick_fold = picks_mod.read_pick_fold(path=picks_path)
+    except OSError as exc:
+        logger.warning("status: pick journal %s could not be read", picks_path, exc_info=True)
+        pick_fold = picks_mod.PickFold(records=[], malformed=0)
+        picks_journal_error = f"{type(exc).__name__}: {picks_path}"
+    last_refusal, last_refusal_age_s = _last_terminal(
+        pick_fold, now, status="refused", ts_field="refused_ts"
+    )
     last_expiry, last_expiry_age_s = _last_terminal(
-        env, now, status="expired", ts_field="expired_ts"
+        pick_fold, now, status="expired", ts_field="expired_ts"
     )
     return Health(
         unit=unit,
@@ -590,6 +647,10 @@ def _health(env: str, now: dt.datetime) -> Health:
         last_refusal_age_s=last_refusal_age_s,
         last_expiry=last_expiry,
         last_expiry_age_s=last_expiry_age_s,
+        # Unknown, never 0, when the file did not open: the count is genuinely
+        # not readable, and 0 would read as a clean queue.
+        picks_malformed=None if picks_journal_error else pick_fold.malformed,
+        picks_journal_error=picks_journal_error,
         as_of=_iso(now),
     )
 
@@ -612,7 +673,17 @@ def build_snapshot(
 
     trails_path = state_paths.entry_trails_path(env=env)
     submissions_path = state_paths.submissions_path(env=env)
-    watched = {"entry_trails": trails_path, "submissions": submissions_path}
+    # #1822: picks.jsonl joins the watch set because this snapshot folds it TWICE
+    # (``_health`` for the withheld count and the terminal lines, ``_waiting_picks``
+    # for the rows), and the one repair #1822 tells the operator to make is a hand
+    # edit of exactly this file. A repair landing between the two folds makes the
+    # withheld line and the waiting rows describe different versions of the journal,
+    # which is what ``skewed`` exists to say out loud.
+    watched = {
+        "entry_trails": trails_path,
+        "submissions": submissions_path,
+        "picks": state_paths.picks_path(env=env),
+    }
     before = _mtimes(watched)
 
     # Read each journal ONCE and thread the same snapshot everywhere (the
@@ -637,6 +708,10 @@ def build_snapshot(
         waiting = []
 
     if offline:
+        # The offline half reads every local journal the online half does, so it can
+        # tear the same way and must report it. Leaving ``skewed`` at its default
+        # here claimed a point-in-time read on the invocation an operator reaches
+        # for mid-incident, because the broker half can block for minutes.
         return StatusSnapshot(
             env=env,
             offline=True,
@@ -646,6 +721,7 @@ def build_snapshot(
             orders=[],
             watches=watches,
             health=health,
+            skewed=_skew(before, watched),
             waiting_picks=waiting,
         )
 
@@ -685,8 +761,6 @@ def build_snapshot(
             blocked=[f"cash floor could not be computed: {exc}"],
             as_of=_iso(now),
         )
-    after = _mtimes(watched)
-    skewed = [name for name, stamp in before.items() if after.get(name) != stamp]
     return StatusSnapshot(
         env=env,
         offline=False,
@@ -696,7 +770,7 @@ def build_snapshot(
         orders=list(open_orders),
         watches=watches,
         health=health,
-        skewed=skewed,
+        skewed=_skew(before, watched),
         waiting_picks=waiting,
     )
 
