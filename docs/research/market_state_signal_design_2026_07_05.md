@@ -1,6 +1,6 @@
 # Design Memo: Equity-Calibrated Market-State Context Signal (`market_state`)
 
-**Status:** DRAFT — 2026-07-05 (reworked after adversarial review; see §7)
+**Status:** LOCKED — design locked 2026-07-05 (reworked after adversarial review; see §7); shipped and stamping production since then. Amended 2026-10-30: the four inert trend inputs were removed (§2.2), no version bump owed. The FORWARD STUDY has not accrued — measured 2026-10-30, the live v1.2 cohort carries ONE label value across all 33 of its dates, so H-A and H-B remain unstartable rather than merely unfinished.
 **Author:** quant research (solo)
 **Type:** display-only context signal + forward-validation plan
 **Origin:** a crypto trading bot derives a discrete "H4 Market State" from H4 candle structure (price vs SMA50/SMA200, MA slope, ATR% context, distance-to-SMA200, range compression). This memo ports that idea to equities.

@@ -265,11 +265,16 @@ def classify_state(
     # raises neither TypeError nor ValueError, so a NaN already in the parquet's
     # `c` column does reach the series.)
     #
-    # The one input where the two guards differ is unreachable from a price
-    # series: `sma_fast == 0.0` exactly makes the old `normalized_slope` divide
-    # by zero, so the old guard blanked where this one emits. It needs a
-    # non-positive close with exact cancellation, and a mean of 50 strictly
-    # positive numbers is strictly positive. The LABEL is identical even there.
+    # The two guards DO differ on exactly one input, and the difference is a
+    # label difference, not a cosmetic one: `sma_fast == 0.0` exactly makes the
+    # old `normalized_slope` divide by zero, so the old guard answered 'unknown'
+    # where this one answers a real word. What licenses the no-bump is that the
+    # input is UNREACHABLE from a price series, not that the label agrees — it
+    # does not. Reaching it needs a non-positive close with exact cancellation
+    # inside the trailing 50, and the mean of 50 strictly positive numbers is
+    # strictly positive. The loader has no sign guard (`float(row["c"])` accepts
+    # a negative), so the precondition is "prices are positive", which is why it
+    # is written here rather than assumed.
     decision_inputs = (c, sma200_now, dist200, atr_pct_q_now)
     if not all(math.isfinite(x) for x in decision_inputs):
         return {"market_state": _UNKNOWN, **telemetry}
