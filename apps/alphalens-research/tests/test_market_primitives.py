@@ -45,25 +45,6 @@ class TestEma(unittest.TestCase):
         self.assertLess(out.iloc[-1], 30.0)
 
 
-class TestNormalizedSlope(unittest.TestCase):
-    def test_positive_when_rising_zero_when_flat(self):
-        from alphalens_pipeline.market.primitives import normalized_slope
-
-        rising = normalized_slope(_bars([1.0, 2.0, 3.0, 4.0]), window=1)
-        flat = normalized_slope(_bars([5.0, 5.0, 5.0]), window=1)
-
-        self.assertTrue((rising.dropna() > 0).all())
-        self.assertTrue((flat.dropna() == 0).all())
-
-    def test_normalizes_by_current_value(self):
-        from alphalens_pipeline.market.primitives import normalized_slope
-
-        # (12 - 10) / 12
-        out = normalized_slope(_bars([10.0, 10.0, 12.0]), window=1)
-
-        self.assertAlmostEqual(out.iloc[-1], 2.0 / 12.0, places=9)
-
-
 class TestRollingQuantileRank(unittest.TestCase):
     def test_ramp_last_value_ranks_one(self):
         from alphalens_pipeline.market.primitives import rolling_quantile_rank

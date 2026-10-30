@@ -271,13 +271,15 @@ export const MARKET_STATE_VIX_HIGH = 25;
 /**
  * The `dist200` percentage at which bull becomes bear: ZERO.
  *
- * NOT `DIST_FLAT_BAND` (±2%), which is the natural mistake because that
- * constant sits beside the others in the Python module. Measured over 375
- * combinations of (dist200, sma50, slope): the trend after the neutral fold
- * equals `sign(dist200)` with no counterexample. The deadband, the 50/200
- * cross and the SMA50 slope can only route the answer to `neutral`, which
- * folds back by that same sign — so none of them can change the emitted label,
- * and annotating ±2% here would publish a false claim.
+ * This is now true BY CONSTRUCTION: the Python trend word is literally
+ * `dist200 >= 0`. It used to be true by measurement, and the distinction is
+ * worth keeping because the earlier shape is the natural mistake. A ±2%
+ * `DIST_FLAT_BAND` deadband, a 50/200 cross and an SMA50 slope sat in the
+ * classifier beside the other constants, but could only route the answer to a
+ * `neutral` that the caller folded back by `sign(dist200)` — so none of them
+ * could change the emitted label (990 combinations, zero counterexamples), and
+ * all four values were deleted on 2026-10-30. Annotating ±2% here would have
+ * published a false claim then and names nothing at all now.
  */
 export const MARKET_STATE_TREND_FLIP_PCT = 0;
 

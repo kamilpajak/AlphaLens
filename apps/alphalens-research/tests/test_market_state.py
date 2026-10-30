@@ -115,31 +115,404 @@ class TestClassifyStateVolBoundary(unittest.TestCase):
         self.assertEqual(out["market_state"], "bull_volatile")
 
 
-class TestClassifyStateNeutralFold(unittest.TestCase):
+class TestClassifyStateJustEitherSideOfTheSMA200(unittest.TestCase):
+    """A close a HAIR either side of its SMA200 still reads by the sign.
+
+    Renamed from ``TestClassifyStateNeutralFold`` on 2026-10-30. These two cases
+    were written when a ±2% ``DIST_FLAT_BAND`` deadband sent a near-flat series
+    to a ``neutral`` arm that the caller then folded by ``sign(dist200)``. Both
+    the deadband and the fold are gone — the trend word is now ``dist200 >= 0``
+    outright — so the old name and the "≤ band" comments described a rule the
+    code no longer runs, while the assertions stayed green. A green test that
+    quietly lost its subject is worse than a red one.
+
+    What they still earn their place for: ±0.5% is the small-magnitude end of
+    the sign rule, which :class:`TestTrendWordIsTheSignOfDist200` covers only at
+    exactly zero and at large magnitudes. This is the region the deleted
+    deadband used to swallow.
+    """
+
     def _flat_then_last(self, last_close: float):
-        # ~flat series (|dist200| within the flat band) → trend neutral → folds
-        # by sign(dist200). Shrinking spread keeps ATR% low (vol not the point).
+        # ~flat series, so |dist200| lands near zero. Shrinking spread keeps
+        # ATR% low (the vol axis is not the point here; the VIX settles it).
         close, high, low = _ohlc(n=300, drift=0.0, spread_start=4.0, spread_end=0.3)
         close.iloc[-1] = last_close
         high.iloc[-1] = last_close + 0.15
         low.iloc[-1] = last_close - 0.15
         return close, high, low
 
-    def test_neutral_folds_up_when_above_sma200(self):
+    def test_a_hair_above_the_sma200_reads_bull(self):
         from alphalens_pipeline.market.market_state import classify_state
 
-        close, high, low = self._flat_then_last(100.5)  # dist200 ≈ +0.5% ≤ band
+        close, high, low = self._flat_then_last(100.5)  # dist200 ≈ +0.5%
         out = classify_state(close=close, high=high, low=low, vix=_vix(last=10.0))
 
+        self.assertGreater(out["market_state_dist200"], 0.0)
         self.assertIn(out["market_state"], {"bull_quiet", "bull_volatile"})
 
-    def test_neutral_folds_down_when_below_sma200(self):
+    def test_a_hair_below_the_sma200_reads_bear(self):
         from alphalens_pipeline.market.market_state import classify_state
 
-        close, high, low = self._flat_then_last(99.5)  # dist200 ≈ −0.5% ≤ band
+        close, high, low = self._flat_then_last(99.5)  # dist200 ≈ −0.5%
         out = classify_state(close=close, high=high, low=low, vix=_vix(last=10.0))
 
+        self.assertLess(out["market_state_dist200"], 0.0)
         self.assertIn(out["market_state"], {"bear_quiet", "bear_volatile"})
+
+
+class TestTrendWordIsTheSignOfDist200(unittest.TestCase):
+    """The trend word is EXACTLY ``dist200 >= 0``, and nothing else.
+
+    ``_trend_axis`` used to return {up, down, neutral} off four facts — price vs
+    SMA200, the 50/200 cross, the SMA50 slope and a +-2% deadband — and the
+    caller then folded ``neutral`` back to up/down by ``sign(dist200)``. That
+    fold is what made the other three inert: above the SMA200 the strict-up
+    branch and the fold both say "up", below it both say "down", and the cross,
+    the slope and the deadband can only route the answer to ``neutral``. So the
+    bull/bear word was already ``dist200 >= 0``, measured over 990 combinations
+    of (dist200, sma50, slope) straddling every boundary with zero
+    counterexamples, and both ways a counterexample could exist are unreachable
+    by construction: a strict "up" needs ``c > sma200`` which forces
+    ``dist200 > 0``, because ``dist200`` is DERIVED as
+    ``(c - sma200) / sma200`` and is NaN unless ``sma200 > 0``.
+
+    This class pins that equivalence permanently, so a future session cannot
+    reintroduce a slope or cross term believing it moves the label. Every
+    assertion goes through :func:`classify_state`, never through a trend helper
+    called with a freely-chosen ``dist200``: sweeping ``dist200`` independently
+    of ``c`` and ``sma200`` produces states the classifier cannot build (the
+    sign of ``dist200`` contradicting ``c - sma200``), and a test written that
+    way fails on correct code.
+    """
+
+    def _series(self, closes: list[float]):
+        """OHLC with a tight, constant intraday range (the vol axis is not the
+        point here; the VIX leg settles it)."""
+        n = len(closes)
+        idx = pd.date_range("2019-01-01", periods=n, freq="B")
+        close = pd.Series(closes, index=idx, dtype=float)
+        return close, close + 0.15, close - 0.15
+
+    def _death_cross_above_ma200(self):
+        """A REAL death cross with price back above the SMA200 AND a FALLING
+        SMA50: a long steep decline pulls SMA50 under SMA200 and keeps it
+        falling, then a 3-session spike lifts the close far above SMA200.
+
+        The move is deliberately violent. A gentler rally lifts the SMA50 too,
+        which makes ``sign(slope50)`` agree with ``sign(dist200)`` and costs the
+        fixture its power to catch a reintroduced slope term — measured: a
+        20-session rally gives slope50 +0.114, this one gives -0.011.
+        """
+        return self._series(
+            list(np.linspace(220.0, 100.0, 297)) + list(np.linspace(105.0, 320.0, 3))
+        )
+
+    def _golden_cross_below_ma200(self):
+        """The mirror: a long rally leaves SMA50 above SMA200 and still RISING,
+        then a 5-session crash puts the close far below SMA200. Same reason for
+        the violence — measured slope50 +0.002 against dist200 -0.749."""
+        return self._series(list(np.linspace(60.0, 180.0, 295)) + list(np.linspace(170.0, 35.0, 5)))
+
+    def _slope50(self, close) -> float:
+        """The SMA50 slope the DELETED rule used to read, at the last bar.
+
+        The arithmetic is written out here rather than imported: it reproduces
+        the removed ``normalized_slope(sma(close, 50), window=20)``, which this
+        change deleted along with the rule that consulted it. Spelling it out
+        keeps the pin self-contained instead of keeping a production primitive
+        alive for a test.
+        """
+        from alphalens_pipeline.market.primitives import sma
+
+        sma50 = sma(close, 50)
+        return float((sma50.iloc[-1] - sma50.iloc[-1 - 20]) / sma50.iloc[-1])
+
+    def _cross_facts(self, close):
+        """(close, sma50, sma200) at the last bar — so each test PROVES its
+        fixture really holds the cross it is named for, instead of asserting it."""
+        from alphalens_pipeline.market.primitives import sma
+
+        return (
+            float(close.iloc[-1]),
+            float(sma(close, 50).iloc[-1]),
+            float(sma(close, 200).iloc[-1]),
+        )
+
+    def test_death_cross_above_the_ma200_still_reads_bull(self):
+        from alphalens_pipeline.market.market_state import classify_state
+
+        close, high, low = self._death_cross_above_ma200()
+        c, sma50, sma200 = self._cross_facts(close)
+        # The fixture is only evidence if it HOLDS the cross it claims.
+        self.assertLess(sma50, sma200, "fixture does not hold a death cross")
+        self.assertGreater(c, sma200, "fixture is not above its SMA200")
+        # and the SMA50 slope points the OTHER way, so a rule that consulted it
+        # would answer bear here. That contradiction is the fixture's power.
+        self.assertLess(self._slope50(close), 0.0, "fixture's SMA50 is not falling")
+
+        out = classify_state(close=close, high=high, low=low, vix=_vix(last=10.0))
+
+        self.assertTrue(
+            out["market_state"].startswith("bull"),
+            f"a death cross above the SMA200 must still read bull; got {out['market_state']}",
+        )
+
+    def test_golden_cross_below_the_ma200_still_reads_bear(self):
+        from alphalens_pipeline.market.market_state import classify_state
+
+        close, high, low = self._golden_cross_below_ma200()
+        c, sma50, sma200 = self._cross_facts(close)
+        self.assertGreater(sma50, sma200, "fixture does not hold a golden cross")
+        self.assertLess(c, sma200, "fixture is not below its SMA200")
+        self.assertGreater(self._slope50(close), 0.0, "fixture's SMA50 is not rising")
+
+        out = classify_state(close=close, high=high, low=low, vix=_vix(last=10.0))
+
+        self.assertTrue(
+            out["market_state"].startswith("bear"),
+            f"a golden cross below the SMA200 must still read bear; got {out['market_state']}",
+        )
+
+    def test_dist200_exactly_zero_reads_bull(self):
+        # The boundary itself: a perfectly flat series puts the last close ON its
+        # own SMA200, so dist200 is exactly 0.0 and `>= 0` must take the bull arm.
+        from alphalens_pipeline.market.market_state import classify_state
+
+        close, high, low = self._series([100.0] * 300)
+
+        out = classify_state(close=close, high=high, low=low, vix=_vix(last=10.0))
+
+        self.assertEqual(out["market_state_dist200"], 0.0)
+        self.assertTrue(out["market_state"].startswith("bull"))
+
+    def _corpus(self):
+        """Fixtures that between them span both sides of the SMA200, both cross
+        directions and the exact boundary."""
+        return {
+            "death cross above ma200": self._death_cross_above_ma200(),
+            "golden cross below ma200": self._golden_cross_below_ma200(),
+            "dist200 exactly zero": self._series([100.0] * 300),
+            "steady rally": self._series(list(np.linspace(80.0, 130.0, 300))),
+            "steady decline": self._series(list(np.linspace(130.0, 80.0, 300))),
+        }
+
+    def test_the_word_is_the_sign_of_dist200_on_every_fixture(self):
+        from alphalens_pipeline.market.market_state import classify_state
+
+        for name, (close, high, low) in self._corpus().items():
+            with self.subTest(fixture=name):
+                out = classify_state(close=close, high=high, low=low, vix=_vix(last=10.0))
+                self.assertNotEqual(out["market_state"], "unknown", "fixture decided nothing")
+
+                expected = "bull" if out["market_state_dist200"] >= 0 else "bear"
+
+                self.assertTrue(
+                    out["market_state"].startswith(expected),
+                    f"{name}: dist200={out['market_state_dist200']:+.4f} "
+                    f"demands {expected}, got {out['market_state']}",
+                )
+
+    def test_positive_control_the_corpus_can_refute_a_wrong_trend_rule(self):
+        # A pass above proves nothing unless these fixtures could have FAILED.
+        # The most plausible wrong rule is folding by the SMA50 slope's sign
+        # instead of dist200's. On this corpus the two rules must DISAGREE
+        # somewhere, or the fixtures lack the power to catch a reintroduced
+        # slope term and the class above is decoration.
+        from alphalens_pipeline.market.market_state import classify_state
+
+        disagreements = 0
+        for close, high, low in self._corpus().values():
+            out = classify_state(close=close, high=high, low=low, vix=_vix(last=10.0))
+            by_dist = "bull" if out["market_state_dist200"] >= 0 else "bear"
+            by_slope = "bull" if self._slope50(close) >= 0 else "bear"
+            if by_dist != by_slope:
+                disagreements += 1
+
+        self.assertGreater(
+            disagreements,
+            0,
+            "the corpus cannot tell sign(dist200) from sign(slope50), so it "
+            "would not notice a reintroduced slope term",
+        )
+
+
+class TestTheTwoLookbacksAreWiredSeparately(unittest.TestCase):
+    """``ATR_QUANTILE_LOOKBACK`` and ``VIX_DECILE_LOOKBACK`` each drive ONE
+    stamped quantity, and each read site reads its own constant.
+
+    One constant used to serve both: the ATR axis (which feeds
+    ``market_state_atr_pct_q`` and, through the vol axis, the label) and the
+    ``market_state_vix_decile`` telemetry column. Editing it to retune the ATR
+    axis would silently redefine the published VIX decile. The split holds the
+    value at 252 on both sides, so no row moved.
+
+    These two tests exist because a mutation check found the split UNPINNED:
+    changing either constant left all 40 tests in this module green, so nothing
+    would have noticed the VIX half being wired to the ATR constant.
+    """
+
+    def test_the_vix_decile_is_ranked_over_its_own_lookback(self):
+        from alphalens_pipeline.market.market_state import (
+            VIX_DECILE_LOOKBACK,
+            classify_state,
+        )
+        from alphalens_pipeline.market.primitives import rolling_quantile_rank
+
+        close, high, low = _ohlc(drift=0.0005)
+        # A high-vol PAST, a calm middle, a mild recent rise — so the last
+        # print's percentile depends on how far back the window reaches. A
+        # monotonic ramp will NOT do: it ranks 1.0 under every lookback, which
+        # is how the first version of this test passed its own positive control
+        # vacuously. Measured on this shape: 0.397 over 252, 1.0 over 60.
+        idx = pd.date_range("2019-01-01", periods=300, freq="B")
+        vix = pd.Series(
+            np.concatenate(
+                [
+                    np.full(200, 55.0),  # a crisis long ago
+                    np.full(95, 10.0),  # calm since
+                    np.linspace(12.0, 20.0, 5),  # a mild recent rise
+                ]
+            ),
+            index=idx,
+        )
+
+        out = classify_state(close=close, high=high, low=low, vix=vix)
+
+        expected = float(rolling_quantile_rank(vix, lookback=VIX_DECILE_LOOKBACK).iloc[-1])
+        self.assertAlmostEqual(out["market_state_vix_decile"], expected, places=12)
+        # Positive control: a DIFFERENT lookback must give a different answer,
+        # or this test could not tell the two constants apart.
+        other = float(rolling_quantile_rank(vix, lookback=60).iloc[-1])
+        self.assertNotAlmostEqual(expected, other, places=6)
+
+    def test_252_is_the_binding_window_for_emitting_a_label(self):
+        # The ATR% quantile needs 252 trailing bars where the SMA200 needs 200,
+        # so 252 — not 200 — is what gates emission. Pinning the boundary pins
+        # ATR_QUANTILE_LOOKBACK to its read site: shortening it would let n=251
+        # decide. This is also the measurement the `decision_inputs` comment
+        # cites, kept executable instead of only written down.
+        from alphalens_pipeline.market.market_state import classify_state
+
+        at_251 = classify_state(
+            close=_ohlc(n=251)[0],
+            high=_ohlc(n=251)[1],
+            low=_ohlc(n=251)[2],
+            vix=_vix(n=251, last=10.0),
+        )
+        at_252 = classify_state(
+            close=_ohlc(n=252)[0],
+            high=_ohlc(n=252)[1],
+            low=_ohlc(n=252)[2],
+            vix=_vix(n=252, last=10.0),
+        )
+
+        self.assertEqual(at_251["market_state"], "unknown", "251 bars must not decide")
+        self.assertNotEqual(at_252["market_state"], "unknown", "252 bars must decide")
+
+
+class TestEachLookbackReadSiteNamesItsOwnConstant(unittest.TestCase):
+    """A SOURCE gate, because no behavioural test can catch this one.
+
+    ``ATR_QUANTILE_LOOKBACK`` and ``VIX_DECILE_LOOKBACK`` both hold 252, so
+    wiring the VIX decile to the ATR constant is observationally identical today
+    — measured: that mutation left all 42 behavioural tests in this module
+    green. The defect would surface only once someone changed one value, which
+    is exactly the silent coupling the split exists to prevent. So the wiring is
+    pinned at the source, by name (the AST-gate-over-source idiom this
+    repository already uses where seeded state cannot refute a claim).
+    """
+
+    def _lookback_calls(self):
+        """``[(first positional arg name, lookback keyword's name), ...]`` for
+        every ``rolling_quantile_rank`` call in the classifier module."""
+        import ast
+
+        from alphalens_pipeline.market import market_state
+
+        tree = ast.parse(Path(market_state.__file__).read_text())
+        found = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            if not (isinstance(fn, ast.Name) and fn.id == "rolling_quantile_rank"):
+                continue
+            series = node.args[0].id if node.args and isinstance(node.args[0], ast.Name) else "?"
+            kw = next(
+                (
+                    k.value.id
+                    for k in node.keywords
+                    if k.arg == "lookback" and isinstance(k.value, ast.Name)
+                ),
+                "?",
+            )
+            found.append((series, kw))
+        return found
+
+    def test_both_call_sites_are_found(self):
+        # Positive control: if the walk finds nothing, the assertions below pass
+        # vacuously and the gate is decoration.
+        self.assertEqual(
+            len(self._lookback_calls()),
+            2,
+            f"expected exactly 2 rolling_quantile_rank calls, got "
+            f"{self._lookback_calls()}. The gate, not the code, needs updating.",
+        )
+
+    def test_the_vix_decile_names_the_vix_constant(self):
+        calls = dict(self._lookback_calls())
+
+        self.assertEqual(
+            calls.get("vix"),
+            "VIX_DECILE_LOOKBACK",
+            "the VIX decile must read VIX_DECILE_LOOKBACK. Both constants are "
+            "252, so wiring it to ATR_QUANTILE_LOOKBACK changes nothing today "
+            "and silently redefines the published decile the day that value moves.",
+        )
+
+    def test_the_atr_axis_names_the_atr_constant(self):
+        calls = dict(self._lookback_calls())
+
+        self.assertEqual(
+            calls.get("atr_pct_series"),
+            "ATR_QUANTILE_LOOKBACK",
+            "the ATR axis must read ATR_QUANTILE_LOOKBACK",
+        )
+
+
+class TestConfigVersionOwesNoBumpForThisSimplification(unittest.TestCase):
+    """Removing a provably inert input owes NO version bump.
+
+    #1559 set the governing rule: a version string has to name exactly one
+    emission rule, so a changed emission rule forces a bump even when no
+    threshold moves and no label changes. Dropping ``sma50_now`` and
+    ``slope_now`` from the finiteness guard changes WHICH values must be finite,
+    which is why that rule had to be checked rather than argued.
+
+    It was checked, and the emission rule is unchanged in effect. The binding
+    window is 252 (``ATR_QUANTILE_LOOKBACK``), not 200: measured over every
+    series length 0..320, both the old six-term guard and the four-term guard
+    first emit a label at n=252, and no length emits under one and blanks under
+    the other. ``sma50`` is finite from n=50 and the slope from n=70, both
+    strictly before ``sma200`` (n=200) and well before ``atr_pct_q`` (n=252), so
+    neither deleted term can ever be the input that blanks a label. Holding a
+    NaN at each of 300 positions and 3000 randomized poisoned series produced
+    zero divergences.
+
+    So the version string stays, and this test says why — a bump would orphan
+    the live cohort for a simplification that changed no published row.
+    """
+
+    def test_the_version_constant_is_unchanged(self):
+        from alphalens_pipeline.market.market_state import MARKET_STATE_CONFIG_VERSION
+
+        self.assertEqual(
+            MARKET_STATE_CONFIG_VERSION,
+            "mstate-v1.2-spy-sma50x200-atrq70-vix15_25-UNVALIDATED",
+            "a label- and emission-preserving simplification owes no bump. The "
+            "'sma50x200' token is an opaque poolability key, not a "
+            "specification of which inputs the classifier reads.",
+        )
 
 
 class TestClassifyStateUnknown(unittest.TestCase):

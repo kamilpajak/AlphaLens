@@ -35,18 +35,6 @@ def ema(series: pd.Series, window: int) -> pd.Series:
     return series.ewm(span=window, adjust=False).mean()
 
 
-def normalized_slope(series: pd.Series, *, window: int) -> pd.Series:
-    """Fractional change over ``window`` bars: ``(s_t − s_{t−window}) / s_t``.
-
-    Normalizing by the current value makes the slope scale-free and comparable
-    across price levels. The first ``window`` values are NaN. Assumes a positive
-    series (prices); a zero value yields ``inf``/``NaN`` at that point.
-    """
-    if window <= 0:
-        raise ValueError(_WINDOW_MUST_BE_POSITIVE)
-    return (series - series.shift(window)) / series
-
-
 def rolling_quantile_rank(series: pd.Series, *, lookback: int = 252) -> pd.Series:
     """Percentile rank of each value vs its trailing ``lookback`` window, in [0, 1].
 

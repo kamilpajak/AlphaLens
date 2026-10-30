@@ -236,13 +236,29 @@ describe('market-context flip points agree with the Python classifier', () => {
 		expect(MARKET_STATE_VIX_HIGH).toBe(constant('VIX_HIGH'));
 	});
 
-	it('the trend flip point is ZERO, not the DIST_FLAT_BAND deadband', () => {
-		// Measured over 375 combinations of (dist200, sma50, slope): the folded
-		// trend equals sign(dist200) with no counterexample, because the
-		// deadband only routes to a neutral that folds back by that same sign.
-		// So annotating ±2% on the face would be a new false claim.
+	it('the trend flip point is ZERO', () => {
+		// The classifier's trend word is exactly `dist200 >= 0`, so zero is the
+		// flip point by construction rather than by measurement. It used to be
+		// a measured claim: a ±2% `DIST_FLAT_BAND` deadband and an SMA50 slope
+		// sat in the Python rule but could only route the answer to a `neutral`
+		// that folded back by sign(dist200), making all of it inert. Those
+		// values were deleted on 2026-10-30.
 		expect(MARKET_STATE_TREND_FLIP_PCT).toBe(0);
-		expect(constant('DIST_FLAT_BAND')).toBe(0.02);
-		expect(MARKET_STATE_TREND_FLIP_PCT).not.toBe(constant('DIST_FLAT_BAND') * 100);
+	});
+
+	it('no deadband constant has been reintroduced on the Python side', () => {
+		// The anti-reintroduction pin. If a future change puts a deadband or a
+		// slope window back into the classifier, this face annotation stops
+		// being correct by construction and silently becomes a claim again —
+		// so the names must stay absent, not merely unused.
+		for (const name of ['DIST_FLAT_BAND', 'SLOPE_EPS', 'SLOPE_WIN', 'SMA_FAST']) {
+			expect(
+				new RegExp(`^${name} = `, 'm').test(classifier),
+				`${name} is back in market_state.py; MARKET_STATE_TREND_FLIP_PCT may no longer be 0`
+			).toBe(false);
+		}
+		// Positive control: the regex DOES find a constant that is still there,
+		// so the loop above cannot pass by failing to read the file.
+		expect(new RegExp('^SMA_SLOW = ', 'm').test(classifier)).toBe(true);
 	});
 });
