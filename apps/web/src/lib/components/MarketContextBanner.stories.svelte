@@ -94,6 +94,18 @@
      renders an em dash rather than a 0 or a blank. -->
 <Story name="all absent (em dashes)" args={labelOnly('unknown')} />
 
+<!-- THE DOMINANT HISTORICAL STATE after the backfill, and the one nobody designed:
+     the label is `unknown` because market_state only ships from 2026-07-05, while
+     the three returns ARE real because the price store reaches back to 2024-09-11.
+     Measured on production Postgres 2026-10-30: 163 brief dates, of which the ~47
+     from 2026-05-19 to 2026-07-04 land here — 29% of everything a reader can scroll
+     back to. The strip must read as "no regime word for this date, but here is what
+     the market did", never as an error. -->
+<Story
+	name="unknown label, real returns (pre-2026-07-05 dates)"
+	args={{ ...labelOnly('unknown'), ...MEASURED_RET5 }}
+/>
+
 <!-- Tone matrix — label only, drivers deliberately null (see labelOnly). Tone is
      display-only (green / amber / red / red-dim); never a buy/avoid signal. -->
 <Story name="tone — bull-quiet (green)" args={labelOnly('bull_quiet')} />

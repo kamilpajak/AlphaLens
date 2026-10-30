@@ -139,7 +139,9 @@ def augment(table: pa.Table, values: dict[str, float], *, date: dt.date) -> pa.T
     return out
 
 
-def check_additive(before: pa.Table, after: pa.Table, *, date: dt.date) -> list[str]:
+def check_additive(
+    before: pa.Table, after: pa.Table, *, date: dt.date, overwrite: bool = False
+) -> list[str]:
     """Every violation of "``after`` is ``before`` plus the three names".
 
     Returns a list of human-readable violations, empty when the rewrite is
@@ -164,7 +166,26 @@ def check_additive(before: pa.Table, after: pa.Table, *, date: dt.date) -> list[
             problems.append(f"{field.name}: field {field} -> {after.schema.field(index)}")
             continue
         if field.name in set(MARKET_SERIES_COLUMNS):
-            continue  # this family is what the run is allowed to rewrite
+            # This family is the one the run may write — which is exactly why it
+            # must not be exempt from checking. Exempting it meant the guard could
+            # neither prove the trio it wrote nor notice that it had REPLACED a
+            # published value, and a stale-store run would have overwritten good
+            # numbers with a frozen trio invisibly (the #1524 shape).
+            lhs = before.column(field.name).to_pylist()
+            rhs = after.column(index).to_pylist()
+            replaced = [
+                i
+                for i, (a, b) in enumerate(zip(lhs, rhs, strict=False))
+                if a is not None and not _values_equal(a, b)
+            ]
+            if replaced and not overwrite:
+                i = replaced[0]
+                problems.append(
+                    f"{field.name}: would REPLACE {len(replaced)} already-published "
+                    f"value(s), first at row {i} ({lhs[i]!r} -> {rhs[i]!r}); pass "
+                    "--overwrite to allow that deliberately"
+                )
+            continue
         lhs = before.column(field.name).to_pylist()
         rhs = after.column(index).to_pylist()
         differing = [
@@ -199,6 +220,7 @@ def run_backfill(
     start: dt.date | None = None,
     end: dt.date | None = None,
     allow_missing: bool = False,
+    overwrite: bool = False,
 ) -> dict[str, Any]:
     """Stage every date, verify every date, then replace every date (or none).
 
@@ -242,7 +264,9 @@ def run_backfill(
             staged.append((tmp, path))
             # Verify what is ON DISK, not the in-memory table: the write is part
             # of what has to be additive.
-            violations.extend(check_additive(before, pq.read_table(tmp), date=date))
+            violations.extend(
+                check_additive(before, pq.read_table(tmp), date=date, overwrite=overwrite)
+            )
 
         if missing:
             raise RuntimeError(
@@ -259,9 +283,17 @@ def run_backfill(
 
         written = 0
         if write:
+            landed: list[str] = []
             for tmp, path in staged:
+                # Measured 2026-10-30: 88 of 112 published brief parquets are 0600.
+                # os.replace puts the TEMP file's mode on the published path, so the
+                # mode has to be carried across explicitly or the run silently
+                # widens 88 files to 0644.
+                mode = path.stat().st_mode & 0o7777
                 os.replace(tmp, path)
+                os.chmod(path, mode)
                 written += 1
+                landed.append(path.name)
             staged = []
     finally:
         for tmp, _path in staged:
@@ -290,6 +322,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--end", type=dt.date.fromisoformat, default=None)
     ap.add_argument("--write", action="store_true", help="persist (default: dry-run)")
     ap.add_argument(
+        "--overwrite",
+        action="store_true",
+        help=(
+            "allow replacing a trio that is ALREADY published for a date. Off by "
+            "default: a re-run on a host whose grouped store does not reach the "
+            "dates would otherwise overwrite good values with a frozen trio, "
+            "invisibly — the shape of the #1524 defect."
+        ),
+    )
+    ap.add_argument(
         "--dry-run",
         action="store_true",
         help="explicit no-op complement of --write (dry-run is the default)",
@@ -314,6 +356,7 @@ def main(argv: list[str] | None = None) -> int:
             start=args.start,
             end=args.end,
             allow_missing=args.allow_missing,
+            overwrite=args.overwrite,
         )
     except (NotAdditiveError, RuntimeError) as exc:
         if args.format == "json":

@@ -431,3 +431,89 @@ class TestTheCommandLineSurface(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestARerunCannotSilentlyReplaceAPublishedTrio(unittest.TestCase):
+    """The family was exempt from the value check, which made the one failure the
+    guard exists to prevent invisible: a re-run on a host whose grouped store does
+    not reach the dates would overwrite good values with a frozen trio and report
+    success. That is the #1524 shape — a stale input stamped over a correct one."""
+
+    def setUp(self):
+        self.env = _Env()
+        self.addCleanup(self.env.cleanup)
+
+    def _published_once(self):
+        from scripts.backfill_market_index_series import run_backfill
+
+        run_backfill(briefs_dir=self.env.briefs, grouped_root=self.env.store, write=True)
+
+    def test_a_rerun_computing_a_different_trio_is_refused(self):
+        from scripts import backfill_market_index_series as mod
+
+        self._published_once()
+        first = self.env.read(_ANCHOR).column("market_ret5_spy").to_pylist()[0]
+
+        # Second run, same dates, but the arithmetic now answers differently.
+        original = mod.five_session_index_returns
+        self.addCleanup(lambda: setattr(mod, "five_session_index_returns", original))
+        mod.five_session_index_returns = lambda *a, **k: {
+            "market_ret5_spy": -0.4242,
+            "market_ret5_qqq": -0.4242,
+            "market_ret5_iwm": -0.4242,
+        }
+
+        with self.assertRaises(mod.NotAdditiveError) as caught:
+            mod.run_backfill(briefs_dir=self.env.briefs, grouped_root=self.env.store, write=True)
+        self.assertIn("REPLACE", str(caught.exception))
+        self.assertIn("--overwrite", str(caught.exception))
+        # And the published value is untouched.
+        self.assertEqual(self.env.read(_ANCHOR).column("market_ret5_spy").to_pylist()[0], first)
+
+    def test_overwrite_permits_it_deliberately(self):
+        from scripts import backfill_market_index_series as mod
+
+        self._published_once()
+        original = mod.five_session_index_returns
+        self.addCleanup(lambda: setattr(mod, "five_session_index_returns", original))
+        mod.five_session_index_returns = lambda *a, **k: {
+            "market_ret5_spy": -0.4242,
+            "market_ret5_qqq": -0.4242,
+            "market_ret5_iwm": -0.4242,
+        }
+
+        report = mod.run_backfill(
+            briefs_dir=self.env.briefs,
+            grouped_root=self.env.store,
+            write=True,
+            overwrite=True,
+        )
+        self.assertEqual(report["refused"], [])
+        self.assertAlmostEqual(
+            self.env.read(_ANCHOR).column("market_ret5_spy").to_pylist()[0], -0.4242
+        )
+
+
+class TestThePublishedFileModeSurvives(unittest.TestCase):
+    """88 of the 112 published brief parquets measured on 2026-10-30 are 0600.
+    ``os.replace`` installs the TEMP file's mode on the published path, so without
+    carrying the mode across the run silently widens them to the process umask."""
+
+    def setUp(self):
+        self.env = _Env()
+        self.addCleanup(self.env.cleanup)
+
+    def test_a_0600_parquet_is_still_0600_afterwards(self):
+        import os
+        import stat
+
+        from scripts.backfill_market_index_series import run_backfill
+
+        path = self.env.briefs / f"{_ANCHOR.isoformat()}.parquet"
+        os.chmod(path, 0o600)
+        before = stat.S_IMODE(path.stat().st_mode)
+        self.assertEqual(before, 0o600)
+
+        run_backfill(briefs_dir=self.env.briefs, grouped_root=self.env.store, write=True)
+
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)

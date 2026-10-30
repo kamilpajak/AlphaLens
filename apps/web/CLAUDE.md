@@ -58,12 +58,17 @@ pnpm run build-storybook
 - Both must pass. There is no Storybook test-runner in CI, so `play()` assertions are NON-gating:
   they run only when a story is opened in `pnpm run storybook`. Verify there when an interaction
   matters.
-- `pnpm run check` exits 0 WITH warnings. Five tooltip triggers each emit one
-  `a11y_no_noninteractive_tabindex` — a focusable `span` is what makes the tooltip reachable by
-  touch and keyboard — and none carries a `svelte-ignore`; only `TooltipBubble.stories.svelte`
-  suppresses it. A 6th warning means a new trigger.
-- The warning COUNT was last measured by a full `pnpm run check` on **2026-09-15** and has not been
-  re-run since. The five trigger components were re-verified statically on 2026-10-14: `ChipTip`,
+- `pnpm run check` exits 0 WITH warnings. Count the warnings BY RULE, never in total: five tooltip
+  triggers each emit one `a11y_no_noninteractive_tabindex` — a focusable `span` is what makes the
+  tooltip reachable by touch and keyboard — and none carries a `svelte-ignore`; only
+  `TooltipBubble.stories.svelte` suppresses it. A SIXTH `a11y_no_noninteractive_tabindex` means a
+  new trigger; a sixth warning of some other rule means something else entirely.
+- Measured 2026-10-30: `0 ERRORS 6 WARNINGS`. The sixth is
+  `a11y_no_noninteractive_element_to_interactive_role` on `EvidenceDrawer.svelte:91` (an `<aside>`
+  carrying `role="dialog"`), which arrived with other work and is unrelated to the tooltip family.
+  The earlier wording here said a sixth warning meant a new trigger, which would have sent the next
+  reader hunting a tooltip that does not exist.
+- The per-rule counts were last measured by a full `pnpm run check` on **2026-10-30**. The five trigger components were re-verified statically on 2026-10-14: `ChipTip`,
   `ExpertPillar`, `GatePill`, `JargonTip` and `SignalBar` are the only sources under
   `src/lib/components/` carrying a real `tabindex` attribute with no `svelte-ignore`.
 
