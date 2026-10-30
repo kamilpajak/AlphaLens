@@ -1681,17 +1681,27 @@ def _reading_now() -> dt.datetime:
 def _pick_state(
     record: PickRecord,
     *,
-    submitted: set[tuple[str, str]],
+    at_broker: set[tuple[str, str]],
     decodable: Collection[tuple[str, str]],
     waiting: Collection[tuple[str, str]] = (),
 ) -> str:
     """Resolve one folded pick to a state: has anything reached the broker for it?
 
-    ``submitted`` is the EXISTENCE fold (``picks.keys_with_any_submission``),
-    not the drain's retirement fold. The two differ by exactly one record shape
-    — an immediate tier's own ``tranche == "now"`` line — and a pick made
-    entirely of immediate tiers carries no other, so asking the drain's
-    question here printed PENDING over filled real-money orders.
+    ``at_broker`` is the EXISTENCE fold (``picks.keys_with_any_submission``),
+    not the drain's retirement fold. The motivating difference is an immediate
+    tier's own ``tranche == "now"`` line, which the retirement fold skips by
+    design (#1247): a pick made entirely of immediate tiers carries no other
+    record, so asking the drain's question here printed PENDING over filled
+    real-money orders.
+
+    The two folds are NOT ordered, and nothing in them enforces an order. They
+    filter on DIFFERENT predicates — retirement on ``tranche``, existence on
+    ``tranche_meta.outcome`` — so a record with no ``tranche`` and an outcome in
+    ``_NO_ORDER_OUTCOMES`` sits in the retirement set and not in this one. No
+    writer emits that shape today (every ``refused_cap`` is written with
+    ``tranche="now"``), and ``test_the_retirement_fold_never_holds_a_key_the_existence_fold_lacks``
+    fails the moment one does, because such a pick would read PENDING — "the
+    drain will place it" — about a pick the drain has retired.
 
     Order matters: a pick present in the submissions journal is PLACED even if
     its armed line no longer decodes — the submission is the record of what
@@ -1706,7 +1716,7 @@ def _pick_state(
     # (ticker, identity token): generation 1 = the bare date, a same-day
     # re-arm = `<date>-g<N>` — the SAME pair picks.pick_key renders (#1371).
     key = (record.ticker, record.token)
-    if key in submitted:
+    if key in at_broker:
         return _PICK_STATE_PLACED
     if key not in decodable:
         return _PICK_STATE_UNREADABLE
@@ -1787,7 +1797,9 @@ def picks_command(
     ``picks.jsonl`` has no ``placed`` status: a pick submitted a month ago
     still reads ``armed`` as its latest line forever, because the drain
     decides what to place by joining armed picks against ``submissions.jsonl``
-    on (ticker, trade_date) rather than by reading the status. So the queue
+    on (ticker, identity token) rather than by reading the status — the token
+    being the bare trade date for generation 1 and ``<date>-g<N>`` for a
+    same-day re-arm (#1371). So the queue
     file alone cannot answer "what is still pending" — reading it straight
     once produced a report of 45 pending placements when the true count was 0.
 
@@ -1799,22 +1811,41 @@ def picks_command(
     tier's own record by design (#1247). Asking the drain's question for the
     state printed PENDING over filled orders.
 
-    One state per pick: PENDING (armed, decodable, and NOTHING has reached the
-    broker for it — the drain will place it), WAITING (armed and not placed
+    One state per pick: PENDING (armed, decodable, and the journal records
+    NOTHING for it — the drain will place it), WAITING (armed and not placed
     because free capital is short — the gross cap or the cash floor — with why,
-    as of when; #1734), PLACED (something has reached the broker for this pick,
-    or the drain has retired it; for a MIXED pick that can mean only its
-    immediate tier, and the row's ``detail`` and ``window_end`` say what the
-    drain still owes), REFUSED / DISARMED / EXPIRED (terminal, with the reason
-    or note; EXPIRED = still unplaced when its validity window ended),
-    UNREADABLE (armed but THIS pick's own line does not decode, so the drain
-    skips it forever — re-arm is the way back).
+    as of when; #1734), PLACED (the journal records an order for this pick, or
+    the drain has retired it), REFUSED / DISARMED / EXPIRED (terminal, with the
+    reason or note; EXPIRED = the validity window ended while the drain still
+    had work owing, which is NOT the same as nothing having been placed — see
+    the note below), UNREADABLE (armed but THIS pick's own line does not decode,
+    so the drain skips it forever — re-arm is the way back).
 
-    PLACED is NOT a venue claim. A pullback pick is retired the moment its
-    entry-trail watch opens, while the native trailing entry order is placed
-    later, at TOUCH, and journalled in ``entry_trails.jsonl`` — which this
-    command does not read. For what actually rests at the venue, use
-    ``broker reconcile``.
+    A terminal queue line always wins: a pick marked refused, disarmed or
+    expired reads that word whatever the submissions journal holds.
+
+    PLACED IS NOT A VENUE CLAIM, in three distinct ways, and this command
+    cannot close any of them because it reads journals and never the broker:
+
+    * The now tranche journals a write-ahead line BEFORE its first POST, so
+      PLACED can mean "an order was about to be sent".
+    * A pullback pick is retired the moment its entry-trail watch opens, while
+      the native trailing entry order is placed LATER, at the touch, and
+      journalled in ``entry_trails.jsonl``, which this command does not read.
+    * Nothing here is reconciled against the venue, so a cancelled or rejected
+      order still reads PLACED.
+
+    For what actually rests at the venue, use ``broker orders`` and
+    ``broker positions`` — both read the broker. ``broker reconcile`` does NOT
+    answer it either: its input is ``submissions.jsonl``, one verdict per
+    journalled bracket, so an entry-trail order it never saw is invisible there
+    too.
+
+    A MIXED pick (an immediate tier plus a pullback tier) whose immediate half
+    is at the broker reads PLACED, not WAITING, even while a capital gate holds
+    the rest — so it leaves ``counts.waiting`` and ``--state waiting``. Its gate
+    is still on the row, in ``wait`` and ``detail``, and ``broker status`` keeps
+    listing it under ``waiting_picks``.
 
     One fact is about the queue, not a row: while any line in ``picks.jsonl``
     cannot be read at all (torn bytes, non-JSON), the drain withholds EVERY
@@ -1823,10 +1854,13 @@ def picks_command(
     lines by hand does. Rows keep their own states: a pick that decodes still
     reads PENDING while nothing has reached the broker for it.
 
-    An armed, unplaced row carries ``window_end`` (``order_ttl_days`` sessions
-    after its trade date) and ``overdue``: only the daemon's drain expires a
-    pick, so an overdue row means the drain is not running (KILL, a dead
-    chain, a stopped daemon).
+    A row the DRAIN has not retired carries ``window_end`` (``order_ttl_days``
+    sessions after its trade date) and ``overdue``. That includes a PLACED row:
+    an immediate-only pick is placed at the broker and never retired, because
+    the retirement fold skips its own record, so it keeps both fields for life.
+    An overdue PENDING or WAITING row does mean the drain is not running (KILL,
+    a dead chain, a stopped daemon); an overdue PLACED row does not — the drain
+    may be perfectly healthy and simply has nothing that retires that pick.
 
     No broker, no auth, no mutation; safe while the daemon runs. Exit 0 for any
     successful read, including a missing journal (an empty queue is an honest
@@ -1900,7 +1934,7 @@ def picks_command(
                 "ticker": record.ticker,
                 "trade_date": record.trade_date.isoformat(),
                 "generation": record.generation,
-                "state": _pick_state(record, submitted=at_broker, decodable=decoded, waiting=waits),
+                "state": _pick_state(record, at_broker=at_broker, decodable=decoded, waiting=waits),
                 "armed_ts": record.record.get("armed_ts"),
                 "detail": _pick_detail(record, wait),
                 "wait": None

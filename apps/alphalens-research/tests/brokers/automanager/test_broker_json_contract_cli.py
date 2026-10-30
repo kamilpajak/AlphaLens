@@ -160,7 +160,15 @@ _JSON_COMMANDS: tuple[tuple[str, list[str], bool, tuple[str, ...]], ...] = (
         ("disarmed", "pick_key", "generation", "watches_cancelled", "picks_journal"),
     ),
     ("cancel", ["cancel", "O-1"], True, ("order_id", "cancelled")),
-    ("picks", ["picks"], True, ("picks", "counts", "picks_journal", "waits_journal")),
+    # `submissions_journal` is required too: the two-fold state resolves from
+    # that journal, so the field naming it is how a reader knows WHICH file the
+    # word PLACED was read out of. It was publishable-and-deletable before.
+    (
+        "picks",
+        ["picks"],
+        True,
+        ("picks", "counts", "picks_journal", "submissions_journal", "waits_journal"),
+    ),
     ("watches", ["watches"], True, ("watches", "watching", "journal")),
     ("status", ["status", "--offline"], True, ("exposure", "health", "orders", "waiting_picks")),
     ("stream-status", ["stream-status"], True, ("gauges", "job", "source")),

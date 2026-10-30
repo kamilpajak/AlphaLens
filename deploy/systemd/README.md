@@ -2245,7 +2245,12 @@ unplaced at its end gets one `expired` line in `picks.jsonl` and one page
 (`pick-expired:<pick key>`). A pick placed late rests only for what is left of
 its window. `broker picks` shows `WAITING` / `EXPIRED` (`alphalens.broker.picks/v2`)
 and `broker status` lists `waiting_picks` with the gate, its message as of when,
-and the window end (`overdue` when the drain is not running to expire it). With
+and the window end. Two caveats on that row, both from the two-fold state: a
+MIXED pick whose immediate tier already reached the broker reads `PLACED`
+rather than `WAITING`, so prefer `broker status` when the question is "what is
+capital holding"; and `overdue` on a `PLACED` row does NOT mean the drain is
+stopped — an immediate-only pick is never retired, so it carries `overdue`
+for life with a healthy daemon. With
 no count limit, "arm all of them" therefore places the picks that fit, in armed
 order, and the rest wait for capital until their windows end. To stop a waiting
 pick, `alphalens broker disarm` it.
