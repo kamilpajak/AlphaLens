@@ -21,11 +21,13 @@ Two discriminators the real store CANNOT provide, so both are synthetic:
 """
 
 import datetime as dt
+import math
 import tempfile
 import unittest
 from pathlib import Path
 
 import pandas as pd
+from alphalens_pipeline.market import market_state
 from alphalens_pipeline.market.calendar import advance_trading_sessions, n_sessions_before
 
 _TICKERS = ("SPY", "QQQ", "IWM")
@@ -301,3 +303,55 @@ class TestTheDisplayDataBoundary(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheStallBoundIsTightEnoughToMatter(unittest.TestCase):
+    """A 5-session bound let a THREE-day stall answer, and the backfill would then
+    bake three identical trios into three published parquets. Measured 2026-10-30
+    against a real store whose newest session was 2026-09-03.
+
+    The bound must admit a weekend — the pipeline runs 7 days a week and a Saturday
+    `asof` legitimately resolves to the Friday — and one failed top-up night, and
+    refuse anything deeper.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        _seed(self.root, _sessions(_ANCHOR, 6), _CLOSES)
+
+    def _spy(self, asof: dt.date) -> float:
+        return market_state.five_session_index_returns(asof, grouped_root=self.root)[
+            "market_ret5_spy"
+        ]
+
+    def test_the_anchor_session_itself_answers(self):
+        self.assertAlmostEqual(self._spy(_ANCHOR), -0.01)
+
+    def test_a_weekend_asof_answers_from_the_friday(self):
+        saturday = _ANCHOR + dt.timedelta(days=1)
+        self.assertEqual(saturday.weekday(), 5, "fixture anchor is not a Friday")
+        self.assertAlmostEqual(self._spy(saturday), -0.01)
+
+    def test_one_session_of_stall_still_answers(self):
+        one = advance_trading_sessions(_ANCHOR, 1)
+        self.assertFalse(
+            math.isnan(self._spy(one)), "one missed top-up night must not blank the strip"
+        )
+
+    def test_two_sessions_of_stall_is_nan_not_a_repeated_trio(self):
+        two = advance_trading_sessions(_ANCHOR, 2)
+        values = market_state.five_session_index_returns(two, grouped_root=self.root)
+        for column, value in values.items():
+            self.assertTrue(math.isnan(value), msg=f"{column} answered from a stalled store")
+
+    def test_the_constant_is_not_the_listing_one(self):
+        # They held the same value for the wrong reason: one guards a boolean that
+        # a week of lag cannot change, the other a five-session return.
+        from alphalens_pipeline.data import rs_history
+
+        self.assertLess(
+            market_state.MARKET_SERIES_MAX_LAG_SESSIONS,
+            rs_history.LISTING_STATUS_MAX_LAG_SESSIONS,
+        )

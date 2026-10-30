@@ -99,6 +99,22 @@ class NotAdditiveError(RuntimeError):
     """The staged rewrite of one date changed something it must not."""
 
 
+def _is_answered(value: Any) -> bool:
+    """Is a stored trio cell an ANSWER, or the absence of one?
+
+    The live `score` stage stamps NaN — not NULL — when the grouped store cannot
+    reach the asof, and this script's own missing convention is the same. So a
+    published NaN means "nobody has answered for this date yet" and may be filled
+    in by a later run; only a published REAL number is a value this run must not
+    replace behind the operator's back. Treating NaN as an answer refused the one
+    legitimate re-run there is, and left `--overwrite` — which drops the guard for
+    EVERY date in the run — as the only way through.
+    """
+    if value is None:
+        return False
+    return not (isinstance(value, float) and math.isnan(value))
+
+
 def _values_equal(left: Any, right: Any) -> bool:
     """Deep equality with NaN == NaN.
 
@@ -176,7 +192,7 @@ def check_additive(
             replaced = [
                 i
                 for i, (a, b) in enumerate(zip(lhs, rhs, strict=False))
-                if a is not None and not _values_equal(a, b)
+                if _is_answered(a) and not _values_equal(a, b)
             ]
             if replaced and not overwrite:
                 i = replaced[0]

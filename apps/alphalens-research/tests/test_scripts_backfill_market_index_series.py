@@ -19,7 +19,9 @@ store on it ends months before the brief dates (memory ``ref_local_mirror``).
 """
 
 import datetime as dt
+import importlib.util
 import math
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -105,6 +107,18 @@ def _write_brief(briefs_dir: Path, date: dt.date, table: pa.Table) -> Path:
     return path
 
 
+# The script lives under scripts/ (not an importable package) — load it by path,
+# the same way tests/test_backfill_grouped_daily_history.py does. A
+# `from scripts...` import resolves only under `unittest discover -t .`, which
+# left this file's own `__main__` block unable to run it at all.
+_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "backfill_market_index_series.py"
+_spec = importlib.util.spec_from_file_location("backfill_market_index_series", _SCRIPT)
+assert _spec and _spec.loader
+mod = importlib.util.module_from_spec(_spec)
+sys.modules["backfill_market_index_series"] = mod
+_spec.loader.exec_module(mod)
+
+
 class _Env:
     """A seeded grouped store plus a briefs dir holding the two brief dates."""
 
@@ -132,7 +146,7 @@ class TestTheBackfillIsAdditive(unittest.TestCase):
         self.addCleanup(self.env.cleanup)
 
     def test_it_adds_exactly_the_three_columns_with_the_computed_values(self):
-        from scripts.backfill_market_index_series import run_backfill
+        run_backfill = mod.run_backfill
 
         report = run_backfill(briefs_dir=self.env.briefs, grouped_root=self.env.store, write=True)
 
@@ -152,7 +166,7 @@ class TestTheBackfillIsAdditive(unittest.TestCase):
                 self.assertEqual(after.schema.field(col).type, pa.float64(), msg=col)
 
     def test_every_pre_existing_field_and_value_survives_unchanged(self):
-        from scripts.backfill_market_index_series import run_backfill
+        run_backfill = mod.run_backfill
 
         before = self.env.read(_ANCHOR)
         run_backfill(briefs_dir=self.env.briefs, grouped_root=self.env.store, write=True)
@@ -179,7 +193,7 @@ class TestTheBackfillIsAdditive(unittest.TestCase):
         # The discriminator against a pandas round trip: measured, read_parquet
         # + to_parquet rewrites `string` as `large_string` on 6 of 112 real brief
         # parquets. A fixture carrying BOTH types fails under that writer.
-        from scripts.backfill_market_index_series import run_backfill
+        run_backfill = mod.run_backfill
 
         run_backfill(briefs_dir=self.env.briefs, grouped_root=self.env.store, write=True)
         after = self.env.read(_ANCHOR)
@@ -188,7 +202,7 @@ class TestTheBackfillIsAdditive(unittest.TestCase):
         self.assertEqual(after.schema.field("rationale").type, pa.large_string())
 
     def test_a_second_run_is_idempotent(self):
-        from scripts.backfill_market_index_series import run_backfill
+        run_backfill = mod.run_backfill
 
         run_backfill(briefs_dir=self.env.briefs, grouped_root=self.env.store, write=True)
         first = self.env.read(_ANCHOR)
@@ -212,7 +226,7 @@ class TestDryRunWritesNothing(unittest.TestCase):
         self.addCleanup(self.env.cleanup)
 
     def test_the_default_run_reports_the_plan_and_touches_no_file(self):
-        from scripts.backfill_market_index_series import run_backfill
+        run_backfill = mod.run_backfill
 
         before = {d: p.read_bytes() for d, p in self.env.paths.items()}
         report = run_backfill(briefs_dir=self.env.briefs, grouped_root=self.env.store)
@@ -225,7 +239,7 @@ class TestDryRunWritesNothing(unittest.TestCase):
             self.assertEqual(self.env.paths[date].read_bytes(), blob, msg=str(date))
 
     def test_the_plan_names_the_values_it_would_write(self):
-        from scripts.backfill_market_index_series import run_backfill
+        run_backfill = mod.run_backfill
 
         report = run_backfill(briefs_dir=self.env.briefs, grouped_root=self.env.store)
         by_date = {row["date"]: row for row in report["dates"]}
@@ -246,8 +260,6 @@ class TestTheRefusalPathFires(unittest.TestCase):
         # Corrupt ONE pre-existing cell on ONE of the two dates. The run must
         # refuse BOTH — a partial landing is what makes the additivity licence
         # unverifiable afterwards.
-        from scripts import backfill_market_index_series as mod
-
         before = {d: p.read_bytes() for d, p in self.env.paths.items()}
         original = mod.augment
 
@@ -273,8 +285,6 @@ class TestTheRefusalPathFires(unittest.TestCase):
             self.assertEqual(self.env.paths[date].read_bytes(), blob, msg=str(date))
 
     def test_a_dropped_column_is_refused(self):
-        from scripts import backfill_market_index_series as mod
-
         original = mod.augment
 
         def _dropping(table, values, *, date):
@@ -293,8 +303,6 @@ class TestTheRefusalPathFires(unittest.TestCase):
     def test_a_changed_arrow_type_is_refused_even_with_equal_values(self):
         # The pandas-round-trip defect in isolation: same values, different
         # Arrow type. A values-only check would pass this.
-        from scripts import backfill_market_index_series as mod
-
         original = mod.augment
 
         def _retyping(table, values, *, date):
@@ -314,8 +322,6 @@ class TestTheRefusalPathFires(unittest.TestCase):
         self.assertIn("theme", str(ctx.exception))
 
     def test_a_dropped_row_is_refused(self):
-        from scripts import backfill_market_index_series as mod
-
         original = mod.augment
 
         def _slicing(table, values, *, date):
@@ -335,7 +341,7 @@ class TestTheStaleStoreRefusal(unittest.TestCase):
     """A store that does not reach the brief dates must NOT stamp a frozen trio."""
 
     def test_a_date_past_the_staleness_bound_is_refused_not_stamped(self):
-        from scripts.backfill_market_index_series import run_backfill
+        run_backfill = mod.run_backfill
 
         env = _Env()
         self.addCleanup(env.cleanup)
@@ -353,7 +359,7 @@ class TestTheStaleStoreRefusal(unittest.TestCase):
             self.assertNotIn("market_ret5_spy", env.read(date).column_names)
 
     def test_allow_missing_lets_an_operator_stamp_nulls_deliberately(self):
-        from scripts.backfill_market_index_series import run_backfill
+        run_backfill = mod.run_backfill
 
         env = _Env()
         self.addCleanup(env.cleanup)
@@ -391,7 +397,7 @@ class TestTheCommandLineSurface(unittest.TestCase):
         import io
         import json
 
-        from scripts.backfill_market_index_series import main
+        main = mod.main
 
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -406,7 +412,7 @@ class TestTheCommandLineSurface(unittest.TestCase):
         import contextlib
         import io
 
-        from scripts.backfill_market_index_series import main
+        main = mod.main
 
         _write_brief(self.env.briefs, dt.date(2026, 6, 15), self.env.table)
         out, err = io.StringIO(), io.StringIO()
@@ -421,16 +427,12 @@ class TestTheCommandLineSurface(unittest.TestCase):
         import contextlib
         import io
 
-        from scripts.backfill_market_index_series import main
+        main = mod.main
 
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             code = main(self._argv("--write", "--dry-run"))
         self.assertEqual(code, 2)
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestARerunCannotSilentlyReplaceAPublishedTrio(unittest.TestCase):
@@ -444,13 +446,11 @@ class TestARerunCannotSilentlyReplaceAPublishedTrio(unittest.TestCase):
         self.addCleanup(self.env.cleanup)
 
     def _published_once(self):
-        from scripts.backfill_market_index_series import run_backfill
+        run_backfill = mod.run_backfill
 
         run_backfill(briefs_dir=self.env.briefs, grouped_root=self.env.store, write=True)
 
     def test_a_rerun_computing_a_different_trio_is_refused(self):
-        from scripts import backfill_market_index_series as mod
-
         self._published_once()
         first = self.env.read(_ANCHOR).column("market_ret5_spy").to_pylist()[0]
 
@@ -471,8 +471,6 @@ class TestARerunCannotSilentlyReplaceAPublishedTrio(unittest.TestCase):
         self.assertEqual(self.env.read(_ANCHOR).column("market_ret5_spy").to_pylist()[0], first)
 
     def test_overwrite_permits_it_deliberately(self):
-        from scripts import backfill_market_index_series as mod
-
         self._published_once()
         original = mod.five_session_index_returns
         self.addCleanup(lambda: setattr(mod, "five_session_index_returns", original))
@@ -507,7 +505,7 @@ class TestThePublishedFileModeSurvives(unittest.TestCase):
         import os
         import stat
 
-        from scripts.backfill_market_index_series import run_backfill
+        run_backfill = mod.run_backfill
 
         path = self.env.briefs / f"{_ANCHOR.isoformat()}.parquet"
         os.chmod(path, 0o600)
@@ -517,3 +515,7 @@ class TestThePublishedFileModeSurvives(unittest.TestCase):
         run_backfill(briefs_dir=self.env.briefs, grouped_root=self.env.store, write=True)
 
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
+
+if __name__ == "__main__":
+    unittest.main()

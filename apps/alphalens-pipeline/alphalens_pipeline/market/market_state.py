@@ -511,17 +511,34 @@ MARKET_SERIES_COLUMNS: tuple[str, ...] = (
 MARKET_SERIES_WINDOW_SESSIONS = 5
 
 #: How far the newest stored session may lag ``asof`` before the answer is NaN
-#: rather than a number. Same value and same reason as
-#: ``rs_history.LISTING_STATUS_MAX_LAG_SESSIONS``: free-tier Polygon grouped-daily
-#: publishes session D around D+2, plus weekends and the nightly top-up cadence,
-#: so a healthy store has been observed ~4 sessions behind.
+#: rather than a number.
+#:
+#: NOT ``rs_history.LISTING_STATUS_MAX_LAG_SESSIONS`` (5), which this first copied.
+#: That constant guards a slow boolean — was a ticker listed — where a week of lag
+#: changes nothing; this is a 5-session RETURN, where a stale anchor silently
+#: measures the wrong five sessions. And its premise no longer holds: it assumed a
+#: healthy store sits ~4 sessions behind because free-tier Polygon publishes
+#: session D around D+2. Since #1774 anchored the top-up to Polygon's Eastern day
+#: boundary the store holds the session that just closed — measured over the seven
+#: days to 2026-10-28, the 00:05 ET fire landed it every time with zero 403s, and
+#: the store's newest session equalled the last closed session.
+#:
+#: So a healthy lag is ZERO sessions, and a weekend costs nothing: the pipeline
+#: runs 7 days a week, and a Saturday or Sunday ``asof`` resolves to the Friday,
+#: which the session calendar counts as no lag at all (verified).
+#:
+#: 1 leaves exactly one session of slack for one failed top-up night. Measured
+#: 2026-10-30 against a store ending 2026-09-03, by stall depth: at 5 a THREE-day
+#: stall still answers — which would publish three consecutive briefs carrying one
+#: identical trio and then let the backfill bake those duplicates into the
+#: published parquets. At 1, a two-session stall is already NaN.
 #:
 #: The bound is what stops a silent frozen trio. Measured on 2026-10-29 against a
 #: Mac mirror whose store ended 2026-09-03: asked for 2026-10-14, 2026-10-27 and
 #: 2026-10-28, the anchor rolled all three back to 2026-09-03 and WITHOUT this
 #: bound every one of them answered the identical trio (+0.27% / -0.48% / -1.54%)
 #: with no error and no warning — #1524's frozen-VIX defect in another dress.
-MARKET_SERIES_MAX_LAG_SESSIONS = 5
+MARKET_SERIES_MAX_LAG_SESSIONS = 1
 
 _SERIES_DTYPE = "float64"
 
