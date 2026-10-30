@@ -316,3 +316,68 @@ class TheGateCatchesWhatItIsFor(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# A `file.py:123` or `README:414` anchor. Requires either a known source
+# extension or the literal `README` before the colon, so a clock time
+# (`18:00`), a port (`localhost:9093`) and an issue reference are not matches.
+_LINE_ANCHOR = re.compile(
+    r"(?:README|[A-Za-z_][A-Za-z0-9_./-]*\.(?:py|md|yaml|yml|json|toml|sh|cfg|ini|txt)):\d+"
+)
+
+
+class NoInstructionFileCitesALineNumber(unittest.TestCase):
+    """A line anchor in a `CLAUDE.md` rots within DAYS, and reads as precise while it lies.
+
+    Measured 2026-10-30, before this gate, over the three app-level instruction
+    files: of 17 line anchors, 10 pointed somewhere else —
+    `commands/broker.py:158` at a bare `)` after `_CLI_FAILURE_CODES` moved to
+    `_cli_envelope.py`, `README:414` at a table separator, `broker.py:719` at a
+    blank line, `broker.py:111-113` at a comment rather than the
+    `if TYPE_CHECKING:` block it described. The pipeline file carried the
+    sentence "line anchors verified 2026-10-14" directly above four that had
+    already moved, which is worse than no claim at all.
+
+    The remedy is not to re-verify them on a cadence; it is to cite a SYMBOL or
+    a HEADING, both of which survive an edit above them. This gate makes the
+    cheap, rotting form impossible to reintroduce.
+    """
+
+    def test_no_tracked_instruction_file_cites_a_line_number(self) -> None:
+        offenders = {}
+        for path in _tracked_instruction_files():
+            hits = sorted(set(_LINE_ANCHOR.findall(path.read_text(encoding="utf-8"))))
+            if hits:
+                offenders[str(path.relative_to(REPO_ROOT))] = hits
+        self.assertEqual(
+            offenders,
+            {},
+            f"cite a symbol or a heading, not a line number — line anchors rot: {offenders}",
+        )
+
+    def test_the_corpus_is_not_empty(self) -> None:
+        # Without this, deleting every CLAUDE.md would turn the gate above green.
+        self.assertGreater(len(_tracked_instruction_files()), 5)
+
+
+class TheLineAnchorGateCatchesWhatItIsFor(unittest.TestCase):
+    """The pattern's own red/green, so a future narrowing cannot silently
+    disarm the gate above."""
+
+    def test_it_catches_a_module_line_anchor(self) -> None:
+        self.assertTrue(_LINE_ANCHOR.search("see `commands/broker.py:158` for the registry"))
+
+    def test_it_catches_a_readme_line_anchor(self) -> None:
+        self.assertTrue(_LINE_ANCHOR.search("the residual is stated at README:414 — the key"))
+
+    def test_it_catches_a_range_by_its_first_number(self) -> None:
+        self.assertTrue(_LINE_ANCHOR.search("`broker.py:98-105` imports it at module level"))
+
+    def test_it_swallows_a_clock_time(self) -> None:
+        self.assertIsNone(_LINE_ANCHOR.search("the timer fires at 18:00 CET on Sunday"))
+
+    def test_it_swallows_a_host_port(self) -> None:
+        self.assertIsNone(_LINE_ANCHOR.search("Prometheus answers on localhost:9093"))
+
+    def test_it_swallows_a_bare_module_reference(self) -> None:
+        self.assertIsNone(_LINE_ANCHOR.search("the registry lives in `_cli_envelope.py`"))
