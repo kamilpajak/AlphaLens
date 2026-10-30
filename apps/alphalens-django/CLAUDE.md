@@ -18,7 +18,7 @@ here, and it is NOT re-injected after `/compact`.
 - Second gate in the same file: `test_no_breaking_openapi_drift` diffs the live schema against
   `docs/openapi-parity/legacy.json` (the frozen FastAPI contract) and fails on a dropped path, a
   removed query param, or a response-field removal classified as breaking. When a removal is
-  intended, add the name to `INTENTIONAL_DROPS` in `scripts/openapi_parity.py:42` with a
+  intended, add the name to `INTENTIONAL_DROPS` in `scripts/openapi_parity.py` with a
   justification.
 - Run both: `just test-django`, or just the gate with
   `cd apps/alphalens-django && uv run pytest briefs/tests/test_openapi_parity.py`.

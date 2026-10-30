@@ -12,15 +12,19 @@ vendor stay in the root `CLAUDE.md`.
 - Why: the Layer-1 `edgar-detect` timer fires every 15 min, so every invoke pays the import cost.
   A top-level research-tier import was measured at +913 ms per invoke. No test guards startup
   time — re-measure with `time .venv/bin/alphalens --help`.
-- Live exemplars, line anchors verified 2026-10-14:
-  - `alphalens_cli/commands/feedback.py` — the doctrine is the module-docstring note at lines
-    9-11; the first real in-body import is at line 206.
-  - `alphalens_cli/commands/broker.py` — the doctrine is the module-docstring note at lines
-    77-79; in-body imports at lines 438, 610, 664 and 719. The block at 111-113 is
-    `TYPE_CHECKING`-guarded, not a lazy-import site.
-- One deliberate top-level exception, with its reasoning written beside it: `broker.py:98-105`
-  imports `broker_contract` at module level (~2.6 ms, and `_fail` needs the failure registry on
-  every refusal path). Add an exception only with the same kind of measured note.
+- Live exemplars, cited by SYMBOL on purpose — a line number in this file rots within days, and a
+  stale one sends the next session to the wrong place with full confidence:
+  - `alphalens_cli/commands/feedback.py` — the doctrine is the lazy-import note in the module
+    docstring; every `alphalens_pipeline.feedback.*` import sits inside a command body.
+  - `alphalens_cli/commands/broker.py` — the doctrine is the module docstring's paragraph
+    beginning "All ``brokers`` imports are lazy inside command bodies". List the in-body sites
+    with `grep -c '^    from alphalens_pipeline' <file>` (60 in `broker.py`, 8 in `feedback.py`
+    as of 2026-10-30). The `if TYPE_CHECKING:` block near the top is type-only, NOT a
+    lazy-import site: those imports never run.
+- One deliberate top-level exception, with its reasoning written beside it: the comment block
+  above `from broker_contract.failure import Suggestion` in `commands/broker.py` — the whole of
+  `broker_contract` costs ~2.6 ms at module level, and `_fail` needs the failure registry on
+  every refusal path. Add an exception only with the same kind of measured note.
 - `commands/{audit,preaudit}.py` lazy-import `alphalens_research.*` because a top-level
   pipeline -> research import is forbidden (root rule; enforced by
   `apps/alphalens-research/tests/test_module_dependencies.py`). `commands/preregister.py`
@@ -33,15 +37,15 @@ vendor stay in the root `CLAUDE.md`.
 | SEC EDGAR | per-IP (the User-Agent identifies the caller, it does not scope the quota) | 10 req/s | VPS and Mac hold independent buckets; every process on ONE host shares one bucket, however many keys it has. |
 | Alpha Vantage | per API key | 25 req/day (free tier) | A second key is a second pool; one key called from many hosts is still one pool. |
 | Polygon | per API key | 5 req/min on the Starter plan ($29/mo) | Quota follows the key, not the host. |
-| OpenRouter | per API key | no free tier on v4-pro; prices in `data/alt_data/openrouter_client.py:52-57` | The pipeline uses its own key, so its cost stays separate from review tooling's. |
+| OpenRouter | per API key | no free tier on v4-pro; prices in the "Pricing era" note in `data/alt_data/openrouter_client.py` | The pipeline uses its own key, so its cost stays separate from review tooling's. |
 
 - The per-IP row is why `data/alt_data/sec_rate_coordinator.py` exists: on the VPS three processes
   (`edgar-detect`, thematic ingest, the companyfacts preload) share one residential IP, each with
   its own in-process throttle, and the aggregate drew a traffic-threshold 403 — epic #379. It
   serialises the next-allowed-call wall timestamp through one flock'd file under `~/.alphalens/`,
   holding the lock only for read-reserve-write and never across the sleep.
-- Each client's module docstring states its own current limit (`sec_edgar_client.py:1-6`,
-  `alphavantage_client.py:7`, `polygon_client.py:3`, `openrouter_client.py:52-57`). Read those
+- Each client's module docstring states its own current limit (`sec_edgar_client.py`,
+  `alphavantage_client.py`, `polygon_client.py`, `openrouter_client.py`). Read those
   before trusting the table; correct both when a plan changes.
 
 ## broker CLI surface
@@ -70,7 +74,8 @@ the TOCTOU residual are stated there, not here.
   first", not "the cause was transient" — `write_outcome_unknown` has a transient cause and a
   forbidden retry, because the order may already rest at the broker.
 - **The code registry is SPLIT and stays split:** `broker_contract/failure.py` owns the nine
-  contract codes, `commands/broker.py:158` (`_CLI_FAILURE_CODES`) owns the CLI concepts. Putting a
+  contract codes, `commands/_cli_envelope.py` (`_CLI_FAILURE_CODES`) owns the CLI concepts —
+  `commands/broker.py` re-exports both names for gates that predate the move. Putting a
   CLI concept in the shared package is the #1122 mistake again. A `_fail_with` call with an
   unregistered code is a CI failure (AST gate) and a logged warning at runtime.
 - **Only `broker manage` places or amends orders.** An AST gate over `alphalens_cli` bars every
