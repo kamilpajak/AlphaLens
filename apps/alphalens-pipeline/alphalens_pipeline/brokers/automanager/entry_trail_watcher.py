@@ -42,13 +42,24 @@ bid-referenced. The sampling that makes it so is
 :func:`alphalens_pipeline.brokers.automanager.entry_watch._point_sample_bids`,
 which reads no other field; its docstring carries the rest.
 
+The two reasons in the paragraph above ARE the recorded rationale — §4d of the
+same memo quotes this docstring as written on 2026-08-13 and adjudicates both
+halves. The second half does not survive: the order placed here is
+``TrailingStopIfTraded``, and the memo's `## T3` order-type list records Saxo
+offering "StopIfBid/Offered" beside it, so the suffix distinguishes a series and
+ours says TRADED. A 2026-08-07 LIVE precheck in
+``trailing_execution_design_2026_08_07.md`` points the same way. Nobody has
+checked which series the server's ratchet actually follows, and §4d names two
+read-only ways to find out before any attended probe. Read it before changing the
+reference or defending it.
+
 This paragraph used to cite a "memo trap #8". The citation was dropped on
 2026-10-28 because it could not be followed: as of that date no tracked
 markdown in any branch's history carried the phrase — only the two comments
 that cited it. The fact it stood for is stated above instead. Do NOT re-run
-that search expecting an empty result: section 9 of
-``docs/research/replay_vs_live_panel_2026_10_11.md`` records the removal and
-names the phrase, so it is the one tracked document that matches today.
+that search expecting an empty result: §4d and §9 of the memo above, and
+section 9 of ``docs/research/replay_vs_live_panel_2026_10_11.md``, now name the
+phrase themselves, so a search returns those documents and no third thing.
 """
 
 from __future__ import annotations
