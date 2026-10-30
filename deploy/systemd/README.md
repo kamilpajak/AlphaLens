@@ -1717,6 +1717,11 @@ from alphalens_pipeline.brokers import submission_log as SL
 
 for env in ("sim", "live"):
     base = pathlib.Path.home() / ".alphalens/broker_orders" / env
+    # Retirement, not existence: a pick made entirely of immediate tiers stays
+    # listed here even though its order rests at the broker, because this fold
+    # skips an immediate tier's own record (#1247). Do NOT swap it for
+    # keys_with_any_submission — that would hide a mixed pick's unplaced half,
+    # which is the half this snippet is looking for.
     done = P.submitted_pick_keys(list(SL.iter_submission_records(base / "submissions.jsonl")))
     at_risk = [
         P.pick_key(i)

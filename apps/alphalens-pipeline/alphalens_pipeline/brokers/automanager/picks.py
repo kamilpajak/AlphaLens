@@ -48,7 +48,15 @@ joining the armed picks against the submissions journal on
 record (the submission) and this journal cannot disagree with it. The cost is
 that ``picks.jsonl`` read ALONE cannot answer "what is still pending" — every
 long-placed pick still reads ``armed`` forever. :func:`read_pick_fold` is the
-reader's half of that join (issue #1197); `alphalens broker picks` performs it.
+reader's half of that join (issue #1197).
+
+`alphalens broker picks` performs BOTH joins, because they answer different
+questions: :func:`keys_with_any_submission` resolves the state (has anything
+reached the broker for this pick?) and :func:`submitted_pick_keys` bounds the
+wait line and the validity window (has the DRAIN finished with it?). They
+differ by one record shape — an immediate tier's own ``tranche == "now"`` line
+— and using the retirement fold for the state printed PENDING over filled
+orders on 2026-10-30.
 """
 
 from __future__ import annotations

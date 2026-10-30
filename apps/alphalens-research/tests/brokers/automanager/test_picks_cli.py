@@ -50,6 +50,37 @@ def _submit(home: Path, ticker: str, trade_date: str, env: str = "sim") -> None:
         fh.write(json.dumps({"ticker": ticker.upper(), "trade_date": trade_date}) + "\n")
 
 
+def _submit_now(
+    home: Path,
+    ticker: str,
+    trade_date: str,
+    outcome: str = "placed",
+    env: str = "sim",
+) -> None:
+    """A submission record for an IMMEDIATE tier.
+
+    The shape ``submitted_pick_keys`` skips on purpose (#1247 — the now half
+    must not retire a pick before its pullback half is placed) and
+    ``keys_with_any_submission`` counts. No test in this file built one before
+    the two-fold view, which is why nothing here caught the 2026-10-30 LIVE
+    incident.
+    """
+    path = _submissions_path(home, env)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(
+            json.dumps(
+                {
+                    "ticker": ticker.upper(),
+                    "trade_date": trade_date,
+                    "tranche": "now",
+                    "tranche_meta": {"outcome": outcome},
+                }
+            )
+            + "\n"
+        )
+
+
 def _append_raw(path: Path, record: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
@@ -504,3 +535,85 @@ class PicksCommandEnvTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PicksCommandImmediateTierTest(unittest.TestCase):
+    """A pick made entirely of IMMEDIATE tiers has no pullback half, so its own
+    now record is the only evidence that anything reached the broker — and
+    ``submitted_pick_keys`` skips exactly that record by design (#1247).
+
+    The view therefore asks the EXISTENCE question
+    (``keys_with_any_submission``) while the wait line and the window keep
+    asking the drain's RETIREMENT question (``submitted_pick_keys``). Two
+    questions, one journal read.
+
+    Measured on LIVE 2026-10-30: NVDA, AMAT and AVGO each carried one immediate
+    tier, were placed and FILLED with resting disaster stops at 17:49 UTC, and
+    this view reported PENDING for all three while an operator watched the
+    drain and concluded nothing had been placed.
+    """
+
+    def setUp(self) -> None:
+        self.runner = CliRunner()
+        self.home = isolate_home(self)
+
+    def test_a_placed_immediate_tier_reads_placed_not_pending(self) -> None:
+        # The 2026-10-30 incident, reduced. Red before the two-fold view: the
+        # state came from the drain's retirement fold, which skips this record.
+        _arm(self.home, "NVDA", "2026-10-30")
+        _submit_now(self.home, "NVDA", "2026-10-30")
+        result = _run(self.runner, "--format", "json")
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(_rows(result)["NVDA"]["state"], "PLACED")
+
+    def test_a_placed_immediate_pick_keeps_its_window_and_overdue(self) -> None:
+        # Kills keying the WINDOW on the existence fold (the one-line swap).
+        # The drain has not retired this pick, so it still owes it an expiry and
+        # the row must keep saying when that is due. The contract README
+        # documents window_end/overdue against the retirement join.
+        _arm(self.home, "NVDA", "2026-10-30")
+        _submit_now(self.home, "NVDA", "2026-10-30")
+        row = _rows(_run(self.runner, "--format", "json"))["NVDA"]
+        self.assertEqual(row["state"], "PLACED")
+        self.assertIsNotNone(
+            row["window_end"],
+            "the drain has not retired it, so its window still stands",
+        )
+
+    def test_a_mixed_pick_reads_placed_and_keeps_its_capital_gate_message(self) -> None:
+        # Kills passing the existence fold to `open_waits`. A mixed pick whose
+        # immediate half is at the broker while the capital gates hold its
+        # pullback half must say BOTH: something was placed, and why the rest
+        # is not. The swap drops the whole message.
+        _arm(self.home, "KO", "2026-07-20")
+        _wait(self.home, "KO", "2026-07-20")
+        _submit_now(self.home, "KO", "2026-07-20")
+        row = _rows(_run(self.runner, "--format", "json"))["KO"]
+        self.assertEqual(row["state"], "PLACED")
+        self.assertIsNotNone(row["wait"], "the drain still owes the pullback half")
+        self.assertIn("needs more than is free", row["detail"])
+
+    def test_a_now_half_refused_above_cap_stays_pending(self) -> None:
+        # Honest about its own power: this is GREEN before the two-fold view as
+        # well, because the narrow fold also yields PENDING. It becomes
+        # load-bearing AFTER it — once the state reads the generous fold,
+        # `_NO_ORDER_OUTCOMES` is the only guard keeping a tranche that was
+        # never submitted out of PLACED. The mutation it kills is emptying that
+        # frozenset, not reverting the view.
+        _arm(self.home, "NVDA", "2026-10-30")
+        _submit_now(self.home, "NVDA", "2026-10-30", outcome="refused_cap")
+        row = _rows(_run(self.runner, "--format", "json"))["NVDA"]
+        self.assertEqual(row["state"], "PENDING")
+
+    def test_the_view_calls_both_folds_and_its_help_names_them(self) -> None:
+        # Drift in BOTH directions: code that stops calling one fold, and help
+        # that keeps claiming the view performs only the drain's join.
+        import inspect
+
+        from alphalens_cli.commands.broker import picks_command
+
+        doc = picks_command.__doc__ or ""
+        body = inspect.getsource(picks_command).replace(doc, "")
+        for fold in ("keys_with_any_submission", "submitted_pick_keys"):
+            self.assertIn(fold, body, f"the view must call {fold}")
+            self.assertIn(fold, doc, f"the published help must name {fold}")

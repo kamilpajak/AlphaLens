@@ -1685,7 +1685,13 @@ def _pick_state(
     decodable: Collection[tuple[str, str]],
     waiting: Collection[tuple[str, str]] = (),
 ) -> str:
-    """Resolve one folded pick to a state, mirroring the drain's decision.
+    """Resolve one folded pick to a state: has anything reached the broker for it?
+
+    ``submitted`` is the EXISTENCE fold (``picks.keys_with_any_submission``),
+    not the drain's retirement fold. The two differ by exactly one record shape
+    — an immediate tier's own ``tranche == "now"`` line — and a pick made
+    entirely of immediate tiers carries no other, so asking the drain's
+    question here printed PENDING over filled real-money orders.
 
     Order matters: a pick present in the submissions journal is PLACED even if
     its armed line no longer decodes — the submission is the record of what
@@ -1785,22 +1791,37 @@ def picks_command(
     file alone cannot answer "what is still pending" — reading it straight
     once produced a report of 45 pending placements when the true count was 0.
 
-    This command performs that same join, through the same
-    ``picks.submitted_pick_keys`` the drain calls, and resolves one state per
-    pick: PENDING (armed, decodable, not yet submitted — the drain will place
-    it), WAITING (armed and not placed because free capital is short — the
-    gross cap or the cash floor — with why, as of when; #1734), PLACED
-    (already joined to a submission), REFUSED / DISARMED / EXPIRED (terminal,
-    with the reason or note; EXPIRED = still unplaced when its validity window
-    ended), UNREADABLE (armed but THIS pick's own line does not decode, so the
-    drain skips it forever — re-arm is the way back).
+    This command performs that join TWICE, because the queue answers two
+    different questions. ``picks.keys_with_any_submission`` resolves the state
+    — has anything reached the broker for this pick, an immediate tier's own
+    record included. ``picks.submitted_pick_keys`` bounds the wait line and
+    ``window_end`` — has the DRAIN finished with it, which skips an immediate
+    tier's own record by design (#1247). Asking the drain's question for the
+    state printed PENDING over filled orders.
+
+    One state per pick: PENDING (armed, decodable, and NOTHING has reached the
+    broker for it — the drain will place it), WAITING (armed and not placed
+    because free capital is short — the gross cap or the cash floor — with why,
+    as of when; #1734), PLACED (something has reached the broker for this pick,
+    or the drain has retired it; for a MIXED pick that can mean only its
+    immediate tier, and the row's ``detail`` and ``window_end`` say what the
+    drain still owes), REFUSED / DISARMED / EXPIRED (terminal, with the reason
+    or note; EXPIRED = still unplaced when its validity window ended),
+    UNREADABLE (armed but THIS pick's own line does not decode, so the drain
+    skips it forever — re-arm is the way back).
+
+    PLACED is NOT a venue claim. A pullback pick is retired the moment its
+    entry-trail watch opens, while the native trailing entry order is placed
+    later, at TOUCH, and journalled in ``entry_trails.jsonl`` — which this
+    command does not read. For what actually rests at the venue, use
+    ``broker reconcile``.
 
     One fact is about the queue, not a row: while any line in ``picks.jsonl``
     cannot be read at all (torn bytes, non-JSON), the drain withholds EVERY
     placement (#1788) and the report says ``placement_withheld``. Re-arming
     does NOT clear that — the journal is append-only, so only repairing those
     lines by hand does. Rows keep their own states: a pick that decodes still
-    reads PENDING, it is simply not placed yet.
+    reads PENDING while nothing has reached the broker for it.
 
     An armed, unplaced row carries ``window_end`` (``order_ttl_days`` sessions
     after its trade date) and ``overdue``: only the daemon's drain expires a
@@ -1836,7 +1857,17 @@ def picks_command(
     _guard_state_layout()
 
     fold = picks_mod.read_pick_fold(path=picks_target)
-    submitted = picks_mod.submitted_pick_keys(iter_submission_records(submissions_target))
+    # ONE journal read, TWO questions, and they are not the same question.
+    # `retired` is the DRAIN's: has it finished with this pick? It skips an
+    # immediate tier's own record on purpose (#1247 — the now half must not
+    # retire a pick before its pullback half is placed), and it still bounds the
+    # wait line and the window below, because the drain does still owe those.
+    # `at_broker` is the EXISTENCE question this view is actually asking. Asking
+    # the drain's question here reported PENDING over three FILLED real-money
+    # orders on 2026-10-30 (NVDA, AMAT, AVGO — one immediate tier each).
+    submission_records = list(iter_submission_records(submissions_target))
+    retired = picks_mod.submitted_pick_keys(submission_records)
+    at_broker = picks_mod.keys_with_any_submission(submission_records)
     # The REAL decoder decides decodability — a second one here would be free to
     # disagree with the drain about which picks it can place. The UNGATED reader
     # on purpose: `iter_picks` withholds the WHOLE queue while any line is
@@ -1847,12 +1878,12 @@ def picks_command(
         picks_mod.pick_key(intent): intent
         for intent in picks_mod.iter_decodable_picks(path=picks_target)
     }
-    waits = pick_waits.open_waits(fold.records, submitted, pick_waits.read_waits(path=waits_target))
+    waits = pick_waits.open_waits(fold.records, retired, pick_waits.read_waits(path=waits_target))
     now = _reading_now()
 
     def _window_end(key: tuple[str, str], record: PickRecord) -> str | None:
         intent = decoded.get(key)
-        if intent is None or record.status != picks_mod.STATUS_ARMED or key in submitted:
+        if intent is None or record.status != picks_mod.STATUS_ARMED or key in retired:
             return None
         try:
             return pick_window.window_of(intent).window_end.isoformat()
@@ -1869,7 +1900,7 @@ def picks_command(
                 "ticker": record.ticker,
                 "trade_date": record.trade_date.isoformat(),
                 "generation": record.generation,
-                "state": _pick_state(record, submitted=submitted, decodable=decoded, waiting=waits),
+                "state": _pick_state(record, submitted=at_broker, decodable=decoded, waiting=waits),
                 "armed_ts": record.record.get("armed_ts"),
                 "detail": _pick_detail(record, wait),
                 "wait": None

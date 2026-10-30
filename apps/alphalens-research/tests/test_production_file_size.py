@@ -148,7 +148,15 @@ BASELINE: dict[str, int] = {
     # #1732 having removed that section), 7 for the rendered line beside
     # `refused` / `expired` and 4 of comment saying why the line is guarded on a
     # truthy count rather than on the field being present.
-    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3241,
+    # Raised by 31: `broker picks` now performs BOTH submission joins, because
+    # the state answers "has anything reached the broker" while the wait line
+    # and the window answer "has the drain finished". The room is 2 lines of
+    # code (the shared journal read plus the second fold), 8 of comment at the
+    # call site saying why the two questions are not the same one, 6 in
+    # `_pick_state`'s docstring naming which fold it receives, and 15 of
+    # published `--help` — the state glosses were claims about the command and
+    # three of them were false once the state changed meaning.
+    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3272,
     # Raised by 8: the score stage now also stamps the three raw broad-index
     # 5-session returns beside the market-state label. The room is 1 line of
     # lazy call and 7 of comment saying why the family is separate from the
