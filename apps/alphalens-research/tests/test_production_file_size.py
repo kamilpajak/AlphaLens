@@ -149,7 +149,13 @@ BASELINE: dict[str, int] = {
     # `refused` / `expired` and 4 of comment saying why the line is guarded on a
     # truthy count rather than on the field being present.
     "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3241,
-    "apps/alphalens-pipeline/alphalens_cli/commands/thematic.py": 1708,
+    # Raised by 8: the score stage now also stamps the three raw broad-index
+    # 5-session returns beside the market-state label. The room is 1 line of
+    # lazy call and 7 of comment saying why the family is separate from the
+    # label it sits next to — display data, version-free, out of
+    # MARKET_STATE_COLUMNS and out of the sort — because the two calls are
+    # adjacent and a reader would otherwise assume one family.
+    "apps/alphalens-pipeline/alphalens_cli/commands/thematic.py": 1716,
     # Raised again, by 8, to say that the raise page's ticker fallback is
     # unreachable by construction. It sits beside the stop-PLACED page's
     # fallback, which looks identical and IS reachable and tested, so without

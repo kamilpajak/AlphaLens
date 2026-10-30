@@ -57,7 +57,14 @@ from typing import Any
 
 import pandas as pd
 
-from alphalens_pipeline.data.rs_history import DEFAULT_RS_HISTORY_ROOT
+from alphalens_pipeline.brief_contract.validation import warn_on_column_disagreement
+from alphalens_pipeline.data.rs_history import (
+    DEFAULT_RS_HISTORY_ROOT,
+    _close,
+    _newest_session_on_or_before,
+    read_grouped_day,
+)
+from alphalens_pipeline.market.calendar import DEFAULT_EXCHANGE, n_sessions_before
 from alphalens_pipeline.market.primitives import (
     atr_pct,
     bollinger_keltner_squeeze,
@@ -447,10 +454,232 @@ def enrich(
     return out
 
 
+# --- Raw index 5-session returns: DISPLAY DATA, no version ---------------------
+#
+# WHY THIS FAMILY IS NOT PART OF THE CLASSIFIER ABOVE, AND MUST NOT BECOME ONE
+#
+# A four-state word cannot show a sector drawdown. The label watches SPY, and a
+# window where SPY fell 1.08% is 'quiet' by its own frozen rule even while the
+# Nasdaq drew down 6.2% — the label was not wrong, it was blind by construction
+# (2026-10-13..27). These three numbers are the missing breadth: the FIVE-SESSION
+# percent change of SPY, QQQ and IWM, per date, so a reader sees the dispersion
+# the word folds away.
+#
+# They are DISPLAY DATA and carry NO ``config_version``, deliberately. A version
+# string identifies exactly one emission rule; this family has none to identify.
+# ``close(current) / close(5 sessions before current) - 1`` is raw arithmetic on
+# a public close series: no threshold, no deadband, no fold, nothing fitted. So
+# there is nothing to pool across and nothing a bump could orphan, and the window
+# stays editable without partitioning anyone's panel. For the same reason the
+# three names stay OUT of :data:`MARKET_STATE_COLUMNS` and
+# :data:`MARKET_STATE_CONFIG_VERSION`'s poolability story: putting them in would
+# claim they were produced by the classifier's frozen rule, which they are not.
+#
+# They are also NOT a feature set. Measured over 530 sessions the three series
+# correlate 0.72-0.94 and ONE principal component explains 88.2% of their
+# variance, so a study treating them as three inputs is fitting one. A study that
+# wants a market feature derives it from the grouped-daily store itself, with its
+# own pre-committed window — see
+# docs/research/ml_label_registry_design_2026_09_16.md.
+#
+# Held out of selection and of the brief sort exactly like the label, and pinned
+# there by ``tests/test_no_market_state_in_selection.py``.
+
+#: Stored column name -> the ETF whose close series answers it. This mapping is
+#: the WRITER: :func:`five_session_index_returns` iterates it, so these three
+#: names are what reaches the parquet.
+MARKET_SERIES_TICKERS: dict[str, str] = {
+    "market_ret5_spy": "SPY",
+    "market_ret5_qqq": "QQQ",
+    "market_ret5_iwm": "IWM",
+}
+
+#: The DECLARATION, written out rather than derived from
+#: :data:`MARKET_SERIES_TICKERS`. Spelling the names a second time is the point:
+#: a declaration assembled from the writer's own keys cannot disagree with it, so
+#: renaming one would rename a production column with nothing red (the inversion
+#: ``brief_contract/columns.py`` documents for four of the enricher families).
+#: Here the tuple only ever CHECKS a frame — :func:`enrich_index_series` reports
+#: a disagreement through ``warn_on_column_disagreement`` and never repairs one.
+MARKET_SERIES_COLUMNS: tuple[str, ...] = (
+    "market_ret5_spy",
+    "market_ret5_qqq",
+    "market_ret5_iwm",
+)
+
+#: Sessions in the window. Six closes span five sessions of return.
+MARKET_SERIES_WINDOW_SESSIONS = 5
+
+#: How far the newest stored session may lag ``asof`` before the answer is NaN
+#: rather than a number.
+#:
+#: NOT ``rs_history.LISTING_STATUS_MAX_LAG_SESSIONS`` (5), which this first copied.
+#: That constant guards a slow boolean — was a ticker listed — where a week of lag
+#: changes nothing; this is a 5-session RETURN, where a stale anchor silently
+#: measures the wrong five sessions. And its premise no longer holds: it assumed a
+#: healthy store sits ~4 sessions behind because free-tier Polygon publishes
+#: session D around D+2. Since #1774 anchored the top-up to Polygon's Eastern day
+#: boundary the store holds the session that just closed — measured over the seven
+#: days to 2026-10-28, the 00:05 ET fire landed it every time with zero 403s, and
+#: the store's newest session equalled the last closed session.
+#:
+#: So a healthy lag is ZERO sessions, and a weekend costs nothing: the pipeline
+#: runs 7 days a week, and a Saturday or Sunday ``asof`` resolves to the Friday,
+#: which the session calendar counts as no lag at all (verified).
+#:
+#: 1 leaves exactly one session of slack for one failed top-up night. Measured
+#: 2026-10-30 against a store ending 2026-09-03, by stall depth: at 5 a THREE-day
+#: stall still answers — which would publish three consecutive briefs carrying one
+#: identical trio and then let the backfill bake those duplicates into the
+#: published parquets. At 1, a two-session stall is already NaN.
+#:
+#: The bound is what stops a silent frozen trio. Measured on 2026-10-29 against a
+#: Mac mirror whose store ended 2026-09-03: asked for 2026-10-14, 2026-10-27 and
+#: 2026-10-28, the anchor rolled all three back to 2026-09-03 and WITHOUT this
+#: bound every one of them answered the identical trio (+0.27% / -0.48% / -1.54%)
+#: with no error and no warning — #1524's frozen-VIX defect in another dress.
+MARKET_SERIES_MAX_LAG_SESSIONS = 1
+
+_SERIES_DTYPE = "float64"
+
+
+def five_session_index_returns(
+    asof: dt.date,
+    *,
+    grouped_root: Path | str | None = None,
+    window: int = MARKET_SERIES_WINDOW_SESSIONS,
+    max_lag_sessions: int = MARKET_SERIES_MAX_LAG_SESSIONS,
+    exchange: str = DEFAULT_EXCHANGE,
+) -> dict[str, float]:
+    """``{column: 5-session percent change}`` for the three broad-index ETFs.
+
+    Disk-only (the grouped-daily store), PIT, split-adjusted. The anchor is the
+    newest STORED session on or before ``asof`` — the thematic pipeline runs 7
+    days a week, so a weekend brief date rolls back to the last real close — and
+    the lookback is ``window`` sessions before THAT resolved anchor, taken from
+    the exchange calendar.
+
+    Both endpoints are read BY LABEL, never by position. Position is not session:
+    the store can hold an unhealed gap, and ``iloc[-1 - window]`` over whatever
+    happens to be on disk would silently measure a longer span and still return a
+    plausible number. A missing endpoint is ``float('nan')`` — never a shorter
+    window, never a 0.0 (the ``rs_percentile`` tri-state discipline, in the one
+    missing convention a float64 column has).
+
+    NaN for a given column when: the store holds no session on or before
+    ``asof``; the newest one lags ``asof`` by more than ``max_lag_sessions``
+    sessions (see that constant — this is the guard against stamping one frozen
+    trio onto every later date); the lookback snapshot is off disk; or that ETF is
+    absent from, or non-positively priced in, either endpoint.
+    """
+    nan = float("nan")
+    blank = dict.fromkeys(MARKET_SERIES_TICKERS, nan)
+
+    root = Path(grouped_root) if grouped_root is not None else DEFAULT_RS_HISTORY_ROOT
+    current = _newest_session_on_or_before(root, asof)
+    if current is None:
+        logger.warning("market_ret5: no stored session on or before %s", asof)
+        return blank
+    if current < n_sessions_before(asof, max_lag_sessions, exchange):
+        logger.warning(
+            "market_ret5: newest stored session %s lags %s by more than %d sessions — "
+            "returning NaN rather than a stale trio",
+            current,
+            asof,
+            max_lag_sessions,
+        )
+        return blank
+
+    lookback = n_sessions_before(current, window, exchange)
+    now_map = read_grouped_day(root, current)
+    then_map = read_grouped_day(root, lookback)
+    if now_map is None or then_map is None:
+        logger.warning(
+            "market_ret5: an endpoint is off disk (anchor %s present=%s, lookback %s present=%s)",
+            current,
+            now_map is not None,
+            lookback,
+            then_map is not None,
+        )
+        return blank
+
+    out: dict[str, float] = {}
+    for column, ticker in MARKET_SERIES_TICKERS.items():
+        now = _close(now_map.get(ticker.upper(), {}))
+        then = _close(then_map.get(ticker.upper(), {}))
+        out[column] = nan if now is None or then is None else now / then - 1.0
+    return out
+
+
+def enrich_index_series(
+    frame: pd.DataFrame,
+    *,
+    asof: dt.date,
+    grouped_root: Path | str | None = None,
+    window: int = MARKET_SERIES_WINDOW_SESSIONS,
+    max_lag_sessions: int = MARKET_SERIES_MAX_LAG_SESSIONS,
+    exchange: str = DEFAULT_EXCHANGE,
+) -> pd.DataFrame:
+    """Return ``frame`` with the three index returns broadcast onto every row.
+
+    Computed ONCE for ``asof`` and stamped identically on every candidate row
+    (the ``disagreement.enrich`` idiom). No version column is stamped — see the
+    section comment above for why this family has none.
+
+    Each column is assigned with its DECLARED dtype on BOTH paths, populated and
+    empty, so a quiet day's parquet and a normal day's carry the same schema. The
+    populated path matters as much as the empty one: letting pandas infer an
+    all-NaN fail-soft column would store ``object``.
+    """
+    out = frame.copy()
+    if len(out) == 0:
+        for column in MARKET_SERIES_TICKERS:
+            out[column] = pd.Series([], dtype=_SERIES_DTYPE)
+        return out
+
+    try:
+        values = five_session_index_returns(
+            asof,
+            grouped_root=grouped_root,
+            window=window,
+            max_lag_sessions=max_lag_sessions,
+            exchange=exchange,
+        )
+    except Exception:  # best-effort context enrichment
+        # A store read hiccup degrades to NaN rather than aborting the score
+        # stage (the market_state / buffett / oneil fail-soft precedent).
+        logger.warning(
+            "market_ret5: five_session_index_returns failed for %s — stamping NaN",
+            asof,
+            exc_info=True,
+        )
+        values = dict.fromkeys(MARKET_SERIES_TICKERS, float("nan"))
+
+    n = len(out)
+    inherited = set(frame.columns)
+    for column in MARKET_SERIES_TICKERS:
+        out[column] = pd.Series([values[column]] * n, index=out.index, dtype=_SERIES_DTYPE)
+    # The declaration is checked against the frame, never imposed on it.
+    warn_on_column_disagreement(
+        logger,
+        writer="enrich_index_series",
+        declaration="MARKET_SERIES_COLUMNS",
+        produced=[c for c in out.columns if c not in inherited],
+        declared=MARKET_SERIES_COLUMNS,
+    )
+    return out
+
+
 __all__ = [
+    "MARKET_SERIES_COLUMNS",
+    "MARKET_SERIES_MAX_LAG_SESSIONS",
+    "MARKET_SERIES_TICKERS",
+    "MARKET_SERIES_WINDOW_SESSIONS",
     "MARKET_STATE_COLUMNS",
     "MARKET_STATE_CONFIG_VERSION",
     "classify",
     "classify_state",
     "enrich",
+    "enrich_index_series",
+    "five_session_index_returns",
 ]

@@ -141,6 +141,11 @@
 		market_state_vix_decile: null,
 		market_state_squeeze_on: null,
 		market_state_config_version: null,
+		// The 2026-05-18 source predates both the label and the backfill, so
+		// the three index returns are absent on it.
+		market_ret5_spy: null,
+		market_ret5_qqq: null,
+		market_ret5_iwm: null,
 		// Pre-#1066 row: the causal-support assessor did not exist on 2026-05-18,
 		// so every status column is NULL and <ChannelRecord> renders nothing. This
 		// is the faithful shape for this fixture's date, not a placeholder.
@@ -285,6 +290,11 @@
 		market_state_vix_decile: null,
 		market_state_squeeze_on: null,
 		market_state_config_version: null,
+		// The 2026-05-18 source predates both the label and the backfill, so
+		// the three index returns are absent on it.
+		market_ret5_spy: null,
+		market_ret5_qqq: null,
+		market_ret5_iwm: null,
 		// Pre-#1066 row: the causal-support assessor did not exist on 2026-05-18,
 		// so every status column is NULL and <ChannelRecord> renders nothing. This
 		// is the faithful shape for this fixture's date, not a placeholder.
@@ -460,6 +470,11 @@
 		market_state_vix_decile: null,
 		market_state_squeeze_on: null,
 		market_state_config_version: null,
+		// The 2026-05-18 source predates both the label and the backfill, so
+		// the three index returns are absent on it.
+		market_ret5_spy: null,
+		market_ret5_qqq: null,
+		market_ret5_iwm: null,
 		// Pre-#1066 row: the causal-support assessor did not exist on 2026-05-18,
 		// so every status column is NULL and <ChannelRecord> renders nothing. This
 		// is the faithful shape for this fixture's date, not a placeholder.

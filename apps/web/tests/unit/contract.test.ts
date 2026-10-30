@@ -127,6 +127,11 @@ const TS_CANDIDATE_KEYS = [
 	'market_state_vix_decile',
 	'market_state_squeeze_on',
 	'market_state_config_version',
+	// The three raw broad-index 5-session returns under that one word. Display
+	// data, no config_version sibling.
+	'market_ret5_spy',
+	'market_ret5_qqq',
+	'market_ret5_iwm',
 	// Event-lane provenance (epic #1293, #1298): source lane + insider-cluster facts.
 	'source',
 	'event_overlap',

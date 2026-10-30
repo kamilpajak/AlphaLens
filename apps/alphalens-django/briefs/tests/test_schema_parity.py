@@ -142,6 +142,15 @@ LEGACY_CONTRACT_COLUMNS: tuple[str, ...] = (
     "market_state_vix_decile",
     "market_state_squeeze_on",
     "market_state_config_version",
+    # Post-legacy extension (2026-10-30): the three raw broad-index 5-session
+    # returns that sit under that one word — SPY / QQQ / IWM, as fractions,
+    # broadcast per date. Display data with NO config_version sibling: raw
+    # ``close(t)/close(t-5) - 1`` has no threshold and no emission rule, so
+    # there is nothing to version and nothing a bump could partition.
+    # Auto-served via exclude=("pk",); registered here for the no-orphan guard.
+    "market_ret5_spy",
+    "market_ret5_qqq",
+    "market_ret5_iwm",
     # Post-legacy extension (2026-07-28, PR #921 follow-through): honest per-row
     # LLM brief outcome — brief_status "ok"|"unavailable" + the retry-ladder
     # terminal brief_error_kind (null on success). Nullable so pre-#921 rows

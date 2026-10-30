@@ -1081,6 +1081,21 @@
                         "type": "string",
                         "maxLength": 128
                     },
+                    "market_ret5_spy": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "market_ret5_qqq": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "market_ret5_iwm": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
                     "also_in_themes": {},
                     "rank_in_day": {
                         "type": "integer",
@@ -1519,6 +1534,21 @@
                     "market_state_config_version": {
                         "type": "string",
                         "maxLength": 128
+                    },
+                    "market_ret5_spy": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "market_ret5_qqq": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "market_ret5_iwm": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
                     },
                     "also_in_themes": {},
                     "rank_in_day": {

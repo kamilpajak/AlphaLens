@@ -57,8 +57,8 @@ pattern that would is ``tests/test_expert_column_parity.py``, which imports
 the real pipeline tuples and ast-parses the Django mirror as data; extending
 it from the expert families to the whole contract is its own piece of work.
 
-THE SEVEN ENRICHER FAMILIES SPLIT THREE AND FOUR
-------------------------------------------------
+THE EIGHT ENRICHER FAMILIES SPLIT THREE, FOUR AND ONE
+-----------------------------------------------------
 They are imported, not re-measured, and the reason differs per family.
 
 THREE are load-bearing AT THEIR WRITER, so the tuple and the stored column
@@ -69,7 +69,7 @@ nulls the frame, and the brief stage iterates it again to backfill a
 published parquet). The cost of that shape is an INVERSION: because the
 tuple decides the stored name, renaming an entry renames the production
 column, and no comparison of frame against tuple can see it. The gate's own
-docstring carries the arithmetic of how many of the 178 names sit in that
+docstring carries the arithmetic of how many of the 181 names sit in that
 position.
 
 FOUR are declarations only — ``QUAL_COLUMNS``, ``SI_COLUMNS``,
@@ -88,7 +88,17 @@ Django mirror in ``test_expert_column_parity``) and ``SI_COLUMNS`` 1
 (``thematic/short_interest_telemetry/test_enrichment``). ``SI_COLUMNS`` is
 the thin one: its single pin is the empty-frame dtype test.
 
-The registry takes all seven as given either way, and the gate re-measures
+ONE is in neither position. ``MARKET_SERIES_COLUMNS`` (the three raw index
+5-session returns) is spelled as three string literals at its writer, which
+then compares the frame it just produced against the tuple through
+``brief_contract.validation.warn_on_column_disagreement``. So the declaration
+is a CLAIM ABOUT THE DATA rather than its source: renaming an entry makes the
+writer disagree with itself in the operator's log, and turns 4 tests of
+``tests/test_market_index_series.py`` red (measured 2026-10-30 on
+``market_ret5_iwm``), while the stored column keeps its name. This is the
+position the other four would be in if their writers adopted the same call.
+
+The registry takes all eight as given either way, and the gate re-measures
 none of them.
 """
 
@@ -104,7 +114,10 @@ from alphalens_pipeline.experts.buffett.qual_enrichment import QUAL_COLUMNS
 from alphalens_pipeline.experts.buffett.quant_enrichment import BUFFETT_COLUMNS
 from alphalens_pipeline.experts.disagreement import PANEL_COLUMNS
 from alphalens_pipeline.experts.oneil.quant_enrichment import ONEIL_COLUMNS
-from alphalens_pipeline.market.market_state import MARKET_STATE_COLUMNS
+from alphalens_pipeline.market.market_state import (
+    MARKET_SERIES_COLUMNS,
+    MARKET_STATE_COLUMNS,
+)
 from alphalens_pipeline.thematic.argumentation.orchestrator import BRIEF_STAGE_COLUMNS
 from alphalens_pipeline.thematic.mapping.orchestrator import MAP_THEMES_COLUMNS
 from alphalens_pipeline.thematic.options_telemetry.enrichment import OPTIONS_COLUMNS
@@ -145,7 +158,7 @@ SCORE_STAGE: tuple[str, ...] = SCORE_COLUMNS
 #: day's ranking. A quiet day carries ``EMPTY_BRIEF_COLUMNS`` instead.
 BRIEF_STAGE: tuple[str, ...] = BRIEF_STAGE_COLUMNS
 
-#: The seven families that widen an already-scored frame, each declared and
+#: The eight families that widen an already-scored frame, each declared and
 #: enforced at its own writer. Ordered widest-first so the assembled registry
 #: reads in descending contribution.
 ENRICHER_STAGES: tuple[tuple[str, ...], ...] = (
@@ -155,6 +168,7 @@ ENRICHER_STAGES: tuple[tuple[str, ...], ...] = (
     QUAL_COLUMNS,
     BUFFETT_COLUMNS,
     SI_COLUMNS,
+    MARKET_SERIES_COLUMNS,
     PANEL_COLUMNS,
 )
 

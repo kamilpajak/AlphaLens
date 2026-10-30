@@ -365,6 +365,12 @@ export interface components {
             market_state_vix_decile?: number | null;
             market_state_squeeze_on?: boolean | null;
             market_state_config_version?: string;
+            /** Format: double */
+            market_ret5_spy?: number | null;
+            /** Format: double */
+            market_ret5_qqq?: number | null;
+            /** Format: double */
+            market_ret5_iwm?: number | null;
             also_in_themes?: unknown;
             /** Format: int64 */
             rank_in_day?: number | null;
@@ -520,6 +526,12 @@ export interface components {
             market_state_vix_decile?: number | null;
             market_state_squeeze_on?: boolean | null;
             market_state_config_version?: string;
+            /** Format: double */
+            market_ret5_spy?: number | null;
+            /** Format: double */
+            market_ret5_qqq?: number | null;
+            /** Format: double */
+            market_ret5_iwm?: number | null;
             also_in_themes?: unknown;
             /** Format: int64 */
             rank_in_day?: number | null;

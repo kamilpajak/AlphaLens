@@ -440,14 +440,17 @@ export const GLOSSARY: GlossaryEntry[] = [
 	briefMetric(
 		'market context',
 		'index-level market regime',
-		'The broad market (SPY) regime for this date, classified as one of four trend×volatility states (bull/bear × quiet/volatile) from the S&P 500 index — moving-average trend, its own trailing realized-volatility quantile, and the VIX. Context, not a signal · unvalidated: it describes the market backdrop only and NEVER feeds candidate selection or ranking. "unknown" = the label was not computed for this date (e.g. dates before the signal shipped).',
+		'One trend×volatility word for this date, plus the numbers under it. The word comes from SPY alone: bull or bear is the SIGN of its close against its own 200-day average, and "volatile" means the realized-volatility percentile reached 70, or the VIX reached 25. Context, not a signal · unvalidated — it describes the backdrop and never feeds candidate selection or ranking. The five-session returns beside it are raw price moves, not part of the word.',
 		{
 			bands: [
 				{ range: 'bull-quiet', label: 'up-trend, calm — the benign backdrop' },
 				{ range: 'bull-volatile', label: 'up-trend, choppy' },
 				{ range: 'bear-volatile', label: 'down-trend, stressed' },
 				{ range: 'bear-quiet', label: 'down-trend, calm — the quiet grind' },
-				{ range: 'unknown', label: 'not computed for this date' }
+				{ range: 'unknown', label: 'no label emitted for this date' },
+				{ range: '0%', label: 'vs-MA200 flip point: bull above, bear below' },
+				{ range: '70', label: 'atr %ile at which volatility reads high on its own' },
+				{ range: '25', label: 'vix level that flips volatility while atr is below 70' }
 			]
 		}
 	)
