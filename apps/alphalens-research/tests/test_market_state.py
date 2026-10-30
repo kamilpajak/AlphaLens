@@ -12,6 +12,7 @@ letting each state be selected deterministically.
 """
 
 import datetime as dt
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -346,9 +347,11 @@ class TestTheTwoLookbacksAreWiredSeparately(unittest.TestCase):
     axis would silently redefine the published VIX decile. The split holds the
     value at 252 on both sides, so no row moved.
 
-    These two tests exist because a mutation check found the split UNPINNED:
-    changing either constant left all 40 tests in this module green, so nothing
-    would have noticed the VIX half being wired to the ATR constant.
+    These tests exist because a mutation check found the split UNPINNED. Measured
+    2026-10-30 on this module's 45 tests: retuning `ATR_QUANTILE_LOOKBACK` reddens
+    the emission-boundary test, but retuning `VIX_DECILE_LOOKBACK` reddened
+    NOTHING, because the VIX expectation was computed from the very constant it
+    was meant to pin. Both windows are now asserted as literals.
     """
 
     def test_the_vix_decile_is_ranked_over_its_own_lookback(self):
@@ -378,10 +381,16 @@ class TestTheTwoLookbacksAreWiredSeparately(unittest.TestCase):
 
         out = classify_state(close=close, high=high, low=low, vix=vix)
 
-        expected = float(rolling_quantile_rank(vix, lookback=VIX_DECILE_LOOKBACK).iloc[-1])
+        # The window is written as the LITERAL 252, not read from the constant.
+        # Computing the expectation from `VIX_DECILE_LOOKBACK` made the oracle
+        # follow the mutation: measured 2026-10-30, retuning it to 120 left all
+        # 45 tests in this module green, so the split was pinned by NAME and not
+        # by VALUE — cosmetic on exactly the half it was made to protect.
+        self.assertEqual(VIX_DECILE_LOOKBACK, 252, "the published VIX decile window moved")
+        expected = float(rolling_quantile_rank(vix, lookback=252).iloc[-1])
         self.assertAlmostEqual(out["market_state_vix_decile"], expected, places=12)
-        # Positive control: a DIFFERENT lookback must give a different answer,
-        # or this test could not tell the two constants apart.
+        # Positive control: a DIFFERENT window must give a different answer, or
+        # the assertion above could pass under any window.
         other = float(rolling_quantile_rank(vix, lookback=60).iloc[-1])
         self.assertNotAlmostEqual(expected, other, places=6)
 
@@ -503,16 +512,36 @@ class TestConfigVersionOwesNoBumpForThisSimplification(unittest.TestCase):
     the live cohort for a simplification that changed no published row.
     """
 
-    def test_the_version_constant_is_unchanged(self):
-        from alphalens_pipeline.market.market_state import MARKET_STATE_CONFIG_VERSION
+    def test_the_version_is_pinned_once_and_elsewhere(self):
+        """The string itself is pinned by ``TestConfigVersion`` in this file; this
+        class exists for the REASONING, not a second copy of the assertion.
 
-        self.assertEqual(
-            MARKET_STATE_CONFIG_VERSION,
-            "mstate-v1.2-spy-sma50x200-atrq70-vix15_25-UNVALIDATED",
-            "a label- and emission-preserving simplification owes no bump. The "
-            "'sma50x200' token is an opaque poolability key, not a "
-            "specification of which inputs the classifier reads.",
-        )
+        A duplicate literal adds no detection power and makes a legitimate future
+        bump a two-place edit — and missing one place would redden the suite in a
+        way that reads like a real violation. What is asserted here instead is the
+        part a reader gets wrong: the version did not move, and the 'sma50x200'
+        token in it is an opaque poolability key, NOT a statement about which
+        inputs the classifier reads. Deleting the SMA50 cross did not falsify the
+        token, which is why no bump is owed.
+        """
+        from alphalens_pipeline.market import market_state
+
+        # Assert on the DEFINITION, not the mention: line 80 of the module names
+        # all four deleted constants in the note recording their removal, and
+        # that note is the point. A bare substring check would forbid it.
+        source = Path(market_state.__file__).read_text()
+        self.assertIn("MARKET_STATE_CONFIG_VERSION", source)
+        for dead in ("SMA_FAST", "SLOPE_WIN", "SLOPE_EPS", "DIST_FLAT_BAND"):
+            # re.MULTILINE is load-bearing: assertNotRegex uses re.search, so a
+            # bare `^` anchors to the START OF THE FILE and the guard cannot
+            # fire. Measured 2026-10-30: without it, reinserting `SMA_FAST = 50`
+            # at module level left all 45 tests green.
+            self.assertNotRegex(
+                source,
+                re.compile(rf"^{dead}\s*=", re.MULTILINE),
+                f"{dead} was deleted as provably inert; redefining it would make "
+                "the version token's claim about the inputs false again",
+            )
 
 
 class TestClassifyStateUnknown(unittest.TestCase):
