@@ -410,7 +410,7 @@ class LoopDeps:
     # them without decoding; the drain refuses the unplaced ones once. ``None``
     # (tests that build LoopDeps by hand) reads nothing.
     iter_legacy_size_pct_picks: Callable[[], Iterator[Any]] | None = None
-    # Entry-trailing watcher runtimes (PR-T1, DRY-RUN): crid -> the daemon-
+    # Entry-trailing watcher runtimes: crid -> the daemon-
     # lifetime state for ONE open entry-tier watch (the stateful engine watcher
     # + its measurement marks). A MUTABLE dict on the (frozen-field) deps — built
     # once, carried across ticks — mirroring peak_tracker/oco_lag_counts above.
@@ -665,14 +665,15 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
 
     _run_placement_drain(deps, report, enabled=not kill and alive)
 
-    # Entry-trailing watcher pass (PR-T1, DRY-RUN): advance each open watch's
+    # Entry-trailing watcher pass: advance each open watch's
     # state machine off the shared INC-2 price stream. KILL-GATED internally
     # (memo §3 G2 — no open-watch/touch/would-fire/journal under KILL) and a
     # no-op when ALPHALENS_BROKER_ENTRY_TRAIL_BPS is unset/0, so this call site
     # is unconditional and the flag alone controls behaviour. Runs every tick
     # regardless of chain-alive (like the exit/protection passes) so time-based
-    # expiry + measurement never stall on a dead session. STILL DRY-RUN: the
-    # fire path only alerts "would fire" — no broker order is ever placed.
+    # expiry + measurement never stall on a dead session. The fire path PLACES:
+    # at the TOUCH it POSTs a native Saxo trailing-limit entry order, gated on
+    # ALLOW_ORDERS (see the section comment above `_ENTRY_REARM_MARKER`).
     _run_entry_watch_pass(deps, kill, report)
 
     # The verdict-level advance loop (terminal / round-trip CancelRemaining +
@@ -2085,17 +2086,30 @@ def _track_oco_lag(deps: LoopDeps, actions: list[Action], report: TickReport) ->
             report.alerts += 1
 
 
-# --- Entry-trailing watcher pass (PR-T1, DRY-RUN) ----------------------------
+# --- Entry-trailing watcher pass -------------------------------------------
 #
 # The WIRE half of ALPHALENS_BROKER_ENTRY_TRAIL_BPS. When the flag is armed,
 # _place_pick routes an eligible pick into a WATCH (per-tier watch_open lines on
 # entry_trails.jsonl) INSTEAD of resting the three server-side limit-entry
 # orders; this per-tick pass then drives each open watch's WATCHING -> TOUCHED
-# -> (WOULD_FIRE | SUSPENDED | EXPIRED | CANCELLED) state machine off the shared
-# INC-2 price stream. STRICTLY DRY-RUN: the pass NEVER places, amends, or
-# cancels a broker order — the "fire" is an alert-only "would fire @ trigger X"
-# plus a journal marker (memo §7 PR-T1). Flag unset/0 => nothing here runs and
-# the daemon is byte-identical to today (PR-T0 inertness).
+# -> (armed | SUSPENDED | EXPIRED | CANCELLED) state machine off the shared
+# INC-2 price stream.
+#
+# THIS PASS PLACES REAL ORDERS. At the TOUCH it calls `_arm_native_trail`, which
+# POSTs one native Saxo trailing-limit entry order (`broker.place_trailing_stop`)
+# behind the capability + ALPHALENS_BROKER_ALLOW_ORDERS gates, write-ahead
+# journalling `trail_armed` with a null id BEFORE the POST. Measured on LIVE
+# 2026-10-30: MSFT armed `order_id=5456775107` and filled at 520.92, which is
+# ABOVE its declared 518.42 pullback limit — a resting buy limit cannot do that,
+# so the trailing order is the thing that bought.
+#
+# The DRY-RUN wording this block used to carry described PR-T1, the pure engine
+# in `entry_trail_watcher.py`. THAT module still never places anything and its
+# docstring and tests are correct; the executor lives here and in
+# `entry_watch.py`. Do not reintroduce the claim at this level.
+#
+# Flag unset/0 => nothing here runs and the daemon is byte-identical to the
+# pre-flag build (PR-T0 inertness).
 
 
 _ENTRY_REARM_MARKER = "awaiting_fresh_low"
@@ -6951,7 +6965,8 @@ def _place_pick(
     # Entry-trailing intercept (memo §5 / drain_intercept): with the flag armed
     # AND the pick trailing-eligible, route it into a WATCH (per-tier watch_open
     # lines, journal-FIRST) INSTEAD of resting the three server-side limit-entry
-    # orders — no broker order is placed in PR-T1 (DRY-RUN). Flag OFF (bps == 0)
+    # orders — the native trailing entry order is placed LATER, by the watcher
+    # pass at the TOUCH, not here. Flag OFF (bps == 0)
     # falls straight through to classify + _place_tiers, BYTE-IDENTICAL to today
     # (PR-T0 inertness proof). The intercept lands AFTER the cash floor so a
     # watch only opens once the pick has cleared every money gate.
