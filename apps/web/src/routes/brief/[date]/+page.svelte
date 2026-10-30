@@ -208,6 +208,9 @@
 			vix={marketCtx?.market_state_vix}
 			vixDecile={marketCtx?.market_state_vix_decile}
 			squeezeOn={marketCtx?.market_state_squeeze_on}
+			ret5Spy={marketCtx?.market_ret5_spy}
+			ret5Qqq={marketCtx?.market_ret5_qqq}
+			ret5Iwm={marketCtx?.market_ret5_iwm}
 		/>
 
 		<!-- Catalyst footer — full width for the long headline -->

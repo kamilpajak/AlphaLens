@@ -152,10 +152,14 @@ export interface Candidate {
 	 * brief-level banner reads it from any candidate in the day's list.
 	 * DISPLAY-ONLY / UNVALIDATED — never feeds selection or the brief sort.
 	 * `market_state` is one of `bull_quiet` / `bull_volatile` / `bear_volatile`
-	 * / `bear_quiet` / `unknown` (or empty on dates that predate the signal).
-	 * The telemetry floats + `market_state_squeeze_on` (tri-state) back the
-	 * optional axis breakdown; `market_state_config_version` is the poolability
-	 * key for the deferred forward study.
+	 * / `bear_quiet` / `unknown`, or empty on dates that predate the signal.
+	 * `unknown` has THREE causes, not one: too little stored history to
+	 * classify; a low realized-volatility leg with no VIX print reaching the
+	 * date (since #1559 a HIGH realized leg decides the axis alone, so only the
+	 * low branch is undetermined); or a fail-soft store / FRED read. The
+	 * telemetry floats + `market_state_squeeze_on` (tri-state) back the axis
+	 * breakdown; `market_state_config_version` is the poolability key for the
+	 * deferred forward study.
 	 */
 	market_state: string;
 	market_state_atr_pct: number | null;
@@ -165,6 +169,28 @@ export interface Candidate {
 	market_state_vix_decile: number | null;
 	market_state_squeeze_on: boolean | null;
 	market_state_config_version: string | null;
+
+	/**
+	 * The three raw broad-index 5-session returns that sit UNDER that one word:
+	 * `close(current) / close(5 sessions before current) - 1` for SPY, QQQ and
+	 * IWM, broadcast per date like the label above. FRACTIONS, not percent
+	 * (-0.038 renders as -3.80%) — the producing code is the authority on the
+	 * scale, and this family stores the fraction.
+	 *
+	 * DISPLAY DATA with NO `config_version` sibling, deliberately: raw
+	 * arithmetic on a public close series has no threshold and no emission rule,
+	 * so there is nothing to version and nothing a bump could partition. Do NOT
+	 * add them to the `market_state_config_version` poolability key, and do not
+	 * treat them as a feature set — over 530 sessions they correlate 0.72-0.94
+	 * and one principal component explains 88.2% of their variance.
+	 *
+	 * `null` when unknown: a date whose brief predates the backfill, or a store
+	 * gap / a store lagging past its staleness bound. Never 0.0, which would
+	 * read as a flat market.
+	 */
+	market_ret5_spy: number | null;
+	market_ret5_qqq: number | null;
+	market_ret5_iwm: number | null;
 
 	/**
 	 * Candidate source lane (epic #1293, #1298) — `thematic` | `insider_cluster`;

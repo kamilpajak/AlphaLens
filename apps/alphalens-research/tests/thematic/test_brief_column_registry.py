@@ -2,10 +2,11 @@
 
 The brief parquet under ``thematic_briefs/`` is written by four stages in
 sequence — map-themes, the event merge, score, brief — and then widened by
-seven enricher families. Before this change, 46 of its 178 names existed only
-as string literals inside the function that happened to write them: the score
-stage's 42, the three day-ranking columns, and ``event_overlap``. A rename
-there changed the stored schema with nothing in the tree to notice.
+eight enricher families. Before the change that introduced this gate, 46 of
+the registry's then-178 names existed only as string literals inside the
+function that happened to write them: the score stage's 42, the three
+day-ranking columns, and ``event_overlap``. A rename there changed the stored
+schema with nothing in the tree to notice.
 
 These tests close that by running each stage for real over frozen fixtures and
 comparing the column names it produces against the tuple that stage now
@@ -93,16 +94,22 @@ this repo against a test touching live operator state lives in
 ``tests/brokers/__init__.py``, and a test under ``tests/thematic/`` inherits
 none of it.
 
-It does not re-measure the seven enricher families — Buffett quant and qual,
-O'Neil, the panel, market state, options telemetry and short interest, 53
-names between them. Three of the seven (``ONEIL_COLUMNS``,
-``BUFFETT_COLUMNS``, ``OPTIONS_COLUMNS``) are iterated by their own writer, so
-they are in the inverted position and a rename changes production. The other
-four (``QUAL_COLUMNS``, ``SI_COLUMNS``, ``PANEL_COLUMNS``,
-``MARKET_STATE_COLUMNS``) are read by no writer at all. Either way this file
-has no power over them: measured, renaming one entry in each of the seven left
-every test in THIS file green, while at least one test in the family's own
-module went red every time. Per-family counts are deliberately not quoted
+It does not re-measure the eight enricher families — Buffett quant and qual,
+O'Neil, the panel, market state, the index 5-session returns, options
+telemetry and short interest, 56 names between them. Three of the eight
+(``ONEIL_COLUMNS``, ``BUFFETT_COLUMNS``, ``OPTIONS_COLUMNS``) are iterated by
+their own writer, so they are in the inverted position and a rename changes
+production. Four (``QUAL_COLUMNS``, ``SI_COLUMNS``, ``PANEL_COLUMNS``,
+``MARKET_STATE_COLUMNS``) are read by no writer at all. The eighth,
+``MARKET_SERIES_COLUMNS``, is in neither position: its writer spells its three
+names as literals and then CHECKS the frame against the tuple through
+``warn_on_column_disagreement``, so a renamed entry disagrees instead of
+following along. Either way this file has no power over them: measured,
+renaming one entry in each of the eight left every test in THIS file green,
+while at least one test in the family's own module went red every time —
+measured 2026-10-30 for the eighth, where renaming ``market_ret5_iwm`` in the
+tuple alone left this file's 13 tests green and turned 4 tests of
+``tests/test_market_index_series.py`` red. Per-family counts are deliberately not quoted
 here. They are not produced by one rule — five families are counted in their
 own enrichment module while ``QUAL_COLUMNS`` and ``PANEL_COLUMNS`` only reach
 their published figure by counting a second module — and the count depends on
@@ -134,7 +141,7 @@ One rule covers several of the gaps below, so it is stated once. When a tuple
 is ITERATED to stamp the columns, the declaration and the stored name are the
 same fact; there is no divergence for a gate to catch, and renaming an entry
 changes production with nothing red anywhere. The honest arithmetic over the
-178 names, counted this session:
+181 names, re-counted 2026-10-30:
 
 * 114 — the gate has RENAME power. These are the names of
   ``MAP_THEMES_COLUMNS`` (47), ``SCORE_COLUMNS`` (42),
@@ -149,8 +156,15 @@ changes production with nothing red anywhere. The honest arithmetic over the
   ``OPTIONS_COLUMNS`` (16), ``ONEIL_COLUMNS`` (9) and ``BUFFETT_COLUMNS`` (6).
 * 22 — declared and read by nobody: ``MARKET_STATE_COLUMNS`` (8),
   ``QUAL_COLUMNS`` (8), ``SI_COLUMNS`` (4), ``PANEL_COLUMNS`` (2).
+* 3 — declared as literals at the writer AND checked there.
+  ``MARKET_SERIES_COLUMNS``, whose writer calls
+  ``warn_on_column_disagreement`` on the frame it just produced. This gate
+  still has no power over them — it imports the tuple, so the two sides cannot
+  disagree here — but the family's own writer and tests do: renaming
+  ``market_ret5_iwm`` in the tuple alone left all 13 tests in this file green
+  and turned 4 tests of ``tests/test_market_index_series.py`` red.
 
-The three buckets are disjoint and sum to 178. They are per
+The four buckets are disjoint and sum to 181. They are per
 (name, declaration) pair: a name declared twice is counted once, at its
 strongest position.
 
@@ -183,7 +197,7 @@ this session:
     len(power & set(EVENT_CANDIDATE_COLUMNS))  # -> 22
 
 The same intersection against ``EVENT_FACT_COLUMNS`` and against each of the
-seven enricher tuples is EMPTY, so the detector is the only place in the tree
+eight enricher tuples is EMPTY, so the detector is the only place in the tree
 where a gated name carries a second declaration.
 
 Five further gaps, named rather than papered over, each measured.
@@ -266,7 +280,10 @@ from alphalens_pipeline.experts.buffett.qual_enrichment import QUAL_COLUMNS
 from alphalens_pipeline.experts.buffett.quant_enrichment import BUFFETT_COLUMNS
 from alphalens_pipeline.experts.disagreement import PANEL_COLUMNS
 from alphalens_pipeline.experts.oneil.quant_enrichment import ONEIL_COLUMNS
-from alphalens_pipeline.market.market_state import MARKET_STATE_COLUMNS
+from alphalens_pipeline.market.market_state import (
+    MARKET_SERIES_COLUMNS,
+    MARKET_STATE_COLUMNS,
+)
 from alphalens_pipeline.thematic.argumentation.orchestrator import BRIEF_STAGE_COLUMNS
 from alphalens_pipeline.thematic.mapping.orchestrator import MAP_THEMES_COLUMNS
 from alphalens_pipeline.thematic.options_telemetry.enrichment import OPTIONS_COLUMNS
@@ -291,7 +308,9 @@ _BRIEF_INPUT_PARQUET = _BRIEF_FIXTURES / "scored.parquet"
 # third job made the thing under test its own oracle. Measured on the
 # imported form: renaming ``"eligible"`` to ``"eligibl"`` in the merge let
 # the detector's ``eligible`` column through into the merge output (34 -> 35
-# columns), widened the registry 178 -> 179 to absorb it, and killed no test.
+# columns), widened the registry by one name to absorb it (178 -> 179 when
+# that was measured; the registry holds 181 as of 2026-10-30), and killed no
+# test.
 # Writing the two names here instead means a rename of the production tuple
 # makes the test DISAGREE rather than follow along.
 #
@@ -321,6 +340,7 @@ _OWNER_DECLARATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("OPTIONS_COLUMNS", OPTIONS_COLUMNS),
     ("ONEIL_COLUMNS", ONEIL_COLUMNS),
     ("MARKET_STATE_COLUMNS", MARKET_STATE_COLUMNS),
+    ("MARKET_SERIES_COLUMNS", MARKET_SERIES_COLUMNS),
     ("QUAL_COLUMNS", QUAL_COLUMNS),
     ("BUFFETT_COLUMNS", BUFFETT_COLUMNS),
     ("SI_COLUMNS", SI_COLUMNS),
@@ -547,8 +567,9 @@ class TestRegistryCoversRealData(unittest.TestCase):
         shadow_only = set(_SHADOW_ONLY_COLUMNS)
 
         # Act / Assert — measured: deleting that subtraction widens the
-        # registry from 178 names to 180, and kills this test and the union
-        # equality. Those two are the only things holding it.
+        # registry by those two names (178 -> 180 when that was measured; the
+        # registry holds 181 as of 2026-10-30), and kills this test and the
+        # union equality. Those two are the only things holding it.
         self.assertEqual(set(), shadow_only & set(EVENT_STAGE))
         self.assertEqual(set(), shadow_only & set(BRIEF_STORE_COLUMNS))
 
@@ -560,7 +581,7 @@ class TestRegistryCoversRealData(unittest.TestCase):
         name added to the registry's fold and written by nobody used to pass
         the whole file. This is the only assertion that bounds it from above.
 
-        The expected set is derived from the thirteen declarations imported
+        The expected set is derived from the fourteen declarations imported
         DIRECTLY from the modules that own them (``_OWNER_DECLARATIONS``),
         minus the test's own ``_SHADOW_ONLY_COLUMNS`` literal. It shares no
         expression with ``columns._ALL_STAGES``: that fold goes through the
@@ -588,7 +609,7 @@ class TestRegistryCoversRealData(unittest.TestCase):
         # Kept for its FAILURE MESSAGE, not for power of its own: measured
         # redundant against the union equality above, which it can no longer
         # die without. What it adds is the name of the stage whose
-        # declaration the assembly dropped, which a set difference over 178
+        # declaration the assembly dropped, which a set difference over 181
         # names does not say.
         #
         # Arrange

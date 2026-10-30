@@ -727,6 +727,79 @@ class TestMarketStateIngest:
 
 
 @pytest.mark.django_db
+class TestMarketIndexSeriesIngest:
+    """The three raw broad-index 5-session returns round-trip into flat fields.
+
+    Display data, so there is no ``*_config_version`` sibling to carry: the
+    numbers are ``close(t) / close(t-5) - 1`` on a public close series, with no
+    threshold and no emission rule to version. A date whose parquet predates the
+    backfill must ingest as NULL — never 0.0, which would read as a flat market.
+    """
+
+    def test_the_three_returns_round_trip(self, tmp_path: Path):
+        _write_parquet(
+            tmp_path,
+            "2026-10-14",
+            [
+                {
+                    "ticker": "NVDA",
+                    "company_name": "NVIDIA",
+                    "theme": "ai-infra",
+                    "market_ret5_spy": -0.0098,
+                    "market_ret5_qqq": -0.0380,
+                    "market_ret5_iwm": -0.0228,
+                },
+                {
+                    "ticker": "AVGO",
+                    "company_name": "Broadcom",
+                    "theme": "ai-infra",
+                    "market_ret5_spy": -0.0098,
+                    "market_ret5_qqq": -0.0380,
+                    "market_ret5_iwm": -0.0228,
+                },
+            ],
+        )
+        rebuild_from_parquet(briefs_dir=tmp_path)
+
+        nvda = Brief.objects.get(ticker="NVDA")
+        assert nvda.market_ret5_spy == pytest.approx(-0.0098)
+        assert nvda.market_ret5_qqq == pytest.approx(-0.0380)
+        assert nvda.market_ret5_iwm == pytest.approx(-0.0228)
+        # Index-level: the same trio is broadcast to every row of the date.
+        avgo = Brief.objects.get(ticker="AVGO")
+        assert avgo.market_ret5_qqq == pytest.approx(-0.0380)
+
+    def test_a_parquet_without_the_columns_ingests_as_null(self, tmp_path: Path):
+        _write_parquet(tmp_path, "2026-06-10", [{"ticker": "AAA", "theme": "t"}])
+        rebuild_from_parquet(briefs_dir=tmp_path)
+        aaa = Brief.objects.get(ticker="AAA")
+        assert aaa.market_ret5_spy is None
+        assert aaa.market_ret5_qqq is None
+        assert aaa.market_ret5_iwm is None
+
+    def test_a_nan_return_ingests_as_null_not_a_number(self, tmp_path: Path):
+        # The enricher's missing convention is NaN (a store gap, or a store
+        # lagging past its staleness bound). It must not reach the API as 0.0.
+        _write_parquet(
+            tmp_path,
+            "2026-06-12",
+            [
+                {
+                    "ticker": "AAA",
+                    "theme": "t",
+                    "market_ret5_spy": float("nan"),
+                    "market_ret5_qqq": float("nan"),
+                    "market_ret5_iwm": float("nan"),
+                }
+            ],
+        )
+        rebuild_from_parquet(briefs_dir=tmp_path)
+        aaa = Brief.objects.get(ticker="AAA")
+        assert aaa.market_ret5_spy is None
+        assert aaa.market_ret5_iwm is None
+
+
+@pytest.mark.django_db
 class TestBriefStatusIngest:
     """PR #921 carried into Django: the pipeline stamps ``brief_status``
     ("ok" | "unavailable") + ``brief_error_kind`` (retry-ladder terminal kind,

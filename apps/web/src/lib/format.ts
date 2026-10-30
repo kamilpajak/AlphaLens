@@ -229,12 +229,58 @@ export function marketStateTone(state: string | null | undefined): MarketStateTo
 }
 
 /** Hyphenated chip label for a regime state (`bull_quiet` → `bull-quiet`). Any
- *  null / empty / unrecognised value → `"unknown"` (the first-class no-signal
- *  state, shown on dates that predate the label). */
+ *  null / empty / unrecognised value → `"unknown"`, which is a first-class
+ *  state with three causes: the date predates the signal, the classifier
+ *  could not decide it (too little stored history, or a low realized-vol leg
+ *  with no VIX print reaching the date), or a store / FRED read failed. */
 export function marketStateLabel(state: string | null | undefined): string {
 	if (!state || !(state in _MARKET_STATE_TONES)) return 'unknown';
 	return state.replaceAll('_', '-');
 }
+
+/**
+ * A FRACTION rendered as a signed percentage: `-0.038` → `-3.80%`.
+ *
+ * The scale is the whole point. `market_state_dist200` and the three
+ * `market_ret5_*` returns all arrive as fractions, and rendering one as if it
+ * were already a percent produces a finite, plausible, wrong number that no
+ * test catches — the #446 / #447 defect on /edge, where a +20.85% return read
+ * as `+0.21R`. One helper, so the ×100 lives in one place instead of once per
+ * call site. The producing code is always the authority on the scale.
+ */
+export function fmtFracSignedPct(value: number | null | undefined, digits = 2): string {
+	if (value === null || value === undefined || !Number.isFinite(value)) return '—';
+	return fmtPct(value * 100, digits);
+}
+
+// --- Flip points for the market-context drivers -----------------------------
+// The three driver values on the banner's face are meaningless without the
+// value at which the label would change, so each is annotated with its flip
+// point. These are the classifier's own frozen thresholds, pinned against
+// `market_state.py` by `tests/unit/format.test.ts` so a Python-side edit turns
+// a test red instead of leaving a quietly wrong caption on the page.
+
+/** `atr_pct_q` at or above this percentile puts the vol axis on 'high' ALONE —
+ *  the VIX is not read on that branch (#1559). Python: `ATR_HIGH_Q` × 100. */
+export const MARKET_STATE_ATR_HIGH_PCTILE = 70;
+
+/** The VIX level that flips the vol axis, consulted ONLY while the realized leg
+ *  is below `MARKET_STATE_ATR_HIGH_PCTILE`. Python: `VIX_HIGH`. */
+export const MARKET_STATE_VIX_HIGH = 25;
+
+/**
+ * The `dist200` percentage at which bull becomes bear: ZERO.
+ *
+ * NOT `DIST_FLAT_BAND` (±2%), which is the natural mistake because that
+ * constant sits beside the others in the Python module. Measured over 375
+ * combinations of (dist200, sma50, slope): the trend after the neutral fold
+ * equals `sign(dist200)` with no counterexample. The deadband, the 50/200
+ * cross and the SMA50 slope can only route the answer to `neutral`, which
+ * folds back by that same sign — so none of them can change the emitted label,
+ * and annotating ±2% here would publish a false claim.
+ */
+export const MARKET_STATE_TREND_FLIP_PCT = 0;
+
 
 /**
  * Raw fcff-yield annotation for the merged Valuation row. The sector-%ile drives

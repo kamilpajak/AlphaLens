@@ -1186,6 +1186,14 @@ def score(
 
     enriched = market_state.enrich(enriched, asof=target)
 
+    # The three raw broad-index 5-session returns (SPY / QQQ / IWM) that sit
+    # UNDER that one word. Same module, deliberately separate family: display
+    # data, version-free (raw `close(t)/close(t-5) - 1`, no threshold to pool
+    # across), out of MARKET_STATE_COLUMNS, out of the brief sort and selection.
+    # Also internally fail-soft: a store miss or a store lagging past the
+    # staleness bound stamps NaN, never a stale trio and never an abort.
+    enriched = market_state.enrich_index_series(enriched, asof=target)
+
     out_path = output_dir / f"{target.isoformat()}.parquet"
     # Carry-forward read happens inside the helper's fail-soft boundary so a
     # corrupt previous parquet never aborts the score stage.

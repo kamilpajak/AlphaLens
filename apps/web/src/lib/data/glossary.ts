@@ -440,14 +440,17 @@ export const GLOSSARY: GlossaryEntry[] = [
 	briefMetric(
 		'market context',
 		'index-level market regime',
-		'The broad market (SPY) regime for this date, classified as one of four trend×volatility states (bull/bear × quiet/volatile) from the S&P 500 index — moving-average trend, its own trailing realized-volatility quantile, and the VIX. Context, not a signal · unvalidated: it describes the market backdrop only and NEVER feeds candidate selection or ranking. "unknown" = the label was not computed for this date (e.g. dates before the signal shipped).',
+		'One trend×volatility word for this date, plus the numbers under it. The word is computed from SPY — the ETF\'s daily bars out of our own price store, not the index itself. Trend is the SIGN of SPY\'s close against its 200-day average: a ±2% deadband and a 50/200 cross exist in the code but cannot change the answer, because both only route to a neutral that folds back by that same sign. Volatility is high when the trailing realized-volatility quantile is at or above its own 70th percentile, and the VIX is read only when it is below that. Context, not a signal · unvalidated: it describes the backdrop only and NEVER feeds candidate selection or ranking. "unknown" has three causes, not one — the date predates the signal, the classifier could not decide it (too little stored history, or a low realized leg with no VIX print reaching the date), or a price / VIX read failed. Separately, the three index returns on the strip are raw 5-session percent changes of SPY, QQQ and IWM with no threshold and no version: they are there because one SPY word cannot see a sector drawdown, and they are not part of the label.',
 		{
 			bands: [
 				{ range: 'bull-quiet', label: 'up-trend, calm — the benign backdrop' },
 				{ range: 'bull-volatile', label: 'up-trend, choppy' },
 				{ range: 'bear-volatile', label: 'down-trend, stressed' },
 				{ range: 'bear-quiet', label: 'down-trend, calm — the quiet grind' },
-				{ range: 'unknown', label: 'not computed for this date' }
+				{ range: 'unknown', label: 'no label emitted for this date' },
+				{ range: '0%', label: 'vs-MA200 flip point: bull above, bear below' },
+				{ range: '70', label: 'atr %ile at which volatility reads high on its own' },
+				{ range: '25', label: 'vix level that flips volatility while atr is below 70' }
 			]
 		}
 	)

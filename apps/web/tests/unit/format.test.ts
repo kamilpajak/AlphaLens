@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import {
 	fmtPct,
@@ -8,8 +10,12 @@ import {
 	catalystLabel,
 	fmtSigned,
 	fmtUsdCompact,
+	fmtFracSignedPct,
 	marketStateTone,
-	marketStateLabel
+	marketStateLabel,
+	MARKET_STATE_ATR_HIGH_PCTILE,
+	MARKET_STATE_VIX_HIGH,
+	MARKET_STATE_TREND_FLIP_PCT
 } from '../../src/lib/format';
 
 describe('fmtSigned — a signed fixed-decimal number (+1.20 / -1.20 / —)', () => {
@@ -176,5 +182,67 @@ describe('marketStateLabel — hyphenated regime label for the chip', () => {
 		expect(marketStateLabel(undefined)).toBe('unknown');
 		expect(marketStateLabel('')).toBe('unknown');
 		expect(marketStateLabel('bananas')).toBe('unknown');
+	});
+});
+
+describe('fmtFracSignedPct — a FRACTION rendered as a signed percentage', () => {
+	it('scales by 100 and keeps the sign', () => {
+		expect(fmtFracSignedPct(-0.038, 2)).toBe('-3.80%');
+		expect(fmtFracSignedPct(0.016, 2)).toBe('+1.60%');
+		expect(fmtFracSignedPct(0, 2)).toBe('+0.00%');
+	});
+	it('null / undefined / non-finite → em dash', () => {
+		expect(fmtFracSignedPct(null)).toBe('—');
+		expect(fmtFracSignedPct(undefined)).toBe('—');
+		expect(fmtFracSignedPct(Number.NaN)).toBe('—');
+		expect(fmtFracSignedPct(Number.POSITIVE_INFINITY)).toBe('—');
+	});
+	it('does NOT render a fraction as if it were already a percent', () => {
+		// The #446/#447 defect in one assertion: a 3.8% move must not read as
+		// -0.04%. The producing code stores the FRACTION.
+		expect(fmtFracSignedPct(-0.038, 2)).not.toBe('-0.04%');
+	});
+});
+
+describe('market-context flip points agree with the Python classifier', () => {
+	// The banner annotates each driver with the value at which the label flips.
+	// Reading the producing module here turns a drift into a red test rather
+	// than a quietly wrong caption (the toolchainPin.test.ts precedent).
+	const classifier = readFileSync(
+		join(
+			__dirname,
+			'..',
+			'..',
+			'..',
+			'alphalens-pipeline',
+			'alphalens_pipeline',
+			'market',
+			'market_state.py'
+		),
+		'utf8'
+	);
+
+	function constant(name: string): number {
+		const match = new RegExp(`^${name} = ([0-9.]+)$`, 'm').exec(classifier);
+		if (!match) throw new Error(`${name} not found in market_state.py`);
+		return Number(match[1]);
+	}
+
+	it('the ATR flip point is the classifier ATR_HIGH_Q as a percentile', () => {
+		expect(MARKET_STATE_ATR_HIGH_PCTILE).toBe(Math.round(constant('ATR_HIGH_Q') * 100));
+	});
+
+	it('the VIX flip point is the classifier VIX_HIGH', () => {
+		expect(MARKET_STATE_VIX_HIGH).toBe(constant('VIX_HIGH'));
+	});
+
+	it('the trend flip point is ZERO, not the DIST_FLAT_BAND deadband', () => {
+		// Measured over 375 combinations of (dist200, sma50, slope): the folded
+		// trend equals sign(dist200) with no counterexample, because the
+		// deadband only routes to a neutral that folds back by that same sign.
+		// So annotating ±2% on the face would be a new false claim.
+		expect(MARKET_STATE_TREND_FLIP_PCT).toBe(0);
+		expect(constant('DIST_FLAT_BAND')).toBe(0.02);
+		expect(MARKET_STATE_TREND_FLIP_PCT).not.toBe(constant('DIST_FLAT_BAND') * 100);
 	});
 });

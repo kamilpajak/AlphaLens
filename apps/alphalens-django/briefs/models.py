@@ -172,6 +172,26 @@ class Brief(models.Model):
     market_state_squeeze_on = models.BooleanField(null=True, blank=True)
     market_state_config_version = models.CharField(max_length=128, blank=True, default="")
 
+    # The three raw broad-index 5-session returns that sit UNDER that one word:
+    # ``close(current) / close(5 sessions before current) - 1`` for SPY, QQQ and
+    # IWM, as FRACTIONS (-0.0380 renders as -3.80%). Computed once per date and
+    # broadcast to every candidate row, like the label above.
+    #
+    # DISPLAY DATA, and deliberately version-free: raw arithmetic on a public
+    # close series with no threshold and no emission rule, so there is no
+    # ``*_config_version`` sibling and nothing a bump could partition. They sit
+    # OUTSIDE the pipeline's ``MARKET_STATE_COLUMNS`` for the same reason — they
+    # are not produced by the classifier's frozen rule. Never a queryset sort or
+    # filter key: the anti-rot scan beside the label's own guard covers this
+    # prefix too (``briefs/tests/test_no_market_state_ordering.py``).
+    #
+    # NULL, never 0.0, when the answer is unknown: a date whose parquet predates
+    # the backfill, or a store gap / a store lagging past its staleness bound,
+    # where the enricher stamps NaN. A 0.0 would read as a flat market.
+    market_ret5_spy = models.FloatField(null=True, blank=True)
+    market_ret5_qqq = models.FloatField(null=True, blank=True)
+    market_ret5_iwm = models.FloatField(null=True, blank=True)
+
     also_in_themes = models.JSONField(default=list, blank=True)
     rank_in_day = models.IntegerField(null=True, blank=True)
     cohort_size_in_day = models.IntegerField(null=True, blank=True)
