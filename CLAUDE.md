@@ -5,7 +5,7 @@
 - Research + decision-support repo for one investor. No BACKTESTED strategy holds a standing PASS, and none earns capital — never propose deploying capital behind a screener or automating a pick. The live rail is a separate thing: it trades hand-written picks only (see `## Money path`).
 - The thematic tool AUGMENTS the owner's judgement (he cherry-picks, the group discusses, each member decides); never describe it as a replacement.
 - uv workspace. New code goes to `apps/alphalens-pipeline/alphalens_pipeline/<name>/` (infra, live services, data clients, scorers), `apps/alphalens-research/alphalens_research/<name>/` (lab, backtest, attribution, overlays, preaudit) or `apps/alphalens-pipeline/alphalens_cli/` (CLI commands) — never at the repo top level (ADR 0011).
-- IMPORTANT: `alphalens_pipeline.*` never imports `alphalens_research.*` at top level. The only exception is a lazy import inside the body of `alphalens_cli.commands.{audit,doctrine,preaudit}` — and it is NOT gated, because `test_module_dependencies.py` walks `alphalens_pipeline` only, never `alphalens_cli`. Gate for the package rule: `apps/alphalens-research/tests/test_module_dependencies.py`.
+- IMPORTANT: `alphalens_pipeline.*` never imports `alphalens_research.*` at top level. The only exception is a lazy import inside the body of `alphalens_cli.commands.{audit,doctrine,preaudit}` — and it is NOT gated, because the cross-tier rule walks the `alphalens_pipeline` package directory and `alphalens_cli` is a sibling of it. Gate for the package rule: `apps/alphalens-research/tests/test_module_dependencies.py` (other rules in that file DO reach into `alphalens_cli`).
 - `alphalens_research.backtest.*` imports neither `screeners.*` nor `attribution.*`: Layer 3 produces a `BacktestReport` and Layer 5 consumes it, never the reverse. Same gate.
 - A package's lifecycle status is its own `__status__` in `__init__.py`, never a table in this file.
 - Layer vocabulary (ADR 0007): 1 screener, 2 selection-gate, 3 backtest engine, 4 risk overlay, 5 attribution; every failure attributes to exactly one layer. Current paths: `apps/alphalens-research/README.md`.
@@ -22,7 +22,7 @@
 ## Code conventions
 
 - Code, comments, docstrings and identifiers in ENGLISH; math notation (α, ρ, ×, −) stays. Polish prose belongs in CLAUDE.md, memory, commits and postmortems. Gate: `apps/alphalens-research/tests/test_no_polish_chars.py`.
-- Every external-vendor call goes through that vendor's canonical client under `alphalens_pipeline/data/` (the one outside it is `literature_scanner/perplexity_client.py`) — never raw `requests`/`httpx` against a vendor URL. One `apps/alphalens-research/tests/test_no_raw_<vendor>_http.py` per vendor enforces it; a new vendor ships that test with its client.
+- Every external-vendor call goes through that vendor's canonical client under `alphalens_pipeline/data/` (two sit outside it: `brokers/saxo/client.py` and `literature_scanner/perplexity_client.py`) — never raw `requests`/`httpx` against a vendor URL. One `apps/alphalens-research/tests/test_no_raw_<vendor>_http.py` per vendor enforces it; a new vendor ships that test with its client.
 - Two call sites have NO client by design and are not violations: the display-only og:title fetch in `thematic/sources/canonical_title.py` (multi-host, no quota'd vendor) and RSS via `feedparser` behind the single `_parse_feed` seam in `thematic/sources/rss.py`.
 - Never ask an LLM for a numeric or time-sensitive value (price, market cap, date, threshold): compute it from yfinance / EDGAR / Polygon / the Form-4 store and inject the fact. Never put a bracket constraint in a prompt — filter in Python afterwards.
 - TDD always: red, green, refactor, even for a two-line fix.
@@ -32,7 +32,7 @@
 
 - `alphalens broker arm FILE|-` is the ONLY door onto the pick queue, and every pick is a HAND-WRITTEN document from `apps/alphalens-broker-contract/examples/manual-pick/` carrying `"source": "manual"`. No automatic brief-to-intent producer exists (removed 2026-09-24).
 - Two broker daemons run on the VPS at once: `alphalens-broker-manager.service` is SIM, `alphalens-broker-manager-live.service` places REAL-MONEY orders (ADR 0017). Enumerate the units before acting; never infer the environment from a command name.
-- Only `broker manage` places or amends orders; an AST gate bars every other `alphalens_cli` module from that surface and allows only cancelling.
+- Only `broker manage` places or amends orders, through the automanager in `alphalens_pipeline.brokers` that owns the surface. An AST gate forbids `place_*`/`amend_*` in EVERY module of two roots — `alphalens_cli` and `alphalens_pipeline.account_cash` (#1689) — with no carve-out for `commands/broker.py`, and allows only cancelling. The one placement path in neither root is the attended SIM driver `apps/alphalens-research/scripts/first_fill/`.
 - Before changing the arming, failure-code or JSON surface, read `apps/alphalens-broker-contract/README.md` sections "The door" and "The failure contract". This file deliberately does not restate them.
 
 ## Workflow
@@ -85,8 +85,8 @@ Each loads when you read or edit a file in its area, and is NOT re-injected afte
 
 - `apps/web/CLAUDE.md` — SPA: no-wrap atomic tokens, Storybook catalog doctrine, build-before-compose.
 - `apps/alphalens-research/CLAUDE.md` — lab: the `__status__` lifecycle marker, the evidence a CLOSED/ARCHIVED package must carry, and how to run that gate. (Layer map: `apps/alphalens-research/README.md`. Smoke profiles and the research gates: `docs/research/methodology-gates.md`.)
-- `apps/alphalens-pipeline/CLAUDE.md` — live tier: lazy CLI imports, per-vendor quota SCOPES, the calendar MIC argument, and the `alphalens broker` CLI surface (JSON envelope, failure-code registry, the place/amend AST gate) — that code is in `alphalens_cli/commands/broker.py`, so it is briefed here, not in the contract package.
+- `apps/alphalens-pipeline/CLAUDE.md` — live tier: lazy CLI imports, per-vendor quota SCOPES, the calendar MIC argument, and the `alphalens broker` CLI surface (JSON envelope, failure-code registry, the place/amend AST gate) — that code is in `alphalens_cli/commands/` (`broker.py` plus `_cli_envelope.py`), so it is briefed here, not in the contract package.
 - `apps/alphalens-django/CLAUDE.md` — DRF docstrings are published schema; regenerate the OpenAPI snapshot in the same commit.
-- `apps/alphalens-broker-contract/CLAUDE.md` — the shared contract: which half of the failure-code registry lives where, the legacy register, and pointers into `README.md` for the arming door and the gate order (that README is authoritative; this file never restates it).
-- `apps/intent-replay/CLAUDE.md` — replaying an armed pick with `scripts/replay_from_pick.py`.
+- `apps/alphalens-broker-contract/CLAUDE.md` — the shared contract: which half of the failure-code registry lives where, the legacy register, and pointers into `README.md` for the arming door and the gate order (that README is authoritative; where the area file paraphrases it, the README wins).
+- `apps/intent-replay/CLAUDE.md` — replaying an armed pick with `apps/alphalens-research/scripts/replay_from_pick.py`.
 - `docs/research/CLAUDE.md` — writing a design memo: `Status:` discipline, the gates it must clear, review before compute.
