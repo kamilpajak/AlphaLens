@@ -29,6 +29,11 @@
  */
 
 import { expect, test, type Page } from '@playwright/test';
+import {
+	MARKET_STATE_ATR_HIGH_PCTILE,
+	MARKET_STATE_TREND_FLIP_PCT,
+	MARKET_STATE_VIX_HIGH
+} from '../src/lib/format';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -127,9 +132,11 @@ const EMPTY_DAY = JSON.parse(readFileSync(`${FIXTURES_DIR}/days/${EMPTY_DATE}.js
  */
 const NO_LABEL_DATE = '2026-07-06';
 const VIX_KEYS = ['market_state_vix', 'market_state_vix_decile'];
-/** What the real `market_state_dist200` and `market_state_atr_pct_q` render as. */
+/** What the real `market_state_dist200`, `market_state_atr_pct_q` and
+ *  `market_state_vix` of the 2026-09-05 capture render as. */
 const DIST200_CELL_VALUE = '+8.1%';
 const ATR_PCTILE_CELL_VALUE = '10';
+const VIX_CELL_VALUE = '16.6';
 const NO_LABEL_DAY = {
 	...LABELLED_DAY,
 	date: NO_LABEL_DATE,
@@ -205,6 +212,17 @@ test.describe('market-context strip — a cell with no value is not rendered', (
 		// The flip point is the point: it is what makes the number legible
 		// without opening a tooltip, so it must survive wherever a value does.
 		await expect(drivers.getByText('(bear below 0%)', { exact: false }).first()).toBeVisible();
+
+		// Asserted on the <dd> itself, which also pins WHERE the annotation
+		// sits. A <dl>'s group <div> may contain only <dt> and <dd>, so the
+		// flip point lives inside the <dd>; as a sibling it would be invalid
+		// markup and would be announced detached from the value. A locator on
+		// the flip TEXT matches either way and cannot see the difference.
+		await expect(drivers.locator('dd')).toHaveText([
+			`${DIST200_CELL_VALUE} (bear below ${MARKET_STATE_TREND_FLIP_PCT}%)`,
+			`${ATR_PCTILE_CELL_VALUE} (volatile at ${MARKET_STATE_ATR_HIGH_PCTILE})`,
+			`${VIX_CELL_VALUE} (volatile at ${MARKET_STATE_VIX_HIGH})`
+		]);
 	});
 
 	test('a date with NOTHING renders no driver row, no returns row and no toggle', async ({

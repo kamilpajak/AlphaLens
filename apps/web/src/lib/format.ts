@@ -216,6 +216,12 @@ export function oneilTone(score: number | null | undefined): BuffettTone {
 // false regime colour) — this also covers dates that predate the signal.
 export type MarketStateTone = 'green' | 'amber' | 'red' | 'red-dim' | 'muted';
 
+// This table does double duty: it maps a state to its colour AND its keys are
+// the definition of "a real regime word" (`isKnownMarketState` below). So it
+// must hold EXACTLY the four classifier states. Adding a row for `unknown` —
+// tempting, since `marketStateTone` handles it as a fallback — would make the
+// strip treat `unknown` as a regime word again and bring back the flip points
+// beside `market · unknown`. `tests/unit/format.test.ts` fails if you do.
 const _MARKET_STATE_TONES: Record<string, MarketStateTone> = {
 	bull_quiet: 'green',
 	bull_volatile: 'amber',

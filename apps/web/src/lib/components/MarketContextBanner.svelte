@@ -18,7 +18,8 @@
 	// Each DRIVER is annotated with its flip point — the value at which the
 	// label would change — because a driver without one is a number the reader
 	// cannot act on. That holds only while a label exists; see the paragraph
-	// below for the dates where it does not. The three RETURNS carry none, deliberately: they are raw
+	// below for the dates where it does not. The three RETURNS carry none,
+	// deliberately: they are raw
 	// `close(t)/close(t-5) - 1` with no threshold and no emission rule, which is
 	// also why they carry no `config_version`.
 	//

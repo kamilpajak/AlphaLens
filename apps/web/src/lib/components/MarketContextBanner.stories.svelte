@@ -86,10 +86,15 @@
 	// are the real 2026-09-05 capture, and `'unknown'` is `_UNKNOWN` in
 	// `market_state.py`, not a guess. (`vix` alone beside `unknown` is reachable
 	// too — a store under 200 sessions — but it is the rarer shape.)
+	// `squeezeOn` belongs here too: `market_state.py:237` stamps it in the
+	// `have_bars` branch, BEFORE either `unknown` return, so the real shape also
+	// has a residual drawer and therefore a HIDE/MORE toggle. Leaving it out
+	// would show a strip with less on it than the date actually has.
 	const DRIVERS_WITHOUT_LABEL: BannerProps = {
 		marketState: 'unknown',
 		dist200: ctx.market_state_dist200,
-		atrPctQ: ctx.market_state_atr_pct_q
+		atrPctQ: ctx.market_state_atr_pct_q,
+		squeezeOn: ctx.market_state_squeeze_on
 	};
 
 	// The tone matrix varies ONLY the label. Every driver is null, because no

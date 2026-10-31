@@ -67,9 +67,10 @@ export interface MarketContextCell {
  * `flipAt`.
  *
  * A driver is printed beside the level at which the label would change whenever
- * there IS a label, so a rounded value is not only a display choice: `atr_pct_q = 0.695` rounds to
- * `70` and reads as `atr %ile 70 (volatile at 70)` while the classifier
- * compares `atr_pct_q >= 0.70` and the label is still quiet. A driver sitting
+ * there IS a label, so a rounded value is not only a display choice:
+ * `atr_pct_q = 0.695` rounds to `70` and reads as
+ * `atr %ile 70 (volatile at 70)` while the classifier compares
+ * `atr_pct_q >= 0.70` and the label is still quiet. A driver sitting
  * exactly on its stated flip point with no flip reads as a classifier bug —
  * the same class of defect as a flip point beside an absent value.
  *
