@@ -18,6 +18,17 @@
 // of two cells is as legible as a row of three, and a kept-but-empty slot would
 // be the same defect wearing a quieter coat.
 //
+// THE OTHER HALF OF THE SAME RULE: a flip point annotates the LABEL, so it is
+// printed only while the label is one of the four real states. A driver value
+// CAN outlive its label, and not rarely: `classify_state` in `market_state.py`
+// fills its telemetry dict before it decides anything, so any subset of the
+// three drivers can arrive beside `unknown` — most importantly `vs ma200` and
+// `atr %ile` together, when the realized vol leg is below 70 and no VIX print
+// reaches the date, which is the one case the vol axis cannot settle (#1559).
+// Those values then render alone, with no flip point. `driverCells` is told
+// which case it is in (`labelKnown`); it never decides it, so the label
+// vocabulary stays in `$lib/format` alone.
+//
 // PRESENCE IS DECIDED FROM THE INPUT, NEVER FROM THE RENDERED STRING. Filtering
 // on the `'—'` sentinel would couple three unrelated formatters to one glyph and
 // would delete a genuine value the day any of them legitimately emits an em
@@ -45,8 +56,9 @@ export interface MarketContextCell {
 	 *  yields no cell at all, so this is never the `'—'` sentinel. */
 	value: string;
 	/** The level at which the label would flip. Carried ONLY by the drivers,
-	 *  and only ever beside a value: a flip point with nothing to annotate
-	 *  ("(volatile at 70)" next to nothing) is the defect this shape removes. */
+	 *  only ever beside a value, and only while a label EXISTS: a flip point
+	 *  with nothing to annotate — "(volatile at 70)" next to nothing, or beside
+	 *  `market · unknown` — is the defect this shape removes. */
 	flip?: string;
 }
 
@@ -54,10 +66,11 @@ export interface MarketContextCell {
  * Format `value` to `digits` decimals WITHOUT letting rounding carry it across
  * `flipAt`.
  *
- * Every driver is printed beside the level at which the label would change, so
- * a rounded value is not only a display choice: `atr_pct_q = 0.695` rounds to
- * `70` and reads as `atr %ile 70 (volatile at 70)` while the classifier
- * compares `atr_pct_q >= 0.70` and the label is still quiet. A driver sitting
+ * A driver is printed beside the level at which the label would change whenever
+ * there IS a label, so a rounded value is not only a display choice:
+ * `atr_pct_q = 0.695` rounds to `70` and reads as
+ * `atr %ile 70 (volatile at 70)` while the classifier compares
+ * `atr_pct_q >= 0.70` and the label is still quiet. A driver sitting
  * exactly on its stated flip point with no flip reads as a classifier bug —
  * the same class of defect as a flip point beside an absent value.
  *
@@ -91,8 +104,9 @@ function fracPct(v: number | null | undefined, digits: number): string | null {
 	return Number.isFinite(v) ? fmtFracSignedPct(v, digits) : null;
 }
 
-/** A level printed beside its own flip point: finite, `digits` decimals, and
- *  never rounded up onto or past `flipAt`. */
+/** A level formatted against its own flip point: finite, `digits` decimals, and
+ *  never rounded up onto or past `flipAt`. The formatting does not depend on
+ *  whether the flip point is PRINTED — see `driverCells`. */
 function levelBelowFlip(
 	v: number | null | undefined,
 	digits: number,
@@ -138,29 +152,59 @@ export interface DriverInputs {
 }
 
 /**
- * The three label drivers, each annotated with its flip point.
+ * The three label drivers, each annotated with its flip point — while there is
+ * a label to flip.
  *
- * The annotation is what makes a driver actionable — `+8.1%` says nothing
+ * The annotation is what makes a driver actionable — `+8.1%` says much less
  * without "bear below 0%" beside it — so it travels WITH its cell and vanishes
  * with it. The three thresholds are the classifier's own frozen constants,
  * pinned against `market_state.py` by `tests/unit/format.test.ts`.
+ *
+ * The cost of this rule is real and is accepted: on an `unknown` date the
+ * reader sees `atr %ile 65` with no "volatile at 70" beside it, and 65 is
+ * harder to read without the threshold. The alternative was worse — stating
+ * where a label would flip when there is no label to flip, on exactly the
+ * dates where the classifier failed to decide.
+ *
+ * `labelKnown` is the caller's answer to "is the regime word real?", passed in
+ * rather than computed here: this module stays pure and knows nothing about the
+ * label vocabulary, so the rule has exactly one home (`isKnownMarketState` in
+ * `$lib/format`). On `false` the VALUES still render — they are real readings —
+ * but no flip point does, because "(volatile at 25)" beside `market · unknown`
+ * annotates the flip of a label that does not exist.
+ *
+ * A driver outliving its label is not a corner case. The producer stamps the
+ * telemetry before it decides, so each of these is reachable: `vix` alone (a
+ * store under 200 sessions), `vs ma200` + `vix` (200-251 sessions, no ATR
+ * percentile yet), and `vs ma200` + `atr %ile` (the vol axis cannot settle
+ * because the realized leg is low and no VIX print reaches the date). What is
+ * NOT reachable is all three finite beside `unknown` — three finite drivers
+ * decide the label.
+ *
+ * The threshold-safe rounding stays on BOTH sides, deliberately: how a reading
+ * is formatted is a property of the number, so the two label states must never
+ * print the same VIX differently.
  */
-export function driverCells({ dist200, atrPctQ, vix }: DriverInputs): MarketContextCell[] {
+export function driverCells(
+	{ dist200, atrPctQ, vix }: DriverInputs,
+	labelKnown: boolean
+): MarketContextCell[] {
+	const flipIfLabelled = (flip: string) => (labelKnown ? flip : undefined);
 	return present([
 		{
 			key: 'vs ma200',
 			value: fracPct(dist200, 1),
-			flip: `bear below ${MARKET_STATE_TREND_FLIP_PCT}%`
+			flip: flipIfLabelled(`bear below ${MARKET_STATE_TREND_FLIP_PCT}%`)
 		},
 		{
 			key: 'atr %ile',
 			value: pctile01(atrPctQ, MARKET_STATE_ATR_HIGH_PCTILE),
-			flip: `volatile at ${MARKET_STATE_ATR_HIGH_PCTILE}`
+			flip: flipIfLabelled(`volatile at ${MARKET_STATE_ATR_HIGH_PCTILE}`)
 		},
 		{
 			key: 'vix',
 			value: levelBelowFlip(vix, 1, MARKET_STATE_VIX_HIGH),
-			flip: `volatile at ${MARKET_STATE_VIX_HIGH}`
+			flip: flipIfLabelled(`volatile at ${MARKET_STATE_VIX_HIGH}`)
 		}
 	]);
 }

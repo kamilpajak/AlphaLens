@@ -24,6 +24,10 @@ import {
 // Never truthiness — `ret5 = 0`, `dist200 = 0`, `atr_pct_q = 0` and
 // `squeeze_on = false` are all real readings, and the only day fixture in the
 // repo carrying a market-state payload carries `squeeze_on: false`.
+//
+// THE SECOND RULE: a flip point is an annotation ON THE LABEL, so it is printed
+// only while the label is one of the four real states. `driverCells` does not
+// decide that — the caller passes it in — so both sides are exercised here.
 
 /** The real full-precision trio the production `five_session_index_returns`
  *  answered for 2026-05-19 against the grouped-daily store on this machine on
@@ -44,7 +48,27 @@ const STATE_2026_09_05 = {
 	squeezeOn: false
 };
 
+/** The VIX leg of that same real payload, alone: the shape a store shorter than
+ *  200 sessions produces beside an unknown label. */
+const VIX_ONLY = { vix: STATE_2026_09_05.vix };
+
+/** The two price-derived legs of that same real payload, without the VIX: the
+ *  shape the producer emits when the vol axis cannot settle — a realized leg
+ *  below the 70th percentile with no VIX print reaching the date (#1559). This
+ *  is the unknown-label shape a reader meets most often. */
+const DRIVERS_NO_VIX = {
+	dist200: STATE_2026_09_05.dist200,
+	atrPctQ: STATE_2026_09_05.atrPctQ
+};
+
 const ABSENT = [null, undefined, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY];
+
+/** `driverCells` takes the caller's answer to "is the regime word real?" — the
+ *  component passes `isKnownMarketState(marketState)`. A flip point annotates a
+ *  label, so it is printed only on the `true` side. Named, because a bare
+ *  `true` / `false` at a call site says nothing about which rule it selects. */
+const LABEL_KNOWN = true;
+const LABEL_UNKNOWN = false;
 
 const keys = (cells: MarketContextCell[]) => cells.map((c) => c.key);
 const byKey = (cells: MarketContextCell[], key: string) => cells.find((c) => c.key === key);
@@ -85,7 +109,7 @@ describe('indexCells — the three 5-session index returns', () => {
 
 describe('driverCells — each value beside the level that would flip the label', () => {
 	it('keeps a resolved driver WITH its flip point', () => {
-		const cells = driverCells(STATE_2026_09_05);
+		const cells = driverCells(STATE_2026_09_05, LABEL_KNOWN);
 		expect(keys(cells)).toEqual(['vs ma200', 'atr %ile', 'vix']);
 		expect(byKey(cells, 'vs ma200')?.value).toBe('+8.1%');
 		expect(byKey(cells, 'vs ma200')?.flip).toBe(`bear below ${MARKET_STATE_TREND_FLIP_PCT}%`);
@@ -97,7 +121,7 @@ describe('driverCells — each value beside the level that would flip the label'
 
 	it('drops an absent driver, so its flip point goes with it', () => {
 		for (const absent of ABSENT) {
-			const cells = driverCells({ ...STATE_2026_09_05, atrPctQ: absent });
+			const cells = driverCells({ ...STATE_2026_09_05, atrPctQ: absent }, LABEL_KNOWN);
 			expect(keys(cells)).toEqual(['vs ma200', 'vix']);
 		}
 	});
@@ -111,7 +135,7 @@ describe('driverCells — each value beside the level that would flip the label'
 			{ dist200: null, atrPctQ: undefined, vix: 25 }
 		];
 		for (const shape of shapes) {
-			for (const cell of driverCells(shape)) {
+			for (const cell of driverCells(shape, LABEL_KNOWN)) {
 				expect(cell.value).toBeTruthy();
 				expect(cell.value).not.toBe('—');
 				expect(cell.flip).toBeTruthy();
@@ -120,7 +144,7 @@ describe('driverCells — each value beside the level that would flip the label'
 	});
 
 	it('keeps ZERO drivers — 0% from the MA200 and a 0th ATR %ile are readings', () => {
-		const cells = driverCells({ dist200: 0, atrPctQ: 0, vix: 0 });
+		const cells = driverCells({ dist200: 0, atrPctQ: 0, vix: 0 }, LABEL_KNOWN);
 		expect(keys(cells)).toEqual(['vs ma200', 'atr %ile', 'vix']);
 		expect(byKey(cells, 'vs ma200')?.value).toBe('+0.0%');
 		expect(byKey(cells, 'atr %ile')?.value).toBe('0');
@@ -128,7 +152,7 @@ describe('driverCells — each value beside the level that would flip the label'
 	});
 
 	it('is EMPTY on the 29% shape — returns published, market_state absent', () => {
-		expect(driverCells({})).toEqual([]);
+		expect(driverCells({}, LABEL_UNKNOWN)).toEqual([]);
 	});
 });
 
@@ -141,33 +165,92 @@ describe('driverCells — each value beside the level that would flip the label'
 // `VIX_HIGH = 25.0`, both `>=`.
 describe('driverCells — rounding never carries a value onto its flip point', () => {
 	it('keeps an ATR %ile just under the threshold BELOW it', () => {
-		expect(byKey(driverCells({ atrPctQ: 0.695 }), 'atr %ile')?.value).toBe('69');
-		expect(byKey(driverCells({ atrPctQ: 0.6999 }), 'atr %ile')?.value).toBe('69');
+		expect(byKey(driverCells({ atrPctQ: 0.695 }, LABEL_KNOWN), 'atr %ile')?.value).toBe('69');
+		expect(byKey(driverCells({ atrPctQ: 0.6999 }, LABEL_KNOWN), 'atr %ile')?.value).toBe('69');
 	});
 
 	it('shows the threshold itself once the classifier would flip', () => {
-		expect(byKey(driverCells({ atrPctQ: 0.7 }), 'atr %ile')?.value).toBe('70');
-		expect(byKey(driverCells({ atrPctQ: 0.7049 }), 'atr %ile')?.value).toBe('70');
+		expect(byKey(driverCells({ atrPctQ: 0.7 }, LABEL_KNOWN), 'atr %ile')?.value).toBe('70');
+		expect(byKey(driverCells({ atrPctQ: 0.7049 }, LABEL_KNOWN), 'atr %ile')?.value).toBe('70');
 	});
 
 	it('keeps a VIX just under 25 below it, and 25 itself at 25', () => {
-		expect(byKey(driverCells({ vix: 24.96 }), 'vix')?.value).toBe('24.9');
-		expect(byKey(driverCells({ vix: 25 }), 'vix')?.value).toBe('25.0');
-		expect(byKey(driverCells({ vix: 25.04 }), 'vix')?.value).toBe('25.0');
+		expect(byKey(driverCells({ vix: 24.96 }, LABEL_KNOWN), 'vix')?.value).toBe('24.9');
+		expect(byKey(driverCells({ vix: 25 }, LABEL_KNOWN), 'vix')?.value).toBe('25.0');
+		expect(byKey(driverCells({ vix: 25.04 }, LABEL_KNOWN), 'vix')?.value).toBe('25.0');
 	});
 
 	it('still ROUNDS away from the threshold — flooring everything would lie', () => {
 		// `0.29 * 100` is 28.999999999999996 in binary floating point, so an
 		// unconditional floor would print 28 for a 29th percentile.
-		expect(byKey(driverCells({ atrPctQ: 0.29 }), 'atr %ile')?.value).toBe('29');
-		expect(byKey(driverCells({ atrPctQ: 0.58 }), 'atr %ile')?.value).toBe('58');
-		expect(byKey(driverCells({ vix: 16.58 }), 'vix')?.value).toBe('16.6');
+		expect(byKey(driverCells({ atrPctQ: 0.29 }, LABEL_KNOWN), 'atr %ile')?.value).toBe('29');
+		expect(byKey(driverCells({ atrPctQ: 0.58 }, LABEL_KNOWN), 'atr %ile')?.value).toBe('58');
+		expect(byKey(driverCells({ vix: 16.58 }, LABEL_KNOWN), 'vix')?.value).toBe('16.6');
 	});
 
 	it('leaves the drawer percentile on plain rounding — it has no flip point', () => {
 		// `vix %ile` is context, not a threshold, so there is no level it could
 		// be mistaken for. The asymmetry is deliberate and pinned here.
 		expect(byKey(residualCells({ vixDecile: 0.695 }), 'vix %ile')?.value).toBe('70');
+	});
+});
+
+// A flip point says "the LABEL would change here", so it is meaningless when
+// there is no label. The driver VALUES are real readings either way and stay on
+// screen; only the annotation goes.
+//
+// A driver outliving its label is NOT a corner case. `classify_state` in
+// `market_state.py` fills its telemetry dict before it decides anything and
+// then returns `unknown` from one of two guards, so each of these reaches the
+// page: `vix` alone (store under 200 sessions), `vs ma200` + `vix` (200-251
+// sessions, no ATR percentile yet), and `vs ma200` + `atr %ile` (the vol axis
+// cannot settle — low realized leg, no VIX print). All three finite beside
+// `unknown` is the one combination the producer cannot emit, because three
+// finite drivers decide the label.
+describe('driverCells — no flip point while the regime label is unknown', () => {
+	it('the commonest shape — the two price legs, no VIX — carries no flip point', () => {
+		expect(driverCells(DRIVERS_NO_VIX, LABEL_UNKNOWN)).toEqual([
+			{ key: 'vs ma200', value: '+8.1%' },
+			{ key: 'atr %ile', value: '10' }
+		]);
+	});
+
+	it('the same two legs WITH a real label keep both flip points', () => {
+		expect(driverCells(DRIVERS_NO_VIX, LABEL_KNOWN)).toEqual([
+			{ key: 'vs ma200', value: '+8.1%', flip: `bear below ${MARKET_STATE_TREND_FLIP_PCT}%` },
+			{ key: 'atr %ile', value: '10', flip: `volatile at ${MARKET_STATE_ATR_HIGH_PCTILE}` }
+		]);
+	});
+
+	it('a lone FRED vix beside an unknown label carries no flip point either', () => {
+		expect(driverCells(VIX_ONLY, LABEL_UNKNOWN)).toEqual([{ key: 'vix', value: '16.6' }]);
+	});
+
+	it('the same lone vix WITH a real label still carries its flip point', () => {
+		expect(driverCells(VIX_ONLY, LABEL_KNOWN)).toEqual([
+			{ key: 'vix', value: '16.6', flip: `volatile at ${MARKET_STATE_VIX_HIGH}` }
+		]);
+	});
+
+	it('drops the flip point of EVERY driver, not only the one that motivated it', () => {
+		// All three finite beside `unknown` is not a producer shape (see above);
+		// this pins the FUNCTION's contract, which must not depend on which
+		// subset arrived.
+		const cells = driverCells(STATE_2026_09_05, LABEL_UNKNOWN);
+		expect(keys(cells)).toEqual(['vs ma200', 'atr %ile', 'vix']);
+		expect(cells.map((c) => c.value)).toEqual(['+8.1%', '10', '16.6']);
+		for (const cell of cells) {
+			// `undefined`, never an empty string: the template drops the whole
+			// bracketed span on absence, and `''` would render as "()".
+			expect(cell.flip).toBeUndefined();
+		}
+	});
+
+	it('formats the value identically on both sides of the label rule', () => {
+		// The threshold-safe rounding is a property of the NUMBER, not of the
+		// annotation: 24.96 must not print as 25.0 even when no "volatile at 25"
+		// sits beside it, or the two states would disagree about the same reading.
+		expect(byKey(driverCells({ vix: 24.96 }, LABEL_UNKNOWN), 'vix')?.value).toBe('24.9');
 	});
 });
 
@@ -205,13 +288,13 @@ describe('residualCells — what the drawer would reveal', () => {
 describe('the two states a reader actually meets', () => {
 	it('the 29% shape (2026-05-19): three returns, no drivers, no drawer', () => {
 		expect(indexCells(RET5_2026_05_19)).toHaveLength(3);
-		expect(driverCells({})).toHaveLength(0);
+		expect(driverCells({}, LABEL_UNKNOWN)).toHaveLength(0);
 		expect(residualCells({})).toHaveLength(0);
 	});
 
 	it('everything absent: three empty lists, so the strip is label + caption only', () => {
 		expect(indexCells({})).toHaveLength(0);
-		expect(driverCells({})).toHaveLength(0);
+		expect(driverCells({}, LABEL_UNKNOWN)).toHaveLength(0);
 		expect(residualCells({})).toHaveLength(0);
 	});
 });

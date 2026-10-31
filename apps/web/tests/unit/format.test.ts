@@ -13,6 +13,7 @@ import {
 	fmtFracSignedPct,
 	marketStateTone,
 	marketStateLabel,
+	isKnownMarketState,
 	MARKET_STATE_ATR_HIGH_PCTILE,
 	MARKET_STATE_VIX_HIGH,
 	MARKET_STATE_TREND_FLIP_PCT
@@ -182,6 +183,34 @@ describe('marketStateLabel — hyphenated regime label for the chip', () => {
 		expect(marketStateLabel(undefined)).toBe('unknown');
 		expect(marketStateLabel('')).toBe('unknown');
 		expect(marketStateLabel('bananas')).toBe('unknown');
+	});
+});
+
+describe('isKnownMarketState — the ONE answer to "is the regime word real?"', () => {
+	it('is true for exactly the four classifier states', () => {
+		expect(isKnownMarketState('bull_quiet')).toBe(true);
+		expect(isKnownMarketState('bull_volatile')).toBe(true);
+		expect(isKnownMarketState('bear_volatile')).toBe(true);
+		expect(isKnownMarketState('bear_quiet')).toBe(true);
+	});
+	it('is false for every absence and every unrecognised word', () => {
+		expect(isKnownMarketState('unknown')).toBe(false);
+		expect(isKnownMarketState(null)).toBe(false);
+		expect(isKnownMarketState(undefined)).toBe(false);
+		expect(isKnownMarketState('')).toBe(false);
+		expect(isKnownMarketState('bananas')).toBe(false);
+	});
+	it('does not accept an Object.prototype key as a regime word', () => {
+		// The membership test must be `Object.hasOwn`, not the `in` operator:
+		// `in` walks the prototype chain, so a payload carrying
+		// `market_state: "toString"` used to pass as a real state — printing
+		// flip points, labelling the chip `toString`, and making the tone
+		// lookup hand back a function typed as a tone.
+		for (const key of ['toString', 'constructor', 'hasOwnProperty', '__proto__']) {
+			expect(isKnownMarketState(key)).toBe(false);
+			expect(marketStateLabel(key)).toBe('unknown');
+			expect(marketStateTone(key)).toBe('muted');
+		}
 	});
 });
 

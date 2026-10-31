@@ -17,9 +17,31 @@
 	//
 	// Each DRIVER is annotated with its flip point — the value at which the
 	// label would change — because a driver without one is a number the reader
-	// cannot act on. The three RETURNS carry none, deliberately: they are raw
+	// cannot act on. That holds only while a label exists; see the paragraph
+	// below for the dates where it does not. The three RETURNS carry none,
+	// deliberately: they are raw
 	// `close(t)/close(t-5) - 1` with no threshold and no emission rule, which is
 	// also why they carry no `config_version`.
+	//
+	// AND NEITHER DOES A DRIVER WITH NO LABEL BESIDE IT. The flip point
+	// annotates the label, so when the label reads `unknown` there is no flip to
+	// describe and the value renders alone.
+	//
+	// ANY SUBSET of the three drivers can accompany an `unknown` label, because
+	// `classify_state` in `market_state.py` fills its telemetry dict BEFORE it
+	// decides anything and then returns `unknown` from one of two guards. The
+	// four reachable shapes, read off that function:
+	//
+	//   store under 200 sessions (no SMA200)        -> `vix` only
+	//   200-251 sessions (no ATR percentile yet)    -> `vs ma200` + `vix`
+	//   ATR percentile under 70 and no VIX print    -> `vs ma200` + `atr %ile`
+	//   store / FRED read failed                    -> none
+	//
+	// The third is the one that matters most: the vol axis is an OR of the
+	// realized and implied legs, so a low realized leg with no VIX print cannot
+	// settle it (#1559), and the strip then shows two real drivers next to
+	// `market · unknown`. It used to annotate both with their flip points — the
+	// flip points of a label that does not exist.
 	//
 	// `unknown` is a first-class state with THREE causes: the date predates the
 	// signal, the classifier could not decide it, or a store / FRED read failed.
@@ -56,7 +78,7 @@
 	// stops a reader treating the strip as a signal. It is now the last line of
 	// the section and renders on every date — strictly better anyway, since a
 	// reader who never opened "more" never saw it.
-	import { marketStateTone, marketStateLabel } from '$lib/format';
+	import { marketStateTone, marketStateLabel, isKnownMarketState } from '$lib/format';
 	import { indexCells, driverCells, residualCells } from './marketContextCells';
 	import { GLOSSARY_BY_TERM } from '$lib/data/glossary';
 	import JargonTip from './JargonTip.svelte';
@@ -89,6 +111,10 @@
 
 	const label = $derived(marketStateLabel(marketState));
 	const tone = $derived(marketStateTone(marketState));
+	// One source of truth for "is the regime word real?" — the same predicate
+	// `marketStateLabel` uses, so the drivers' flip points cannot disagree with
+	// the word printed two lines above them.
+	const labelKnown = $derived(isKnownMarketState(marketState));
 
 	// MarketStateTone → chip text class. `red-dim` is not in the shared
 	// SemanticTone vocabulary (tone.ts), so map locally — the PillarTone chips do
@@ -111,7 +137,7 @@
 	// not rendered: an `aria-label`'d <dl> with no children is announced as an
 	// empty labelled list, which is a worse artifact than the em dash it replaced.
 	const faceIndex = $derived(indexCells({ ret5Spy, ret5Qqq, ret5Iwm }));
-	const faceDrivers = $derived(driverCells({ dist200, atrPctQ, vix }));
+	const faceDrivers = $derived(driverCells({ dist200, atrPctQ, vix }, labelKnown));
 	const residual = $derived(residualCells({ vixDecile, squeezeOn }));
 
 	let requested = $state(false);
@@ -131,6 +157,7 @@
 	$effect(() => {
 		if (residual.length === 0) requested = false;
 	});
+
 </script>
 
 <!-- Lives INSIDE the brief header container as a footer strip — a twin of the
@@ -179,7 +206,9 @@
 		{/if}
 
 		<!-- The drivers, each beside the value at which the label would flip. The
-		     flip point is part of the cell, so it cannot outlive its value. -->
+		     flip point is part of the cell, so it cannot outlive its value — and no
+		     driver carries one while the label is `unknown`, where there is no flip
+		     to annotate. -->
 		{#if faceDrivers.length > 0}
 			<dl
 				aria-label="market state drivers"
@@ -188,8 +217,16 @@
 				{#each faceDrivers as cell (cell.key)}
 					<div class="flex items-baseline gap-1.5 whitespace-nowrap">
 						<dt class="text-fg-muted uppercase tracking-widest text-[9px]">{cell.key}</dt>
-						<dd class="font-mono text-fg">{cell.value}</dd>
-						<span class="text-fg-muted text-[9px]">({cell.flip})</span>
+						<!-- The flip point lives INSIDE the <dd>, not beside it: a <dl>'s
+						     <div> group may contain only <dt> and <dd>, and the annotation
+						     is part of the description anyway, so it is announced with the
+						     value instead of after it. -->
+						<dd class="font-mono text-fg flex items-baseline gap-1.5">
+							{cell.value}
+							{#if cell.flip}
+								<span class="text-fg-muted text-[9px] font-sans">({cell.flip})</span>
+							{/if}
+						</dd>
 					</div>
 				{/each}
 			</dl>
