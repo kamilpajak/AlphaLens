@@ -472,6 +472,19 @@ rolls forward to the next one first. The daemon applies it three ways (#1734):
   set or the chain is dead the drain does not run, so the line is written on the
   first tick after; `broker picks` and `broker status` mark such a pick
   `overdue` meanwhile.
+  - A pick whose WHOLE entry ladder is one immediate tier never reaches that
+    check once its order is placed: since #1832 the drain retires it, because
+    it has no second half to come back for. Before #1832 nothing retired it and
+    the daemon wrote `expired` with the reason `unplaced at window end` over
+    orders that were placed and filled.
+  - When the window does end and the submissions journal holds an order for the
+    key anyway — a MIXED pick whose immediate half was placed and whose
+    pullback half was not, or a pick whose only record is the write-ahead
+    `attempt` — the terminal line still goes in, but the `reason` falls back to
+    `window ended with an order at the broker`, not `unplaced at window end`,
+    and the alert says to read the position and the resting orders instead of
+    arming again. Arming again is what buys the entry a second time, and the
+    door does not refuse it, so the wording is the only guard there.
 - **A pick that does not fit in free capital waits.** The gross cap and the cash
   floor do not refuse: the pick stays armed, is tried again every tick in
   `armed_ts` order (ordered first-fit: a later pick that fits is placed while an
@@ -493,7 +506,11 @@ way).
 
 An expired pick whose now tranche was already placed keeps that position: the
 `expired` line only stops the drain, and `broker trades` shows the record with
-its fills and `pick_status: expired`.
+its fills and `pick_status: expired`. Since #1832 that combination is reachable
+only for a MIXED pick (or for one whose single record is the write-ahead
+`attempt`), and its `pick_status_reason` then reads `window ended with an order
+at the broker`. A pick made of one immediate tier alone gets no `expired` line
+at all once it is placed, so `broker trades` keeps showing it as `armed`.
 
 A replace (`generation` stated, armed, unplaced) may change `order_ttl_days`,
 and with it the window: it is the author's declaration. It cannot move the

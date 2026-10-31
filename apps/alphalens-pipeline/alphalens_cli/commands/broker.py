@@ -1814,9 +1814,10 @@ def picks_command(
     different questions. ``picks.keys_with_any_submission`` resolves the state
     — has anything reached the broker for this pick, an immediate tier's own
     record included. ``picks.submitted_pick_keys`` bounds the wait line and
-    ``window_end`` — has the DRAIN finished with it, which skips an immediate
-    tier's own record by design (#1247). Asking the drain's question for the
-    state printed PENDING over filled orders.
+    ``window_end``; called with no ``immediate_only_keys``, as it is here, it
+    answers the narrow question those two fields want — does a record OTHER
+    than an immediate tier's own retire this pick (#1247). Asking the drain's
+    question for the state printed PENDING over filled orders.
 
     One state per pick: PENDING (armed, decodable, and the journal records
     NOTHING for it — the drain will place it), WAITING (armed and not placed
@@ -1861,13 +1862,18 @@ def picks_command(
     lines by hand does. Rows keep their own states: a pick that decodes still
     reads PENDING while nothing has reached the broker for it.
 
-    A row the DRAIN has not retired carries ``window_end`` (``order_ttl_days``
-    sessions after its trade date) and ``overdue``. That includes a PLACED row:
-    an immediate-only pick is placed at the broker and never retired, because
-    the retirement fold skips its own record, so it keeps both fields for life.
+    A row THIS command's narrow fold has not retired carries ``window_end``
+    (``order_ttl_days`` sessions after its trade date) and ``overdue``. That
+    includes a PLACED row: an immediate-only pick will never have a record
+    other than its own immediate tier's, and that one the narrow fold skips, so
+    the row keeps both fields for life. The DRAIN now answers differently for
+    exactly that shape — since #1832 a placed immediate-only pick IS retired
+    there, so the drain stops visiting it and no longer writes ``expired`` over
+    its filled order. The view keeps the narrower answer on purpose: the two
+    fields describe the window, not the drain's appetite.
     An overdue PENDING or WAITING row does mean the drain is not running (KILL,
-    a dead chain, a stopped daemon); an overdue PLACED row does not — the drain
-    may be perfectly healthy and simply has nothing that retires that pick.
+    a dead chain, a stopped daemon); an overdue PLACED row does not — it is
+    either a pick the drain has finished with or one nothing retires.
 
     No broker, no auth, no mutation; safe while the daemon runs. Exit 0 for any
     successful read, including a missing journal (an empty queue is an honest

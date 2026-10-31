@@ -155,8 +155,11 @@ class Health:
     # None when that field is absent — never inferred from the brief date,
     # which says nothing about when the daemon refused.
     last_refusal_age_s: float | None = None
-    # #1734: the latest pick that expired unplaced at the end of its window,
-    # with its age from the line's own ``expired_ts`` (the #1385 rule).
+    # #1734: the latest pick whose validity window ended with the drain still
+    # owing it work, with its age from the line's own ``expired_ts`` (the #1385
+    # rule). Since #1832 that is not always "unplaced": the line's reason reads
+    # ``window ended with an order at the broker`` when the submissions journal
+    # held one for the key, which a MIXED pick's placed now half produces.
     last_expiry: str | None = None
     last_expiry_age_s: float | None = None
     # #1822: how many lines of picks.jsonl the fold cannot read. Any non-zero

@@ -845,9 +845,24 @@ def _run_placement_drain(deps: LoopDeps, report: TickReport, *, enabled: bool) -
     # tried, and a later one that fits is placed while an earlier one keeps
     # waiting — strict head-of-line would let one oversized pick block the
     # queue for its whole window.
-    for pick in _in_armed_order(deps.iter_picks()):
+    queued = _in_armed_order(deps.iter_picks())
+    # #1832: the retirement fold reads SUBMISSION records, which carry no ladder
+    # shape, so the drain — the only reader that holds the decoded queue — tells
+    # it which keys are nothing but a now tranche. For those, a placed now
+    # record retires the pick: there is no pullback half for the #1247 skip to
+    # protect, and leaving them in the queue is what let the validity-window
+    # check write "unplaced at window end" over a filled order. The LEGACY
+    # refusal above keeps the unwidened set on purpose: it must still produce a
+    # terminal line for a now-only pre-#1467 pick, and a retired key gets none.
+    retired = picks.submitted_pick_keys(
+        records,
+        immediate_only_keys={
+            picks.pick_key(pick) for pick in queued if picks.is_now_only_ladder(pick)
+        },
+    )
+    for pick in queued:
         key = picks.pick_key(pick)
-        if key in already_submitted or key in placed_this_tick:
+        if key in retired or key in placed_this_tick:
             continue
         placed_this_tick.add(key)
         if deps.place_pick(pick):
@@ -6705,6 +6720,36 @@ def _without_placed_now_tier(
     return replace(plan, entry_tiers=pullback)
 
 
+def _an_order_exists_for(
+    intent: Any, ticker: str, read_records: Callable[[Any], Iterable[Mapping[str, Any]]]
+) -> bool:
+    """Does the submissions journal hold an order for this pick's key (#1832)?
+
+    Read HERE, inside the expiry branch, and nowhere else: the window check is
+    deliberately the first thing ``_place_pick`` does, so a tick that does not
+    expire anything must keep paying nothing for it. This is a FILE read of
+    ``submissions.jsonl``, not a broker read, so the "an expired pick must not
+    read the broker" contract is untouched.
+
+    An unreadable journal answers True. The alert that follows is the only thing
+    standing between the operator and a second real-money entry — the arming
+    door does not refuse the second document once the status stops being
+    ``armed`` (``intent_door._refuse_other_armed_date``) — so "I could not
+    check" must land on the cautious branch, not on the one that invites a
+    re-arm."""
+    try:
+        records = list(read_records(state_paths.submissions_path()))
+    except OSError as exc:
+        logger.warning(
+            "place_pick %s: the submissions journal could not be read at expiry, so the "
+            "alert assumes an order may rest at the broker: %s",
+            ticker,
+            exc,
+        )
+        return True
+    return picks.pick_key(intent) in picks.keys_with_any_submission(records)
+
+
 def _plan_gross_acct(plan: Any, fx: Any) -> float:
     from broker_contract.sizing import setup_plan_gross_notional
 
@@ -6784,7 +6829,11 @@ def _place_pick(
     now = _utc_now()
     if now >= window.window_end:
         capital_wait.expire(
-            intent=intent, pick_key=pick_key, window=window, alert_throttled=alert_throttled
+            intent=intent,
+            pick_key=pick_key,
+            window=window,
+            alert_throttled=alert_throttled,
+            at_broker=_an_order_exists_for(intent, ticker, iter_submission_records),
         )
         return False
 
