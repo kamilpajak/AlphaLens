@@ -120,6 +120,17 @@
 	// component — otherwise `aria-expanded` and `aria-controls` would point at a
 	// drawer that is not there.
 	const open = $derived(requested && residual.length > 0);
+
+	// ...and the REQUEST itself must not survive it either. The strip is not
+	// remounted when the reader steps from one brief date to the next (same
+	// route, new param), so without this: open the drawer on a 2026-09-05-shaped
+	// date, step back to a pre-signal date where the button unmounts, step
+	// forward again — and the drawer is already open although nobody asked for
+	// it in that view. Resetting on the empty set is enough; the request is only
+	// ever honoured while there is something to reveal.
+	$effect(() => {
+		if (residual.length === 0) requested = false;
+	});
 </script>
 
 <!-- Lives INSIDE the brief header container as a footer strip — a twin of the

@@ -210,4 +210,33 @@ test.describe('market-context strip — a cell with no value is not rendered', (
 		await expect(s.getByText('market · unknown', { exact: false })).toBeVisible();
 	});
 
+	// The drawer REQUEST must not outlive the drawer. The strip is not remounted
+	// when the reader steps from one brief date to the next — same route, new
+	// param — so a request made on a date with a residual used to survive a date
+	// without one and re-open the drawer on return, in a view where nobody asked
+	// for it. The walk below is therefore client-side (the prev/next links), not
+	// `page.goto`, which would remount and prove nothing.
+	test('the drawer request does not survive a date that has no drawer', async ({ page }) => {
+		await installMockedApi(page);
+		await page.goto(`/brief/${LABELLED_DATE}`);
+
+		const s = strip(page);
+		const toggle = s.getByRole('button');
+		await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+		await toggle.click();
+		await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+		await expect(s.getByText('vix %ile', { exact: false })).toBeVisible();
+
+		// Step back one date, where market_state is absent and the toggle unmounts.
+		await page.getByRole('link', { name: RETURNS_ONLY_DATE }).click();
+		await expect(page.getByTestId('brief-date')).toHaveText(RETURNS_ONLY_DATE);
+		await expect(s.getByRole('button')).toHaveCount(0);
+
+		// ...and forward again. The drawer must be CLOSED: same mounted strip,
+		// but this is a fresh view and the reader has not asked for it here.
+		await page.getByRole('link', { name: LABELLED_DATE }).click();
+		await expect(page.getByTestId('brief-date')).toHaveText(LABELLED_DATE);
+		await expect(s.getByRole('button')).toHaveAttribute('aria-expanded', 'false');
+		await expect(s.getByText('vix %ile', { exact: false })).toHaveCount(0);
+	});
 });
