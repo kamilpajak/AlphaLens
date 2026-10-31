@@ -132,6 +132,45 @@ describe('driverCells — each value beside the level that would flip the label'
 	});
 });
 
+// A driver is printed BESIDE the level at which the label would change, so
+// rounding it is not only a display choice. `atr_pct_q = 0.695` rounds to 70
+// and reads as `atr %ile 70 (volatile at 70)` while the classifier compares
+// `atr_pct_q >= 0.70` and the label is still quiet — a driver sitting exactly
+// on its stated flip point with no flip, which reads as a classifier bug.
+// Thresholds here mirror `market_state.py`: `ATR_HIGH_Q = 0.70` and
+// `VIX_HIGH = 25.0`, both `>=`.
+describe('driverCells — rounding never carries a value onto its flip point', () => {
+	it('keeps an ATR %ile just under the threshold BELOW it', () => {
+		expect(byKey(driverCells({ atrPctQ: 0.695 }), 'atr %ile')?.value).toBe('69');
+		expect(byKey(driverCells({ atrPctQ: 0.6999 }), 'atr %ile')?.value).toBe('69');
+	});
+
+	it('shows the threshold itself once the classifier would flip', () => {
+		expect(byKey(driverCells({ atrPctQ: 0.7 }), 'atr %ile')?.value).toBe('70');
+		expect(byKey(driverCells({ atrPctQ: 0.7049 }), 'atr %ile')?.value).toBe('70');
+	});
+
+	it('keeps a VIX just under 25 below it, and 25 itself at 25', () => {
+		expect(byKey(driverCells({ vix: 24.96 }), 'vix')?.value).toBe('24.9');
+		expect(byKey(driverCells({ vix: 25 }), 'vix')?.value).toBe('25.0');
+		expect(byKey(driverCells({ vix: 25.04 }), 'vix')?.value).toBe('25.0');
+	});
+
+	it('still ROUNDS away from the threshold — flooring everything would lie', () => {
+		// `0.29 * 100` is 28.999999999999996 in binary floating point, so an
+		// unconditional floor would print 28 for a 29th percentile.
+		expect(byKey(driverCells({ atrPctQ: 0.29 }), 'atr %ile')?.value).toBe('29');
+		expect(byKey(driverCells({ atrPctQ: 0.58 }), 'atr %ile')?.value).toBe('58');
+		expect(byKey(driverCells({ vix: 16.58 }), 'vix')?.value).toBe('16.6');
+	});
+
+	it('leaves the drawer percentile on plain rounding — it has no flip point', () => {
+		// `vix %ile` is context, not a threshold, so there is no level it could
+		// be mistaken for. The asymmetry is deliberate and pinned here.
+		expect(byKey(residualCells({ vixDecile: 0.695 }), 'vix %ile')?.value).toBe('70');
+	});
+});
+
 describe('residualCells — what the drawer would reveal', () => {
 	it('keeps both when both resolve, and `false` renders as "off"', () => {
 		const cells = residualCells(STATE_2026_09_05);

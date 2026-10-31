@@ -32,7 +32,6 @@
 // suite exercises the code the component imports instead of a copy of it.
 // Unit-tested in tests/unit/marketContextCells.test.ts.
 import {
-	fmtNum,
 	fmtFracSignedPct,
 	MARKET_STATE_ATR_HIGH_PCTILE,
 	MARKET_STATE_VIX_HIGH,
@@ -51,11 +50,40 @@ export interface MarketContextCell {
 	flip?: string;
 }
 
+/**
+ * Format `value` to `digits` decimals WITHOUT letting rounding carry it across
+ * `flipAt`.
+ *
+ * Every driver is printed beside the level at which the label would change, so
+ * a rounded value is not only a display choice: `atr_pct_q = 0.695` rounds to
+ * `70` and reads as `atr %ile 70 (volatile at 70)` while the classifier
+ * compares `atr_pct_q >= 0.70` and the label is still quiet. A driver sitting
+ * exactly on its stated flip point with no flip reads as a classifier bug —
+ * the same class of defect as a flip point beside an absent value.
+ *
+ * Rounding is kept everywhere else, deliberately. Flooring unconditionally
+ * would print `28` for `0.29`, because `0.29 * 100` is `28.999999999999996` in
+ * binary floating point. So this truncates ONLY on the step that would cross
+ * the threshold, and the threshold sits exactly on the display grid (`70`,
+ * `25.0`), which is why the one-sided check is enough.
+ */
+function belowFlipSafe(value: number, digits: number, flipAt: number): string {
+	const rounded = value.toFixed(digits);
+	if (value < flipAt && Number(rounded) >= flipAt) {
+		const scale = 10 ** digits;
+		return (Math.trunc(value * scale) / scale).toFixed(digits);
+	}
+	return rounded;
+}
+
 /** `0`-`1` quantile rank → a whole-number percentile string, or null when the
  *  input is not a finite number. The null-returning sibling of the old local
- *  helper that folded absence into `'—'`. */
-function pctile01(v: number | null | undefined): string | null {
-	return Number.isFinite(v) ? `${Math.round((v as number) * 100)}` : null;
+ *  helper that folded absence into `'—'`. Pass `flipAt` on a quantile that is
+ *  printed beside a threshold; the drawer's `vix %ile` has none. */
+function pctile01(v: number | null | undefined, flipAt?: number): string | null {
+	if (!Number.isFinite(v)) return null;
+	const pct = (v as number) * 100;
+	return flipAt === undefined ? `${Math.round(pct)}` : belowFlipSafe(pct, 0, flipAt);
 }
 
 /** `fmtFracSignedPct` only for a finite fraction; null otherwise. */
@@ -63,9 +91,14 @@ function fracPct(v: number | null | undefined, digits: number): string | null {
 	return Number.isFinite(v) ? fmtFracSignedPct(v, digits) : null;
 }
 
-/** `fmtNum` only for a finite number; null otherwise. */
-function num(v: number | null | undefined, digits: number): string | null {
-	return Number.isFinite(v) ? fmtNum(v, digits) : null;
+/** A level printed beside its own flip point: finite, `digits` decimals, and
+ *  never rounded up onto or past `flipAt`. */
+function levelBelowFlip(
+	v: number | null | undefined,
+	digits: number,
+	flipAt: number
+): string | null {
+	return Number.isFinite(v) ? belowFlipSafe(v as number, digits, flipAt) : null;
 }
 
 /** Keep only the cells whose value resolved, dropping the flip point with it. */
@@ -121,10 +154,14 @@ export function driverCells({ dist200, atrPctQ, vix }: DriverInputs): MarketCont
 		},
 		{
 			key: 'atr %ile',
-			value: pctile01(atrPctQ),
+			value: pctile01(atrPctQ, MARKET_STATE_ATR_HIGH_PCTILE),
 			flip: `volatile at ${MARKET_STATE_ATR_HIGH_PCTILE}`
 		},
-		{ key: 'vix', value: num(vix, 1), flip: `volatile at ${MARKET_STATE_VIX_HIGH}` }
+		{
+			key: 'vix',
+			value: levelBelowFlip(vix, 1, MARKET_STATE_VIX_HIGH),
+			flip: `volatile at ${MARKET_STATE_VIX_HIGH}`
+		}
 	]);
 }
 
