@@ -25,15 +25,39 @@
 	// signal, the classifier could not decide it, or a store / FRED read failed.
 	// The strip always renders, so the label stays honest and the glossary
 	// reference is always reachable.
-	import {
-		marketStateTone,
-		marketStateLabel,
-		fmtNum,
-		fmtFracSignedPct,
-		MARKET_STATE_ATR_HIGH_PCTILE,
-		MARKET_STATE_VIX_HIGH,
-		MARKET_STATE_TREND_FLIP_PCT
-	} from '$lib/format';
+	//
+	// AN ABSENT CELL DISAPPEARS — it is not an em dash
+	//
+	// The two column families go absent independently: the returns reach back to
+	// 2024-09-11, the `market_state` block ships only from 2026-07-05. So the
+	// dominant historical shape is returns WITHOUT a label — 47 of 164 brief
+	// dates, the window 2026-05-19 … 2026-07-04, measured on production Postgres
+	// 2026-10-30. On that shape the old strip printed five em dashes around the
+	// three real numbers, and worse, printed each driver's flip point beside
+	// nothing ("— (volatile at 70)"). Now a cell that has no value is not
+	// rendered at all: its `dt`, its value and its flip point go together. The
+	// rule lives in `marketContextCells.ts`, which decides presence from the
+	// INPUT (`Number.isFinite`, or `=== true` / `=== false` for the squeeze) and
+	// never from the formatted string.
+	//
+	// EVERYTHING ABSENT — a date before BOTH families, e.g. 2026-04-14 — still
+	// renders the strip, and renders exactly three things: the "market context"
+	// micro-label with its glossary tip, the muted dot plus `market · unknown`,
+	// and the unvalidated caption. No index row, no driver row, no toggle, no em
+	// dash: about two lines tall. That is the honest reading of the rule —
+	// absence shows as absence, and what remains is a real answer ("no regime
+	// word for this date") plus the way to find out what the strip means. It is
+	// the state a future reader is most likely to mistake for a bug, so it is
+	// written down here.
+	//
+	// THE CAPTION IS NOT IN THE DRAWER. It used to be, and that collided with
+	// hiding the toggle: the drawer holds only two cells, so on a 29% date the
+	// toggle must not be offered, which would have hidden the one sentence that
+	// stops a reader treating the strip as a signal. It is now the last line of
+	// the section and renders on every date — strictly better anyway, since a
+	// reader who never opened "more" never saw it.
+	import { marketStateTone, marketStateLabel } from '$lib/format';
+	import { indexCells, driverCells, residualCells } from './marketContextCells';
 	import { GLOSSARY_BY_TERM } from '$lib/data/glossary';
 	import JargonTip from './JargonTip.svelte';
 	import { ChevronDown } from 'lucide-svelte';
@@ -77,42 +101,25 @@
 		muted: 'text-fg-muted border-grid-strong'
 	};
 
-	let open = $state(false);
-
 	// Same shared-glossary lookup as the CandidateCard / +page tipProps helper.
 	function tipProps(term: string) {
 		const g = GLOSSARY_BY_TERM.get(term);
 		return { term: g?.term ?? term, full: g?.full ?? '', body: g?.body ?? '', bands: g?.bands };
 	}
 
-	// PR-8b guard pattern: every numeric read is Number.isFinite-gated before it
-	// is shown. `atr_pct_q` / `vix_decile` are 0-1 quantile ranks (× 100 for the
-	// %ile); `dist200` and the three returns are fractions, so they go through
-	// the ONE shared fraction→percent helper rather than a local ×100.
-	const pctile01 = (v: number | null | undefined): string =>
-		Number.isFinite(v) ? `${Math.round((v as number) * 100)}` : '—';
-	const squeezeLabel = $derived(squeezeOn === true ? 'on' : squeezeOn === false ? 'off' : '—');
+	// Only the cells whose value resolved. An empty list means the whole row is
+	// not rendered: an `aria-label`'d <dl> with no children is announced as an
+	// empty labelled list, which is a worse artifact than the em dash it replaced.
+	const faceIndex = $derived(indexCells({ ret5Spy, ret5Qqq, ret5Iwm }));
+	const faceDrivers = $derived(driverCells({ dist200, atrPctQ, vix }));
+	const residual = $derived(residualCells({ vixDecile, squeezeOn }));
 
-	// One row per face cell: a short key, the value, and the flip point (null for
-	// the three returns, which have no threshold to flip).
-	const indexCells = $derived([
-		{ key: 'spy', value: fmtFracSignedPct(ret5Spy) },
-		{ key: 'qqq', value: fmtFracSignedPct(ret5Qqq) },
-		{ key: 'iwm', value: fmtFracSignedPct(ret5Iwm) }
-	]);
-	const driverCells = $derived([
-		{
-			key: 'vs ma200',
-			value: fmtFracSignedPct(dist200, 1),
-			flip: `bear below ${MARKET_STATE_TREND_FLIP_PCT}%`
-		},
-		{
-			key: 'atr %ile',
-			value: pctile01(atrPctQ),
-			flip: `volatile at ${MARKET_STATE_ATR_HIGH_PCTILE}`
-		},
-		{ key: 'vix', value: fmtNum(vix, 1), flip: `volatile at ${MARKET_STATE_VIX_HIGH}` }
-	]);
+	let requested = $state(false);
+	// The toggle is offered only while the drawer has something to show, so
+	// `open` must not survive the residual set emptying under the same mounted
+	// component — otherwise `aria-expanded` and `aria-controls` would point at a
+	// drawer that is not there.
+	const open = $derived(requested && residual.length > 0);
 </script>
 
 <!-- Lives INSIDE the brief header container as a footer strip — a twin of the
@@ -139,42 +146,49 @@
 		     value is `whitespace-nowrap` because a signed percentage breaks after
 		     the hyphen-minus and `-3.80%` would read as a positive 3.80% on the
 		     next line. -->
-		<dl
-			aria-label="index 5-session returns"
-			class="flex items-baseline gap-x-4 gap-y-1 flex-wrap text-[11px] min-w-0"
-		>
-			{#each indexCells as cell (cell.key)}
-				<div class="flex items-baseline gap-1.5 whitespace-nowrap">
-					<dt class="text-fg-muted uppercase tracking-widest text-[9px]">{cell.key} 5d</dt>
-					<dd class="font-mono text-fg">{cell.value}</dd>
-				</div>
-			{/each}
-		</dl>
+		{#if faceIndex.length > 0}
+			<dl
+				aria-label="index 5-session returns"
+				class="flex items-baseline gap-x-4 gap-y-1 flex-wrap text-[11px] min-w-0"
+			>
+				{#each faceIndex as cell (cell.key)}
+					<div class="flex items-baseline gap-1.5 whitespace-nowrap">
+						<dt class="text-fg-muted uppercase tracking-widest text-[9px]">{cell.key} 5d</dt>
+						<dd class="font-mono text-fg">{cell.value}</dd>
+					</div>
+				{/each}
+			</dl>
+		{/if}
 
-		<!-- The drivers, each beside the value at which the label would flip. -->
-		<dl
-			aria-label="market state drivers"
-			class="flex items-baseline gap-x-4 gap-y-1 flex-wrap text-[11px] min-w-0"
-		>
-			{#each driverCells as cell (cell.key)}
-				<div class="flex items-baseline gap-1.5 whitespace-nowrap">
-					<dt class="text-fg-muted uppercase tracking-widest text-[9px]">{cell.key}</dt>
-					<dd class="font-mono text-fg">{cell.value}</dd>
-					<span class="text-fg-muted text-[9px]">({cell.flip})</span>
-				</div>
-			{/each}
-		</dl>
+		<!-- The drivers, each beside the value at which the label would flip. The
+		     flip point is part of the cell, so it cannot outlive its value. -->
+		{#if faceDrivers.length > 0}
+			<dl
+				aria-label="market state drivers"
+				class="flex items-baseline gap-x-4 gap-y-1 flex-wrap text-[11px] min-w-0"
+			>
+				{#each faceDrivers as cell (cell.key)}
+					<div class="flex items-baseline gap-1.5 whitespace-nowrap">
+						<dt class="text-fg-muted uppercase tracking-widest text-[9px]">{cell.key}</dt>
+						<dd class="font-mono text-fg">{cell.value}</dd>
+						<span class="text-fg-muted text-[9px]">({cell.flip})</span>
+					</div>
+				{/each}
+			</dl>
+		{/if}
 
-		<button
-			type="button"
-			onclick={() => (open = !open)}
-			aria-expanded={open}
-			aria-controls="market-context-axes"
-			class="inline-flex items-center gap-1 text-[10px] uppercase tracking-widest text-fg-muted hover:text-fg transition-colors shrink-0 whitespace-nowrap"
-		>
-			{open ? 'hide' : 'more'}
-			<ChevronDown class="size-3 transition-transform {open ? 'rotate-180' : ''}" />
-		</button>
+		{#if residual.length > 0}
+			<button
+				type="button"
+				onclick={() => (requested = !requested)}
+				aria-expanded={open}
+				aria-controls="market-context-axes"
+				class="inline-flex items-center gap-1 text-[10px] uppercase tracking-widest text-fg-muted hover:text-fg transition-colors shrink-0 whitespace-nowrap"
+			>
+				{open ? 'hide' : 'more'}
+				<ChevronDown class="size-3 transition-transform {open ? 'rotate-180' : ''}" />
+			</button>
+		{/if}
 	</div>
 
 	{#if open}
@@ -183,19 +197,23 @@
 		     silent doubling the moment one of them is edited. -->
 		<div id="market-context-axes" class="mt-3 border-t border-grid pt-3">
 			<dl class="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1.5 text-[11px]">
-				<div class="flex items-center justify-between gap-2">
-					<dt class="text-fg-muted uppercase tracking-widest text-[9px]">vix %ile</dt>
-					<dd class="font-mono text-fg whitespace-nowrap">{pctile01(vixDecile)}</dd>
-				</div>
-				<div class="flex items-center justify-between gap-2">
-					<dt class="text-fg-muted uppercase tracking-widest text-[9px]">squeeze</dt>
-					<dd class="font-mono text-fg whitespace-nowrap">{squeezeLabel}</dd>
-				</div>
+				{#each residual as cell (cell.key)}
+					<div class="flex items-center justify-between gap-2">
+						<dt class="text-fg-muted uppercase tracking-widest text-[9px]">{cell.key}</dt>
+						<dd class="font-mono text-fg whitespace-nowrap">{cell.value}</dd>
+					</div>
+				{/each}
 			</dl>
-			<p class="mt-2 text-[10px] italic text-fg-muted">
-				label unvalidated · context-only · the three index returns are raw 5-session percent
-				changes, not part of the label
-			</p>
 		</div>
 	{/if}
+
+	<!-- Always rendered, on every date: the sentence that stops the strip reading
+	     as a signal must never be behind a toggle that may not exist. The clause
+	     about the three returns reads correctly even on a date with no returns,
+	     so the wording stays verbatim rather than splitting into per-state
+	     variants nobody pins. -->
+	<p class="mt-2 text-[10px] italic text-fg-muted">
+		label unvalidated · context-only · the three index returns are raw 5-session percent changes,
+		not part of the label
+	</p>
 </section>

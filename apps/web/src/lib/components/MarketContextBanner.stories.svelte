@@ -4,14 +4,16 @@
 	import { expect, waitFor } from 'storybook/test';
 	import MarketContextBanner from './MarketContextBanner.svelte';
 	import laneDay from '../../../tests/fixtures/api-mock/days/2026-09-05.json';
+	import preSignalDay from '../../../tests/fixtures/api-mock/days/2026-05-18.json';
+	import may19 from '../../../tests/fixtures/api-mock/market-context/2026-05-19.json';
 
 	type BannerProps = ComponentProps<typeof MarketContextBanner>;
 
 	// EVERY NUMBER IN THIS FILE IS MEASURED, NOT INVENTED.
 	//
 	// The index-level payload is identical on every candidate of a date, so the
-	// first one carries it. This is the only day fixture that holds a
-	// market_state payload at all (the other three predate the signal).
+	// first one carries it. `days/2026-09-05.json` is the only day fixture that
+	// holds a market_state payload at all (the other three predate the signal).
 	const ctx = laneDay.candidates[0];
 
 	// The three 5-session index returns for the SAME asof (2026-09-05), computed
@@ -42,17 +44,59 @@
 		squeezeOn: ctx.market_state_squeeze_on
 	};
 
+	// 2026-05-19, read from its own fixture: the three returns at full precision
+	// (produced by the production writer against the real store — provenance is
+	// in the file) and NO market_state key at all. `market_state` is read off a
+	// real pre-signal candidate row the same way the page does — `days/2026-05-18.json`
+	// carries no market_state* column, so it reads `undefined`, which is exactly
+	// what the API serves for 2026-05-19 too.
+	const preSignalRow = preSignalDay.candidates[0] as Record<string, unknown>;
+	const RETURNS_ONLY: BannerProps = {
+		marketState: preSignalRow.market_state as string | null | undefined,
+		ret5Spy: may19.market_ret5_spy,
+		ret5Qqq: may19.market_ret5_qqq,
+		ret5Iwm: may19.market_ret5_iwm
+	};
+
+	// Everything absent: `days/2026-05-18.json` candidates[0] genuinely carries
+	// no market_state* key and no market_ret5_* key — its only `market*` column
+	// is `market_cap`. Every prop below therefore reads `undefined` from a real
+	// captured row, exactly as the page passes them on such a date.
+	const ALL_ABSENT: BannerProps = {
+		marketState: preSignalRow.market_state as string | null | undefined,
+		atrPctQ: preSignalRow.market_state_atr_pct_q as number | null | undefined,
+		dist200: preSignalRow.market_state_dist200 as number | null | undefined,
+		vix: preSignalRow.market_state_vix as number | null | undefined,
+		vixDecile: preSignalRow.market_state_vix_decile as number | null | undefined,
+		squeezeOn: preSignalRow.market_state_squeeze_on as boolean | null | undefined,
+		ret5Spy: preSignalRow.market_ret5_spy as number | null | undefined,
+		ret5Qqq: preSignalRow.market_ret5_qqq as number | null | undefined,
+		ret5Iwm: preSignalRow.market_ret5_iwm as number | null | undefined
+	};
+
 	// The tone matrix varies ONLY the label. Every driver is null, because no
 	// fixture exists for bull_volatile / bear_volatile / bear_quiet and
-	// plausible-looking telemetry would be invented data on the page.
+	// plausible-looking telemetry would be invented data on the page. With the
+	// disappear rule this renders the two-line minimum: the label and the
+	// unvalidated caption, no rows and no toggle.
 	const labelOnly = (marketState: string): BannerProps => ({ marketState });
 
-	// Open the "more" disclosure so the residual drawer is visible for review and
-	// asserted present. The toggle is a real <button>, so a click is
-	// deterministic under headless capture.
+	// Open the "more" disclosure so the residual drawer is visible for review.
+	// The assertion is on a DRAWER-ONLY cell: the unvalidated caption is now
+	// always on screen, so waiting for it would pass before the click and prove
+	// nothing.
 	const openMore = async ({ canvas }: { canvas: any }) => {
 		canvas.getByRole('button', { name: /more/i }).click();
-		await waitFor(() => expect(canvas.getByText(/label unvalidated/i)).toBeTruthy());
+		await waitFor(() => expect(canvas.getByText(/vix %ile/i)).toBeTruthy());
+	};
+
+	// The counterpart assertion: on a date with no residual the toggle must not
+	// exist at all. `queryByRole` returns null instead of throwing, which is the
+	// only way to assert an absence.
+	const expectNoToggle = async ({ canvas }: { canvas: any }) => {
+		await waitFor(() => expect(canvas.queryByRole('button', { name: /more|hide/i })).toBeNull());
+		// …while the caption that keeps the strip honest is still on screen.
+		expect(canvas.getByText(/label unvalidated/i)).toBeTruthy();
 	};
 
 	const { Story } = defineMeta({
@@ -78,43 +122,63 @@
 	</div>
 {/snippet}
 
-<!-- THE DEFAULT: the real captured fixture, exactly as the API serves it today.
-     The three index returns are em dashes because no brief parquet carries them
-     until the backfill runs — which is the true state of every published date
-     before that. -->
-<Story name="real fixture — returns not yet backfilled" args={fromFixture} />
-
-<!-- The same date WITH the three returns, so the full face can be reviewed. -->
+<!-- EVERYTHING PRESENT: the real captured 2026-09-05 fixture plus the measured
+     trio for the same date. Note `squeeze off` in the drawer — `false` is a real
+     reading and must survive the disappear rule, which a truthiness guard would
+     have swept away with the absences. -->
 <Story
-	name="real fixture + measured 5-session returns"
+	name="everything present (label + drivers + returns)"
 	args={{ ...fromFixture, ...MEASURED_RET5 }}
 />
 
-<!-- Everything absent: a date that predates both families. Proves every cell
-     renders an em dash rather than a 0 or a blank. -->
-<Story name="all absent (em dashes)" args={labelOnly('unknown')} />
+<!-- THE DOMINANT HISTORICAL STATE, and the one the owner hit on his first look:
+     the label is `unknown` because market_state only ships from 2026-07-05,
+     while the three returns ARE real because the price store reaches back to
+     2024-09-11. Measured on production Postgres 2026-10-30: 164 brief dates, of
+     which the 47 from 2026-05-19 to 2026-07-04 land here — 29% of everything a
+     reader can scroll back to.
 
-<!-- THE DOMINANT HISTORICAL STATE after the backfill, and the one nobody designed:
-     the label is `unknown` because market_state only ships from 2026-07-05, while
-     the three returns ARE real because the price store reaches back to 2024-09-11.
-     Measured on production Postgres 2026-10-30: 163 brief dates, of which the ~47
-     from 2026-05-19 to 2026-07-04 land here — 29% of everything a reader can scroll
-     back to. The strip must read as "no regime word for this date, but here is what
-     the market did", never as an error. -->
+     What the strip must show: the three returns, the `market · unknown` caption
+     and the unvalidated note. The driver row is GONE rather than three em dashes
+     each carrying a flip point beside nothing, and no "more" toggle is offered
+     because the drawer would be empty. -->
+<Story name="returns present, label absent (2026-05-19 — 29% of dates)" args={RETURNS_ONLY} />
+
+<!-- Label and drivers present, returns absent: every published date from
+     2026-07-05 until the backfill ran. The index row disappears; the driver row
+     and the drawer stay. -->
+<Story name="label + drivers present, returns absent" args={fromFixture} />
+
+<!-- EVERYTHING ABSENT — a date before BOTH families, bound to the real
+     2026-05-18 row. The strip still renders, and renders exactly three things:
+     the micro-label with its glossary tip, `market · unknown`, and the
+     unvalidated caption. No rows, no toggle, no em dash anywhere. This is the
+     state a reader is most likely to mistake for a broken component, which is
+     why it has its own story. -->
+<Story name="everything absent (two lines, no em dashes)" args={ALL_ABSENT} play={expectNoToggle} />
+
+<!-- The sharper no-drawer case: the face is FULL, but `vix_decile` and
+     `squeeze_on` are both absent, so the drawer would reveal nothing and the
+     toggle must still not appear. No fixture can supply this (2026-09-05 stamps
+     both), so the two residual props are overridden to null on the real row and
+     the override is stated here rather than dressed up as captured data. -->
 <Story
-	name="unknown label, real returns (pre-2026-07-05 dates)"
-	args={{ ...labelOnly('unknown'), ...MEASURED_RET5 }}
+	name="full face, no residual, no toggle"
+	args={{ ...fromFixture, ...MEASURED_RET5, vixDecile: null, squeezeOn: null }}
+	play={expectNoToggle}
 />
 
 <!-- Tone matrix — label only, drivers deliberately null (see labelOnly). Tone is
-     display-only (green / amber / red / red-dim); never a buy/avoid signal. -->
+     display-only (green / amber / red / red-dim); never a buy/avoid signal.
+     Under the disappear rule each of these is the two-line minimum. -->
 <Story name="tone — bull-quiet (green)" args={labelOnly('bull_quiet')} />
 <Story name="tone — bull-volatile (amber)" args={labelOnly('bull_volatile')} />
 <Story name="tone — bear-volatile (red)" args={labelOnly('bear_volatile')} />
 <Story name="tone — bear-quiet (muted red)" args={labelOnly('bear_quiet')} />
 
-<!-- The residual drawer expanded: vix %ile + squeeze + the unvalidated caption.
-     The promoted drivers are NOT repeated in it. -->
+<!-- The residual drawer expanded: vix %ile + squeeze. The promoted drivers are
+     NOT repeated in it, and the unvalidated caption is no longer inside it — it
+     sits below the drawer and renders on every date. -->
 <Story
 	name="drawer expanded"
 	args={{ ...fromFixture, ...MEASURED_RET5 }}
