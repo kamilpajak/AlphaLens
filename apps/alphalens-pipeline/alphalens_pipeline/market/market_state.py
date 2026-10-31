@@ -9,15 +9,15 @@ UNVALIDATED (usable history is <1y, so there is no honest in-sample fit — memo
 of the brief sort exactly like the expert panel (the PR-6 sort allowlist).
 
 Design (memo §1.3):
-- Trend axis {up, down, neutral}: price vs SMA200, SMA50 vs SMA200, SMA50 slope,
-  with a ``DIST_FLAT_BAND`` deadband → neutral.
+- Trend axis {up, down}: the SIGN of price against SMA200, i.e. ``dist200 >= 0``.
+  It once also read the 50/200 cross, the SMA50 slope and a ±2% deadband; all
+  three were provably inert and were removed (see :func:`classify_state`).
 - Vol axis {low, high}: OR of a realized proxy (ATR% ≥ its own trailing quantile)
   and an implied proxy (VIX ≥ 25). The OR is a single pre-committed a-priori
   choice (crypto-origin), logged in the config version.
-- neutral trend folds to up/down by ``sign(dist200)``; the (trend, vol) grid maps
-  to the four named states. A missing/insufficient input → ``unknown`` (a
-  first-class token, never silently mapped to a real state) — with ONE exception,
-  below.
+- The (trend, vol) grid maps to the four named states. A missing/insufficient
+  input → ``unknown`` (a first-class token, never silently mapped to a real
+  state) — with ONE exception, below.
 
 An OR does not always need both operands (#1559). With the realized leg at or
 above ``ATR_HIGH_Q`` the vol axis is 'high' whatever the VIX is, so the label is
@@ -68,7 +68,6 @@ from alphalens_pipeline.market.calendar import DEFAULT_EXCHANGE, n_sessions_befo
 from alphalens_pipeline.market.primitives import (
     atr_pct,
     bollinger_keltner_squeeze,
-    normalized_slope,
     rolling_quantile_rank,
     sma,
 )
@@ -76,14 +75,24 @@ from alphalens_pipeline.market.primitives import (
 logger = logging.getLogger(__name__)
 
 # --- Frozen hyperparameters (memo §2.2 manifest). All UNVALIDATED literal priors;
-# --- any change ⇒ bump MARKET_STATE_CONFIG_VERSION so old rows are not pooled.
-SMA_FAST = 50
+# --- changing any VALUE here ⇒ bump MARKET_STATE_CONFIG_VERSION so old rows are
+# --- not pooled. REMOVING one is different and is not automatically a bump: on
+# --- 2026-10-30 SMA_FAST, SLOPE_WIN, SLOPE_EPS and DIST_FLAT_BAND were deleted
+# --- with no bump, because they could change neither the emitted label nor
+# --- whether one was emitted (the evidence is at `decision_inputs` below and in
+# --- the memo §1.3 amendment). That is a measurement, not a licence: a removal
+# --- has to be proven label- AND emission-preserving before it travels alone.
 SMA_SLOW = 200
-SLOPE_WIN = 20
-SLOPE_EPS = 0.0
-DIST_FLAT_BAND = 0.02
 ATR_WIN = 14
+#: Trailing window the current ATR% is ranked against, for the REALIZED vol leg.
+#: Stamps ``market_state_atr_pct_q`` and, through :func:`_vol_axis`, the label.
 ATR_QUANTILE_LOOKBACK = 252
+#: Trailing window the current VIX is ranked against, for the ``market_state_vix_decile``
+#: telemetry column. SPLIT from :data:`ATR_QUANTILE_LOOKBACK` (same value, 252,
+#: so no row moved): one constant was serving two independently-stamped
+#: quantities, so editing it to retune the ATR axis would silently redefine the
+#: published VIX decile. Two names make that an explicit choice.
+VIX_DECILE_LOOKBACK = 252
 ATR_HIGH_Q = 0.70
 VIX_HIGH = 25.0
 BB_WIN = 20
@@ -123,26 +132,13 @@ MARKET_STATE_COLUMNS: tuple[str, ...] = (
 
 _UNKNOWN = "unknown"
 
-# (trend, vol) → named state (after the neutral fold).
+# (trend, vol) → named state.
 _STATE_MAP = {
     ("up", "low"): "bull_quiet",
     ("up", "high"): "bull_volatile",
     ("down", "high"): "bear_volatile",
     ("down", "low"): "bear_quiet",
 }
-
-
-def _trend_axis(c: float, sma50: float, sma200: float, slope: float, dist200: float) -> str:
-    """Trend axis {up, down, neutral} (memo §1.3). The ``DIST_FLAT_BAND`` deadband
-    around SMA200 takes precedence → neutral; otherwise price + SMA50 must be on the
-    same side of SMA200 with a same-sign SMA50 slope."""
-    if abs(dist200) <= DIST_FLAT_BAND:
-        return "neutral"
-    if c > sma200 and sma50 > sma200 and slope > SLOPE_EPS:
-        return "up"
-    if c < sma200 and sma50 < sma200 and slope < -SLOPE_EPS:
-        return "down"
-    return "neutral"
 
 
 def _vol_axis(atr_pct_q: float, vix: float) -> str | None:
@@ -199,10 +195,13 @@ def classify_state(
     dates — acceptable for a daily regime label; the caller (:func:`classify`)
     is responsible for the ``<= asof`` PIT constraint on both.
     Returns the label under ``market_state`` plus the raw driver telemetry, with
-    NaN telemetry where a driver could not be computed. Every input except
-    ``vix`` must be finite or the label is ``'unknown'``; an absent VIX blanks it
-    only when the realized leg cannot settle the vol axis alone (see
-    :func:`_vol_axis` and the module docstring). Pure — no I/O.
+    NaN telemetry where a driver could not be computed. The label is
+    ``'unknown'`` unless all four decision inputs are finite — the last close,
+    its SMA200, ``dist200`` and the ATR% quantile; an absent VIX blanks it only
+    when the realized leg cannot settle the vol axis alone (see
+    :func:`_vol_axis` and the module docstring). The ATR% quantile is the
+    BINDING one: it needs 252 trailing bars, where the SMA200 needs 200. Pure —
+    no I/O.
     """
     telemetry: dict[str, Any] = {
         "market_state_atr_pct": float("nan"),
@@ -215,9 +214,7 @@ def classify_state(
 
     have_bars = len(close) > 0
     if have_bars:
-        sma_fast = sma(close, SMA_FAST)
         sma_slow = sma(close, SMA_SLOW)
-        slope_series = normalized_slope(sma_fast, window=SLOPE_WIN)
         atr_pct_series = atr_pct(high, low, close, window=ATR_WIN)
         atr_pct_q_series = rolling_quantile_rank(atr_pct_series, lookback=ATR_QUANTILE_LOOKBACK)
         squeeze_series = bollinger_keltner_squeeze(
@@ -225,9 +222,7 @@ def classify_state(
         )
 
         c = _last(close)
-        sma50_now = _last(sma_fast)
         sma200_now = _last(sma_slow)
-        slope_now = _last(slope_series)
         atr_pct_now = _last(atr_pct_series)
         atr_pct_q_now = _last(atr_pct_q_series)
         dist200 = (
@@ -241,20 +236,46 @@ def classify_state(
         telemetry["market_state_dist200"] = dist200
         telemetry["market_state_squeeze_on"] = bool(squeeze_series.iloc[-1])
     else:
-        c = sma50_now = sma200_now = slope_now = atr_pct_q_now = dist200 = float("nan")
+        c = sma200_now = atr_pct_q_now = dist200 = float("nan")
 
     vix_now = _last(vix)
     if len(vix) > 0:
         telemetry["market_state_vix"] = vix_now
         telemetry["market_state_vix_decile"] = _last(
-            rolling_quantile_rank(vix, lookback=ATR_QUANTILE_LOOKBACK)
+            rolling_quantile_rank(vix, lookback=VIX_DECILE_LOOKBACK)
         )
 
     # Any REQUIRED decision input missing/insufficient → unknown (first-class
     # token). `vix_now` is deliberately absent from this tuple: the vol axis
     # decides without it whenever the realized leg is elevated (#1559), so
     # demanding it here would blank labels the disjunction had already settled.
-    decision_inputs = (c, sma50_now, sma200_now, slope_now, dist200, atr_pct_q_now)
+    #
+    # `sma50_now` and `slope_now` LEFT this tuple with the inert trend terms, and
+    # that did NOT change the emission rule, which is why no version bump was
+    # owed (#1559's rule is that a version string names exactly one emission
+    # rule). Measured over every series length 0..320: the old six-term guard
+    # and this four-term guard both first emit at n=252, and no length emits
+    # under one and blanks under the other. The BINDING window is 252
+    # (ATR_QUANTILE_LOOKBACK), not 200 — `sma50` is finite from n=50 and the
+    # slope from n=70, both strictly before `sma200` (n=200), so neither could
+    # ever be the input that blanked a label. An interior NaN cannot break that
+    # either: `sma50`'s 50-bar window and the slope's deepest reach (t-69) both
+    # lie INSIDE `sma200`'s t-199..t, so a hole blanking one blanks `sma200`
+    # too. (The loader skipping absent sessions is NOT the reason — `float(nan)`
+    # raises neither TypeError nor ValueError, so a NaN already in the parquet's
+    # `c` column does reach the series.)
+    #
+    # The two guards DO differ on exactly one input, and the difference is a
+    # label difference, not a cosmetic one: `sma_fast == 0.0` exactly makes the
+    # old `normalized_slope` divide by zero, so the old guard answered 'unknown'
+    # where this one answers a real word. What licenses the no-bump is that the
+    # input is UNREACHABLE from a price series, not that the label agrees — it
+    # does not. Reaching it needs a non-positive close with exact cancellation
+    # inside the trailing 50, and the mean of 50 strictly positive numbers is
+    # strictly positive. The loader has no sign guard (`float(row["c"])` accepts
+    # a negative), so the precondition is "prices are positive", which is why it
+    # is written here rather than assumed.
+    decision_inputs = (c, sma200_now, dist200, atr_pct_q_now)
     if not all(math.isfinite(x) for x in decision_inputs):
         return {"market_state": _UNKNOWN, **telemetry}
 
@@ -262,9 +283,18 @@ def classify_state(
     if vol is None:  # realized leg low and no VIX — genuinely undetermined
         return {"market_state": _UNKNOWN, **telemetry}
 
-    trend = _trend_axis(c, sma50_now, sma200_now, slope_now, dist200)
-    if trend == "neutral":
-        trend = "up" if dist200 >= 0 else "down"
+    # The trend word is EXACTLY the sign of dist200. The old rule returned
+    # {up, down, neutral} off the 50/200 cross, the SMA50 slope and a ±2%
+    # deadband, and the caller then folded `neutral` back by this same sign —
+    # which made all three inert: above the SMA200 the strict-up branch and the
+    # fold both said "up", below it both said "down", and the cross, the slope
+    # and the deadband could only route the answer to `neutral`. Neither way a
+    # counterexample could exist is reachable, because `dist200` is DERIVED as
+    # `(c - sma200) / sma200` above and is NaN unless `sma200 > 0`: a strict
+    # "up" needed `c > sma200`, which forces `dist200 > 0`. Measured over 990
+    # combinations straddling every boundary, zero counterexamples. Pinned by
+    # tests/test_market_state.py::TestTrendWordIsTheSignOfDist200.
+    trend = "up" if dist200 >= 0 else "down"
 
     return {"market_state": _STATE_MAP[(trend, vol)], **telemetry}
 

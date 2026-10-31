@@ -1,6 +1,6 @@
 # Design Memo: Equity-Calibrated Market-State Context Signal (`market_state`)
 
-**Status:** DRAFT — 2026-07-05 (reworked after adversarial review; see §7)
+**Status:** LOCKED (DESIGN) / §4 STILL GATED — design locked 2026-07-05 (reworked after adversarial review; see §7); shipped and stamping production since then. Amended 2026-10-30: the four inert trend inputs were removed (§2.2), no version bump owed. The FORWARD STUDY has not accrued — measured 2026-10-30, the live v1.2 cohort carries ONE label value across all 33 of its dates, so H-A and H-B remain unstartable rather than merely unfinished.
 **Author:** quant research (solo)
 **Type:** display-only context signal + forward-validation plan
 **Origin:** a crypto trading bot derives a discrete "H4 Market State" from H4 candle structure (price vs SMA50/SMA200, MA slope, ATR% context, distance-to-SMA200, range compression). This memo ports that idea to equities.
@@ -30,7 +30,7 @@ Nothing feeds selection until H-B is both decoupled and passes forward-out-of-sa
 
 ### 1.1 The grid: trend × volatility
 
-A **2-axis** classifier — **trend** {up, down, neutral} × **volatility** {low, high} — collapsing to **4 named states**, plus a first-class `unknown`.
+A **2-axis** classifier — **trend** {up, down} × **volatility** {low, high} — collapsing to **4 named states**, plus a first-class `unknown`. *(The trend axis also carried a `neutral` verdict until 2026-10-30; it always folded back to up/down by `sign(dist200)`, so it never reached the table below — see the §1.3 amendment.)*
 
 | State | Trend | Vol | Meaning |
 |---|---|---|---|
@@ -38,7 +38,7 @@ A **2-axis** classifier — **trend** {up, down, neutral} × **volatility** {low
 | `bull_volatile` | up | high | uptrend but choppy — late-cycle / news-driven |
 | `bear_volatile` | down | high | downtrend + stress — the drawdown / VIX-spike regime |
 | `bear_quiet` | down | low | slow orderly bleed (rare) |
-| `neutral × *` | neutral | — | folds to the nearest of the four by `dist200` sign (see §1.3) |
+| ~~`neutral × *`~~ | ~~neutral~~ | — | **REMOVED 2026-10-30.** The trend axis has no `neutral` arm any more. It never produced a state of its own: the caller folded it to up/down by `sign(dist200)`, which is what made the cross, the slope and the deadband inert — see the §1.3 amendment |
 | `unknown` | — | — | inputs missing (stale VIX cache / insufficient bars). First-class token, never silently mapped. |
 
 **Change from the first draft (per review, transfer-error + overfitting):** `range_compression` is **dropped as a top-level state**. The squeeze (BB-in-KC) is a crypto-origin construct; "compression precedes a big move" is an *untested carryover hypothesis at the index level*. Keeping it as a state would bake an unvalidated crypto prior into the taxonomy with <1y of data to check it. Instead the squeeze is a **raw boolean telemetry flag** (`market_state_squeeze_on`) stamped alongside — testable later, never a state.
@@ -52,18 +52,50 @@ A **2-axis** classifier — **trend** {up, down, neutral} × **volatility** {low
 
 `asof` = brief date; index = **SPY** (single pre-committed index — see §6 D1). Bars are daily; all windows in trading days.
 
-**Trend axis** — `trend ∈ {up, down, neutral}`:
+**Trend axis** — `trend ∈ {up, down}`:
 ```
 c        = SPY close at asof
-sma50    = SMA(close, 50)
 sma200   = SMA(close, 200)
-slope50  = (sma50 − sma50 SLOPE_WIN days ago) / sma50
-dist200  = (c − sma200) / sma200
+dist200  = (c − sma200) / sma200        # NaN unless sma200 > 0
 
-up      ⟺ c > sma200 AND sma50 > sma200 AND slope50 > +SLOPE_EPS
-down    ⟺ c < sma200 AND sma50 < sma200 AND slope50 < −SLOPE_EPS
-neutral ⟺ otherwise (cross disagreement, |slope50| ≤ SLOPE_EPS, or |dist200| ≤ DIST_FLAT_BAND)
+up      ⟺ dist200 ≥ 0
+down    ⟺ dist200 < 0
 ```
+
+> **Amendment 2026-10-30 — the 50/200 cross, the SMA50 slope and the ±2% deadband were REMOVED, and
+> the version was NOT bumped.**
+>
+> As registered, the axis returned `{up, down, neutral}` from four facts and the caller then folded
+> `neutral` back to up/down by `sign(dist200)`. That fold made the other three **inert**: above the
+> SMA200 the strict-`up` branch and the fold both answer "up", below it both answer "down", and a
+> cross disagreement, a flat slope or a close inside the band could only route the answer to
+> `neutral` — which folds by that same sign. So the published word was already `dist200 ≥ 0`.
+>
+> Neither way a counterexample could exist is reachable, because `dist200` is DERIVED from `c` and
+> `sma200`: a strict `up` requires `c > sma200`, which forces `dist200 > 0`. Measured over 990
+> combinations of (dist200, sma50, slope) straddling every boundary — ±`DIST_FLAT_BAND` exactly and
+> ±1e-9 either side, slope ±0.0 and ±1e-12 — with zero counterexamples, and both strict branches
+> proved unreachable from the contradicting side. Pinned permanently by
+> `tests/test_market_state.py::TestTrendWordIsTheSignOfDist200`, whose fixtures hold a real death
+> cross above the SMA200 with a **falling** SMA50 and a real golden cross below it with a **rising**
+> one, so a reintroduced slope term turns them red.
+>
+> **No `MARKET_STATE_CONFIG_VERSION` bump was owed**, which had to be measured rather than argued:
+> the two deleted values also sat in the finiteness guard, so removing them changed WHICH inputs
+> must be finite, and #1559's rule is that a changed emission rule forces a bump. The emission rule
+> is unchanged in effect. The binding window is **252** (`ATR_QUANTILE_LOOKBACK`), not 200: over
+> every series length 0..320 both the old six-term guard and the new four-term guard first emit at
+> n=252, and no length emits under one and blanks under the other. `sma50` is finite from n=50 and
+> the slope from n=70, both strictly before `sma200` (n=200), so neither could ever be the input
+> that blanked a label; an interior NaN cannot break that either, because `sma50`'s window and the
+> slope's deepest reach (t−69) both lie inside `sma200`'s t−199..t. A NaN held at each of 300
+> positions and 3000 randomized poisoned series gave zero divergences. The single input where the
+> two guards differ needs `sma50` exactly `0.0` — a non-positive close with exact cancellation,
+> impossible for a mean of 50 strictly positive prices — and the **label** is identical even there.
+>
+> The `sma50x200` token inside the version string therefore names a classifier that no longer reads
+> the cross. It is an opaque poolability key, not a specification, and changing it would orphan the
+> live cohort for a simplification that moved no published row.
 
 **Volatility axis** — `vol ∈ {low, high}`:
 ```
@@ -83,9 +115,8 @@ thresholds are untouched; what changed is **when a label is emitted at all**. Be
 was never missing (only silently wrong), so this branch could not be reached.
 The **OR combiner is a single, pre-committed a-priori choice** (not "let forward data pick" — see §7 HIGH-4). It is labelled a crypto-origin hypothesis: either realized (ATR%) or implied (VIX) elevation flips to volatile. To change it to AND / 2-of-3 is a *new* `config_version` and a *new* pre-registered test, counted in Bonferroni.
 
-**Neutral fold + state map:**
+**State map:** *(the "neutral fold" line was removed on 2026-10-30 — the trend word is now `dist200 >= 0` directly, which is what the fold already computed; §1.3 amendment)*
 ```
-neutral → nearest of {bull_*, bear_*} by sign(dist200), keeping the vol axis
 (up,   low)  → bull_quiet
 (up,   high) → bull_volatile
 (down, high) → bear_volatile
@@ -108,17 +139,29 @@ Store the label as a **string** (`market_state`) plus the raw continuous drivers
 ### 2.2 Frozen hyperparameter manifest (literature priors)
 | Param | Frozen value | Origin / note |
 |---|---|---|
-| `SMA_FAST` / `SMA_SLOW` | 50 / 200 | standard equity trend filter (golden/death cross) |
-| `SLOPE_WIN` | 20 | slope measured over ~1 month |
-| `SLOPE_EPS` | 0 (sign-only) | deadband; sign-only default |
-| `DIST_FLAT_BAND` | ±0.02 | ±2% of price → lean neutral |
+| `SMA_SLOW` | 200 | standard equity trend filter; the trend axis is the sign of price against it |
+| ~~`SMA_FAST`~~ | ~~50~~ | **REMOVED 2026-10-30** — provably inert, see the §1.3 amendment |
+| ~~`SLOPE_WIN`~~ | ~~20~~ | **REMOVED 2026-10-30** — provably inert |
+| ~~`SLOPE_EPS`~~ | ~~0 (sign-only)~~ | **REMOVED 2026-10-30** — provably inert |
+| ~~`DIST_FLAT_BAND`~~ | ~~±0.02~~ | **REMOVED 2026-10-30** — provably inert |
 | `ATR_WIN` | 14 | Wilder ATR |
-| `ATR_QUANTILE_LOOKBACK` | 252 | ~1y window the current ATR% is ranked against |
+| `ATR_QUANTILE_LOOKBACK` | 252 | ~1y window the current ATR% is ranked against (REALIZED vol leg) |
+| `VIX_DECILE_LOOKBACK` | 252 | ~1y window the current VIX is ranked against, for `market_state_vix_decile`. **SPLIT 2026-10-30** from `ATR_QUANTILE_LOOKBACK` at the same value, so no row moved: one constant was driving two independently-stamped quantities, and editing it to retune the ATR axis would have silently redefined the published VIX decile |
 | `ATR_HIGH_Q` | 0.70 | 70th pct → high-vol (prior, not fit) |
 | `VIX_LOW` / `VIX_HIGH` | 15 / 25 | reuse `feedback/regime.py::classify_vix` buckets |
 | `BB_WIN`/`BB_K`, `KC_WIN`/`KC_MULT` | 20/2.0, 20/1.5 | TTM squeeze — **telemetry flag only**, not a state |
 
 Proposed token: `MARKET_STATE_CONFIG_VERSION = "mstate-v1-spy-sma50x200-atrq70-vix15_25-UNVALIDATED"`.
+
+> **Amendment 2026-10-30 — four frozen values removed as provably inert; NO bump.** `SMA_FAST`,
+> `SLOPE_WIN`, `SLOPE_EPS` and `DIST_FLAT_BAND` were deleted from the code, together with the
+> `normalized_slope` primitive they were the only consumer of. They could not change the emitted
+> label and they could not change whether a label was emitted — the evidence is in the §1.3
+> amendment. The manifest keeps them as struck-through rows rather than dropping the lines, so this
+> table never reads as if they were silently retuned. `ATR_QUANTILE_LOOKBACK` was split in the same
+> change, same value, because it was serving two stamped quantities; each read site now names its own
+> constant, pinned by a source gate (both constants hold 252, so no behavioural test can tell a
+> miswiring apart — measured: rewiring the VIX half left all 42 behavioural tests green).
 
 > **Amendment 2026-09-24 (#1524) — bumped to `mstate-v1.1-spy-sma50x200-atrq70-vix15_25-UNVALIDATED`.**
 > No threshold changed. The VIX **input** did: the FRED disk cache had no expiry, so from 2026-07-06
@@ -214,7 +257,7 @@ From the first nightly `alphalens-thematic-build` after deploy, every brief parq
 
 Registered in `docs/research/preregistration/ledger.json` under a new class `market_regime_signals_2026_07` **before any test**; `alphalens preregister threshold` prints the corrected critical value.
 
-**Bonferroni family is pre-committed and fully enumerated (§7 HIGH-4).** v1 commits a-priori to **ONE index (SPY), ONE trend definition (SMA-cross), ONE vol combiner (OR)**. No "log both and let forward data pick." H-A's family is **3 metrics × 3 horizons = 9** tests; the HMM alternative (§6 D2), QQQ, alternate trend defs, and alternate combiners are **NOT in v1's family** — each is a future class entry that pays its own cost when registered. The class denominator is stated in the ledger before compute.
+**Bonferroni family is pre-committed and fully enumerated (§7 HIGH-4).** v1 commits a-priori to **ONE index (SPY), ONE trend definition, ONE vol combiner (OR)**. *(That one trend definition was written here as "SMA-cross". It was never a cross in effect and is not one in the code since 2026-10-30: it is the sign of price against SMA200. The family size is unchanged — still one trend definition — so no Bonferroni count moves; §1.3 amendment.)* No "log both and let forward data pick." H-A's family is **3 metrics × 3 horizons = 9** tests; the HMM alternative (§6 D2), QQQ, alternate trend defs, and alternate combiners are **NOT in v1's family** — each is a future class entry that pays its own cost when registered. The class denominator is stated in the ledger before compute.
 
 **H-A — does the label mean anything for the INDEX?**
 - **H0:** the forward k-day distribution of SPY {return, max-drawdown, realized-vol} is identical across the 4 states.
@@ -263,12 +306,12 @@ A passing H-A means only that the regime label has real predictive content **for
 
 Each PR: small, TDD (red→green), no selection use, follows config_version + poolability conventions. Zen pre-merge review (deepseek-v4-pro, thinking=high) on non-trivial ones.
 
-- **PR-0 — pure primitives.** Stateless pure functions: `atr_pct`, `rolling_quantile_rank` (reuse `vix_decile` idiom), SMA/EMA slope, BB-in-KC squeeze boolean — each with inline-fixture unit tests. No store, no network, no stamping.
-- **PR-1 — signal + stamp.** `market/market_state.py`: `classify` + `enrich` (broadcast idiom from `disagreement.enrich`, explicit dtypes for all columns), `MARKET_STATE_CONFIG_VERSION`, `MARKET_STATE_COLUMNS`. Wire the one call site. Boundary unit tests at every threshold (vix=14.99 vs 15.01; atr_pct_q at ATR_HIGH_Q±ε; cross disagreement→neutral; missing VIX→unknown). **Sort-allowlist test + the new no-selection-input positive-control test** (§3.2). DI clients (no raw HTTP).
+- **PR-0 — pure primitives.** Stateless pure functions: `atr_pct`, `rolling_quantile_rank` (reuse `vix_decile` idiom), `sma` / `ema`, BB-in-KC squeeze boolean — each with inline-fixture unit tests. No store, no network, no stamping. *(The `normalized_slope` primitive shipped here and was removed on 2026-10-30 with the inert trend terms that were its only consumer — §1.3 amendment.)*
+- **PR-1 — signal + stamp.** `market/market_state.py`: `classify` + `enrich` (broadcast idiom from `disagreement.enrich`, explicit dtypes for all columns), `MARKET_STATE_CONFIG_VERSION`, `MARKET_STATE_COLUMNS`. Wire the one call site. Boundary unit tests at every threshold (vix=14.99 vs 15.01; atr_pct_q at ATR_HIGH_Q±ε; missing VIX→unknown). *(A "cross disagreement→neutral" test was listed here and never existed; after the 2026-10-30 amendment none can, because there is no neutral arm and no cross. The equivalence that replaced it is pinned by `TestTrendWordIsTheSignOfDist200`.)* **Sort-allowlist test + the new no-selection-input positive-control test** (§3.2). DI clients (no raw HTTP).
 - **PR-2 — Django fields.** Add `Brief` fields, register in `LEGACY_CONTRACT_COLUMNS`, `makemigrations`, parquet round-trip ingest test (incl. zero-row + all-`unknown` schema cases). No serializer / coerce change.
 - **PR-2b — sector-excess outcome enrichment (EDGE ledger, ships EARLY).** New enrichment pass mirroring `benchmark_excess.enrich_store_with_benchmark_excess()`: static SIC→SPDR-sector map + `sector_excess_return` / `sector_etf_ticker` / `sector_etf_window_return` columns + `outcome_benchmark_version` poolability key + Django `LadderOutcome` fields. **Independent of the market_state signal**; ships early so H-B forward data uses the decoupled estimand from day one (D4). TDD; excludes unresolvable-sector rows (no SPY fallback). Zero new vendor (sector on Brief, ETF bars in grouped store).
 - **PR-3 — SPA display.** `types.ts`; brief-level context banner + `JargonTip` ("context, not a signal · unvalidated"); optional drawer section; tone map. Held out of every sort. Storybook story (dev-only). CF Pages auto-deploy. **PR-0..3 ship H-context and may proceed now.**
-- **PR-4 — pre-registration + harness. GATED.** Ledger entry for `market_regime_signals_2026_07` (H-A with the fully-enumerated 9-test family; **H-B registrable now — D4 decoupled via `sector_excess_return` (§4.2); PR-2b must be logging it forward first**); `alphalens preregister threshold` recorded; `scripts/analyze_market_state_edge.py` with the episode-N gate + cluster-robust test + Bonferroni. **Adversarial review (zen + Perplexity) of the locked memo before any test compute.** Memo status → LOCKED only when §4 is executable.
+- **PR-4 — pre-registration + harness. GATED.** Ledger entry for `market_regime_signals_2026_07` (H-A with the fully-enumerated 9-test family; **H-B registrable now — D4 decoupled via `sector_excess_return` (§4.2); PR-2b must be logging it forward first**); `alphalens preregister threshold` recorded; `scripts/analyze_market_state_edge.py` with the episode-N gate + cluster-robust test + Bonferroni. **Adversarial review (zen + Perplexity) of the locked memo before any test compute.** Memo status → LOCKED only when §4 is executable (amended 2026-10-30: the DESIGN is locked and shipped; §4 is still gated, which is why the status reads LOCKED (DESIGN) rather than plain LOCKED — the two were in conflict until this note).
 
 Deploy operator-owned (VPS pipeline image rebuild + Django `compose pull && up -d` auto-migrate + `rebuild_briefs_cache --force` + CF Pages). Forward-only, same as expert-panel.
 
