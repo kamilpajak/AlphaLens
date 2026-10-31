@@ -1459,9 +1459,24 @@ class ImmediateOnlyRetirementTest(unittest.TestCase):
     def test_retirement_stays_a_subset_of_everything_at_the_broker(self) -> None:
         # The invariant `broker picks` relies on (#1828). Widening retirement
         # must not lift a key out of the existence fold.
-        records = [*self._now(), {"ticker": "MU", "trade_date": "2026-07-21"}]
+        # The corpus must contain the ONE shape that can violate the inclusion:
+        # a record that is NOT a now tranche and whose outcome REFUSES. Without
+        # it both folds hold every key by construction and the assertion is a
+        # tautology — it was, before this line. `_records_an_order` returning
+        # True for any non-now record (#1828) is what actually holds the
+        # property; this is the corpus that notices if that guard goes.
+        records = [
+            *self._now(),
+            {"ticker": "MU", "trade_date": "2026-07-21"},
+            {
+                "ticker": "ZZ",
+                "trade_date": "2026-07-22",
+                "tranche_meta": {"outcome": "refused_cap"},
+            },
+        ]
         retired = submitted_pick_keys(records, immediate_only_keys={self._KEY})
         self.assertLessEqual(retired, keys_with_any_submission(records))
+        self.assertIn(("ZZ", "2026-07-22"), retired, "the violating shape must be in the corpus")
 
 
 class IdentityHelperTest(unittest.TestCase):

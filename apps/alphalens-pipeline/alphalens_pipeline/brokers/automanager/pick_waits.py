@@ -177,8 +177,12 @@ def open_waits(
 def is_overdue(window_end: str | None, now: dt.datetime) -> bool:
     """``now`` is at or past ``window_end`` (an ISO timestamp; unreadable is not overdue).
 
-    The drain expires such a pick on its next tick; a reader seeing one means
-    the drain is not running (KILL, a dead chain, a stopped daemon)."""
+    The drain expires such a pick on its next tick, so a reader seeing one
+    USUALLY means the drain is not running (KILL, a dead chain, a stopped
+    daemon). Since #1832 there is one healthy exception: a pick the drain has
+    RETIRED is never expired at all, so it carries an overdue window for life
+    with a perfectly live daemon. Ask whether the key is retired before reading
+    an overdue row as an outage."""
     if not window_end:
         return False
     try:

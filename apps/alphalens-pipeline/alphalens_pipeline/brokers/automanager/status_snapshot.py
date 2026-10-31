@@ -545,18 +545,35 @@ def _waiting_picks(
     """Every armed pick the drain has not placed and whose wait line is current.
 
     Joined exactly like the drain: the queue fold, minus the keys the
-    submissions journal retires, joined to ``pick_waits.jsonl``. ``message`` is
-    the gate's text as of ``as_of`` — the numbers in it move every tick, so the
-    row says how old they are. ``overdue`` marks a window that has ended; only
-    the drain expires a pick, so an overdue row means the drain is not running.
+    submissions journal retires, joined to ``pick_waits.jsonl``. "Exactly" is
+    load-bearing and includes #1832's ``immediate_only_keys`` — without it a
+    now-only pick that was blocked by a capital gate and then placed keeps its
+    stale wait row for ever, so this command would say a filled position "waits
+    for capital" on a healthy daemon. Computing the set costs one decode of the
+    queue, which an on-demand read can afford and the 45 s drain pays anyway.
+
+    ``message`` is the gate's text as of ``as_of`` — the numbers in it move every
+    tick, so the row says how old they are. ``overdue`` marks a window that has
+    ended. Only the drain expires a pick, so an overdue row USUALLY means the
+    drain is not running — but a pick the drain has retired is never expired at
+    all, so an overdue row for one of those is a healthy state, not a stopped
+    daemon (#1832).
     """
     from alphalens_pipeline.brokers.automanager import pick_waits
     from alphalens_pipeline.brokers.automanager import picks as picks_mod
 
     fold = picks_mod.read_pick_fold(path=state_paths.picks_path(env=env))
+    picks_path = state_paths.picks_path(env=env)
     waits = pick_waits.open_waits(
         fold.records,
-        picks_mod.submitted_pick_keys(records),
+        picks_mod.submitted_pick_keys(
+            records,
+            immediate_only_keys={
+                picks_mod.pick_key(intent)
+                for intent in picks_mod.iter_decodable_picks(path=picks_path)
+                if picks_mod.is_now_only_ladder(intent)
+            },
+        ),
         pick_waits.read_waits(path=state_paths.pick_waits_path(env=env)),
     )
     rows: list[dict[str, Any]] = []

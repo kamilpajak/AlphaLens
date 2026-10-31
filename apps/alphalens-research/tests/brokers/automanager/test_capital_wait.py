@@ -552,9 +552,18 @@ class ImmediateOnlyPickRetirementTest(_CapitalWaitCase):
         }
 
     def _drain(
-        self, placer: _Placer, records: list[dict[str, Any]], *, ticks: int = 1
+        self,
+        placer: _Placer,
+        records: list[dict[str, Any]],
+        *,
+        ticks: int = 1,
+        one_shot: bool = False,
     ) -> list[Any]:
-        """Run the real drain ``ticks`` times over the real pick journal."""
+        """Run the real drain ``ticks`` times over the real pick journal.
+
+        ``one_shot`` hands the drain a generator instead of a list, which is the
+        shape that exposes whether the tick owns its journal snapshot.
+        """
         from tests.brokers.automanager.test_control_loop import _deps, _StubBroker
 
         calls: list[Any] = []
@@ -571,12 +580,38 @@ class ImmediateOnlyPickRetirementTest(_CapitalWaitCase):
                 **base.__dict__,
                 "iter_picks": picks.iter_picks,
                 "place_pick": _place,
-                "read_records": lambda: list(records),
+                "read_records": (lambda: iter(records)) if one_shot else (lambda: list(records)),
             }
         )
         for _tick in range(ticks):
             cl._run_placement_drain(deps, cl.TickReport(), enabled=True)
         return calls
+
+    def test_the_drain_owns_its_journal_snapshot(self) -> None:
+        # The tick folds `records` THREE times — the placement gate, the legacy
+        # refusal and #1832's retired set — and the gate is no longer the first
+        # of them. Handed a one-shot iterator, the LAST fold comes back empty,
+        # so every pick the journal already retires is placed AGAIN, with a
+        # fresh client_request_id per bracket that Saxo's 15 s x-request-id
+        # dedup cannot catch. `LoopDeps.read_records` is annotated `-> list`, so
+        # this pins the invariant to the drain instead of to an annotation.
+        intent = _doc(immediate_only=False)
+        picks.arm_pick(intent)
+        # A pullback record: the NARROW fold retires this key, so a drain that
+        # still sees the snapshot must place nothing.
+        records = [
+            {
+                "ticker": str(intent.instrument.ticker).upper(),
+                "trade_date": str(intent.meta.trade_date),
+                "brackets": [{"client_request_id": "rid-pullback"}],
+            }
+        ]
+        placer = _Placer(self, _RecordingBroker(), records=records)
+        self.assertEqual(
+            self._drain(placer, records, one_shot=True),
+            [],
+            "an already-retired pick was re-placed because a fold consumed the snapshot",
+        )
 
     def test_a_placed_now_only_pick_is_never_written_expired_unplaced(self) -> None:
         intent = _doc(immediate_only=True)
@@ -1126,6 +1161,56 @@ def _lines(module: Any) -> list[str]:
     del module
     path = state_paths.pick_waits_path()
     return [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+class TheOperatorTextIsPinnedLiterally(unittest.TestCase):
+    """What the two expiry pages SAY, asserted against literal strings.
+
+    Every other assertion in this file compares the message with
+    ``capital_wait.ORDER_AT_BROKER_PHRASE`` and friends, which reads the
+    expectation out of the module under test: rewriting a constant leaves those
+    green. Measured — rewording the branded page to "wszystko w porzadku ... zrob
+    fikolka" left all 3789 brokers tests OK. For a page whose whole purpose is to
+    stop the operator buying an open position a second time, the words are the
+    behaviour, so they are spelled out here and nowhere else.
+
+    Deliberately NOT the whole string: an exact-match test would redden on any
+    rewording, including a better one. These are the three clauses that carry the
+    instruction.
+    """
+
+    def test_the_branded_page_says_an_order_already_reached_the_broker(self) -> None:
+        from alphalens_pipeline.brokers.automanager import capital_wait
+
+        head = capital_wait.ORDER_AT_BROKER_HEAD
+        tail = capital_wait.ORDER_AT_BROKER_PHRASE
+        self.assertIn("order", head.lower())
+        self.assertIn("broker", head.lower())
+        self.assertIn("ALREADY reached the broker", tail)
+        self.assertIn("check the position", tail)
+        self.assertIn("buys it again", tail)
+
+    def test_the_branded_page_never_asks_for_a_fresh_document(self) -> None:
+        from alphalens_pipeline.brokers.automanager import capital_wait
+
+        whole = f"{capital_wait.ORDER_AT_BROKER_HEAD} {capital_wait.ORDER_AT_BROKER_PHRASE}"
+        self.assertNotIn("arm a new document if the signal still stands", whole)
+        self.assertNotIn("if the signal still stands", whole)
+
+    def test_the_plain_page_still_asks_for_a_fresh_document(self) -> None:
+        from alphalens_pipeline.brokers.automanager import capital_wait
+
+        self.assertEqual(capital_wait.UNPLACED_HEAD, "expired unplaced")
+        self.assertEqual(
+            capital_wait.RE_ARM_PHRASE,
+            "arm a new document if the signal still stands",
+        )
+
+    def test_the_two_heads_are_not_the_same_words(self) -> None:
+        from alphalens_pipeline.brokers.automanager import capital_wait
+
+        self.assertNotEqual(capital_wait.UNPLACED_HEAD, capital_wait.ORDER_AT_BROKER_HEAD)
+        self.assertNotEqual(capital_wait.RE_ARM_PHRASE, capital_wait.ORDER_AT_BROKER_PHRASE)
 
 
 if __name__ == "__main__":

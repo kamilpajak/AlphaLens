@@ -340,7 +340,15 @@ BASELINE: dict[str, int] = {
     # branch only so the alert can tell "nothing was placed" from "an order is
     # already at the broker" — the second message must not invite a re-arm,
     # because the arming door does not refuse one.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8185,
+    # Plus 8 after the adversarial review: the tick now takes `list(...)` of its
+    # own journal snapshot instead of the injected callable's word for it. This
+    # tick folds that snapshot THREE times and the placement gate is no longer
+    # the first of them, so a one-shot iterator left the LAST fold empty and
+    # every already-retired pick was placed AGAIN — reproduced against the real
+    # drain, safe on the base commit, unsafe on the first version of this one.
+    # The room is the comment saying why, because the next reader will otherwise
+    # see a redundant `list()` over something already annotated `-> list`.
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8193,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3302,

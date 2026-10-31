@@ -833,7 +833,15 @@ def _run_placement_drain(deps: LoopDeps, report: TickReport, *, enabled: bool) -
     # even when the first attempt returns False (refused / zero-sized / partial-
     # then-failed). Recording the attempt (not just a success) guards the
     # never-double-commit invariant against a retry inside the same tick.
-    records = deps.read_records()
+    # `list(...)`, not the injected callable's word for it. This tick folds the
+    # snapshot THREE times — the placement gate, the legacy refusal, and #1832's
+    # retired set — and the gate is no longer the first of them. A one-shot
+    # iterator would leave the LAST fold empty, so every pick the journal already
+    # retires would be placed again, with a fresh client_request_id per bracket
+    # that Saxo's 15 s dedup cannot catch. `LoopDeps.read_records` is annotated
+    # `-> list`, so this is defence in depth and not a live path; the invariant is
+    # too expensive to leave resting on an annotation.
+    records = list(deps.read_records())
     already_submitted = picks.submitted_pick_keys(records)
     _refuse_legacy_size_pct_picks(deps, records, already_submitted)
     if deps.tick_admissions is not None:
