@@ -9,8 +9,8 @@
  * the strip's eight cells were empty.
  *
  * WHY THIS FILE EXISTS AND THE UNIT TESTS DO NOT COVER IT. The cell builders in
- * `src/lib/components/marketContextCells.ts` are pinned by 17 unit tests, but
- * those test the MODEL. The user-visible half — that an empty row and the
+ * `src/lib/components/marketContextCells.ts` are pinned by their own unit
+ * suite, but those tests exercise the MODEL. The user-visible half — that an empty row and the
  * toggle are not RENDERED — lives in the template, and the repo has no
  * component-mounting harness (no @testing-library/svelte, no jsdom). Playwright
  * already renders `/brief/<date>` against these fixtures, so the DOM assertion
@@ -21,6 +21,11 @@
  *   2026-09-05 — label + drivers present (and `squeeze_on: false`, which is a
  *                real reading and must NOT be treated as absent).
  *   2026-04-14 — nothing present: no label, no drivers, no returns.
+ *
+ * ONE MORE RULE IS GATED HERE, for the same reason — it is template-only: a
+ * flip point annotates the LABEL, so a driver that outlived its label renders
+ * alone, with no "(volatile at 70)" beside `market · unknown`. The composed
+ * 2026-07-06 payload is that shape.
  */
 
 import { expect, test, type Page } from '@playwright/test';
@@ -96,6 +101,54 @@ const LABELLED_DATE = '2026-09-05';
 const EMPTY_DATE = '2026-04-14';
 const LABELLED_DAY = JSON.parse(readFileSync(`${FIXTURES_DIR}/days/${LABELLED_DATE}.json`, 'utf-8'));
 const EMPTY_DAY = JSON.parse(readFileSync(`${FIXTURES_DIR}/days/${EMPTY_DATE}.json`, 'utf-8'));
+
+/**
+ * DRIVERS WITHOUT A LABEL, composed from the ONE real post-signal capture by
+ * deleting the two VIX columns and stamping the producer's own `unknown`
+ * sentinel. No number is introduced.
+ *
+ * This is the shape `classify_state` emits when the vol axis cannot settle: the
+ * axis is an OR of a realized and an implied leg, so a realized leg below the
+ * 70th percentile with no VIX print reaching the date leaves it undecided
+ * (#1559). The function fills its telemetry dict BEFORE that decision, so it
+ * returns the literal label `'unknown'` (`_UNKNOWN` in `market_state.py`) next
+ * to a finite `dist200`, a finite `atr_pct_q` and a real `squeeze_on`, with
+ * `vix` and `vix_decile` NaN. The column is stamped, not absent — which is why
+ * `market_state` is SET here rather than deleted.
+ *
+ * 2026-07-06 is the first Monday after the `market_state` block shipped
+ * (2026-07-05); any later date would do, since the cause is a missing VIX print
+ * and not a short store.
+ *
+ * Every surviving value is the real `days/2026-09-05.json` capture. The deleted
+ * keys go from EVERY candidate row, not just `candidates[0]`, so the payload
+ * stays internally consistent — the block is index-level and identical on every
+ * row.
+ */
+const NO_LABEL_DATE = '2026-07-06';
+const VIX_KEYS = ['market_state_vix', 'market_state_vix_decile'];
+/** What the real `market_state_dist200` and `market_state_atr_pct_q` render as. */
+const DIST200_CELL_VALUE = '+8.1%';
+const ATR_PCTILE_CELL_VALUE = '10';
+const NO_LABEL_DAY = {
+	...LABELLED_DAY,
+	date: NO_LABEL_DATE,
+	candidates: LABELLED_DAY.candidates.map((c: Record<string, unknown>) => {
+		const row: Record<string, unknown> = { ...c, market_state: 'unknown' };
+		for (const key of VIX_KEYS) delete row[key];
+		return row;
+	})
+};
+
+/** The day bodies this file composes rather than reads straight from disk. */
+const COMPOSED_BODIES: Record<string, string> = {
+	[RETURNS_ONLY_DATE]: RETURNS_ONLY_BODY,
+	[NO_LABEL_DATE]: JSON.stringify(NO_LABEL_DAY)
+};
+
+// `NO_LABEL_DATE` is deliberately NOT in this index: it is reached by URL, and
+// listing it would put a date WITH a drawer between the two the drawer-request
+// walk below steps across.
 const DAYS_INDEX = [
 	indexRow(LABELLED_DATE, LABELLED_DAY),
 	indexRow(RETURNS_ONLY_DATE, RETURNS_ONLY_DAY),
@@ -113,11 +166,11 @@ function installMockedApi(page: Page) {
 			return route.fulfill({ status: 200, contentType: 'application/json', body: DAYS_INDEX_BODY });
 		}
 		const day = url.pathname.match(/^\/api\/v1\/days\/(\d{4}-\d{2}-\d{2})$/);
-		if (day && day[1] === RETURNS_ONLY_DATE) {
+		if (day && COMPOSED_BODIES[day[1]] !== undefined) {
 			return route.fulfill({
 				status: 200,
 				contentType: 'application/json',
-				body: RETURNS_ONLY_BODY
+				body: COMPOSED_BODIES[day[1]]
 			});
 		}
 		if (day) {
@@ -238,5 +291,29 @@ test.describe('market-context strip — a cell with no value is not rendered', (
 		await expect(page.getByTestId('brief-date')).toHaveText(LABELLED_DATE);
 		await expect(s.getByRole('button')).toHaveAttribute('aria-expanded', 'false');
 		await expect(s.getByText('vix %ile', { exact: false })).toHaveCount(0);
+	});
+	// A flip point annotates the LABEL, so it must not outlive it. The drivers
+	// can: the producer stamps its telemetry before it decides, so a date can
+	// carry `vs ma200 +8.1%` and `atr %ile 10` beside `market · unknown`. Both
+	// used to print their flip points there — the flip points of a label that is
+	// not on the page.
+	test('drivers with NO label beside them show their values and no flip point', async ({
+		page
+	}) => {
+		await installMockedApi(page);
+		await page.goto(`/brief/${NO_LABEL_DATE}`);
+
+		const s = strip(page);
+		const drivers = s.locator('dl[aria-label="market state drivers"]');
+		// The values survive — they are real readings.
+		await expect(drivers.locator('dd')).toHaveText([DIST200_CELL_VALUE, ATR_PCTILE_CELL_VALUE]);
+		await expect(s.getByText('market · unknown', { exact: false })).toBeVisible();
+
+		// No flip point, and no EMPTY bracket either. The template wraps the
+		// whole "(…)" span in its own guard, so dropping that guard would print
+		// "+8.1% ()" — which an assertion on the flip TEXT alone cannot see.
+		await expect(drivers).not.toContainText('volatile at');
+		await expect(drivers).not.toContainText('bear below');
+		await expect(drivers).not.toContainText('(');
 	});
 });
