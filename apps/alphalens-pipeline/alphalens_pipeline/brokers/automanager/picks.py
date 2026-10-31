@@ -48,7 +48,20 @@ joining the armed picks against the submissions journal on
 record (the submission) and this journal cannot disagree with it. The cost is
 that ``picks.jsonl`` read ALONE cannot answer "what is still pending" — every
 long-placed pick still reads ``armed`` forever. :func:`read_pick_fold` is the
-reader's half of that join (issue #1197); `alphalens broker picks` performs it.
+reader's half of that join (issue #1197).
+
+`alphalens broker picks` performs BOTH joins, because they answer different
+questions: :func:`keys_with_any_submission` resolves the state (has anything
+reached the broker for this pick?) and :func:`submitted_pick_keys` bounds the
+wait line and the validity window (has the DRAIN finished with it?). The
+motivating difference is an immediate tier's own ``tranche == "now"`` line,
+which retirement skips by design (#1247) and existence counts; using the
+retirement fold for the state printed PENDING over filled orders on 2026-10-30.
+
+The two are NOT ordered. They filter on different predicates — retirement on
+``tranche``, existence on ``tranche_meta.outcome`` — so neither set contains the
+other in general. Today no writer emits a record that is retired but not at the
+broker, and a test in ``test_picks_cli.py`` fails if one appears.
 """
 
 from __future__ import annotations
@@ -522,6 +535,20 @@ def _submission_join_key(record: Mapping[str, Any]) -> tuple[str, str] | None:
 _NO_ORDER_OUTCOMES: frozenset[str] = frozenset({"refused_cap"})
 
 
+_TRANCHE_KEY = "tranche"
+_TRANCHE_NOW = "now"
+
+
+def _is_now_tranche(record: Mapping[str, Any]) -> bool:
+    """Is this submission record an IMMEDIATE tier's own line (#1247)?
+
+    ONE predicate, both folds. They used to spell it as separate literals and
+    consult different fields around it, which is how they came to disagree:
+    see :func:`_records_an_order`.
+    """
+    return record.get(_TRANCHE_KEY) == _TRANCHE_NOW
+
+
 def _records_an_order(record: Mapping[str, Any]) -> bool:
     """Could this record mean an order reached the broker?
 
@@ -530,10 +557,29 @@ def _records_an_order(record: Mapping[str, Any]) -> bool:
     the arming door lets a document replace it, and `disarm` followed by a new
     document is the path to a fresh cap (a replace keeps `armed_ts`, so it does
     not re-open the refused tier, #1468).
+
+    An outcome that is not a string counts as "an order may exist", the same way
+    an unknown string does. The guard is on the TYPE and not only on the value
+    because the test is membership in a frozenset: a list or a dict reaching it
+    raises ``TypeError: unhashable type``, and these records come off DISK, where
+    JSON permits any shape. `broker picks` began calling this fold in the
+    two-fold view, so an unhashable outcome that used to render harmlessly would
+    otherwise crash a READ-ONLY command with an empty stdout, naming nothing —
+    strictly worse than the generous answer this function exists to give.
     """
+    if not _is_now_tranche(record):
+        # The outcome vocabulary is the NOW tranche's: `attempt` / `placed` /
+        # `refused_cap` describe a capped immediate submission, and a pullback
+        # rung has no operator cap to refuse. Consulting it on a record that is
+        # not a now tranche is what let the two folds cross: a line with no
+        # `tranche` and a refusal outcome sat in `submitted_pick_keys` and not
+        # here, so `broker picks` printed PENDING — "the drain will place it" —
+        # about a pick the drain had retired. With this guard the retirement set
+        # is a SUBSET of this one, which the view relies on and now tests.
+        return True
     meta = record.get("tranche_meta")
     outcome = meta.get("outcome") if isinstance(meta, Mapping) else None
-    return outcome not in _NO_ORDER_OUTCOMES
+    return not (isinstance(outcome, str) and outcome in _NO_ORDER_OUTCOMES)
 
 
 def keys_with_any_submission(records: Iterable[Mapping[str, Any]]) -> set[tuple[str, str]]:
@@ -574,7 +620,7 @@ def submitted_pick_keys(records: Iterable[Mapping[str, Any]]) -> set[tuple[str, 
     return {
         key
         for record in records
-        if record.get("tranche") != "now" and (key := _submission_join_key(record)) is not None
+        if not _is_now_tranche(record) and (key := _submission_join_key(record)) is not None
     }
 
 

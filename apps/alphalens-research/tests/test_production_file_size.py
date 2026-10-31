@@ -148,7 +148,23 @@ BASELINE: dict[str, int] = {
     # #1732 having removed that section), 7 for the rendered line beside
     # `refused` / `expired` and 4 of comment saying why the line is guarded on a
     # truthy count rather than on the field being present.
-    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3241,
+    # Raised by 65: `broker picks` now performs BOTH submission joins, because
+    # the state answers "has anything reached the broker" while the wait line
+    # and the window answer "has the drain finished". Only 2 lines are code (the
+    # shared journal read plus the second fold); the rest is published `--help`
+    # and the comments that keep it honest. The help carried three claims that
+    # became false when the state changed meaning, and the adversarial review
+    # found a fourth that was false when written: it sent the operator to
+    # `broker reconcile` for "what rests at the venue", which reads the same
+    # submissions journal and cannot see an entry-trail order either. PLACED now
+    # states all three ways it is not a venue claim, because a one-line hedge is
+    # what produced the wrong instruction.
+    # Plus 7 for the v3 bump: `picks` re-partitioned an existing state value, so
+    # the envelope version is the only thing that tells two stored payloads they
+    # mean different things by the word PLACED. The room is the note recording
+    # WHY, beside the v2 note it mirrors — a bare version bump with no reason
+    # written next to it is the shape that makes the next one a guess.
+    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3313,
     # Raised by 8: the score stage now also stamps the three raw broad-index
     # 5-session returns beside the market-state label. The room is 1 line of
     # lazy call and 7 of comment saying why the family is separate from the

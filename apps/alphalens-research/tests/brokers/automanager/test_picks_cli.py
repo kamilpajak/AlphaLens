@@ -50,6 +50,37 @@ def _submit(home: Path, ticker: str, trade_date: str, env: str = "sim") -> None:
         fh.write(json.dumps({"ticker": ticker.upper(), "trade_date": trade_date}) + "\n")
 
 
+def _submit_now(
+    home: Path,
+    ticker: str,
+    trade_date: str,
+    outcome: str = "placed",
+    env: str = "sim",
+) -> None:
+    """A submission record for an IMMEDIATE tier.
+
+    The shape ``submitted_pick_keys`` skips on purpose (#1247 — the now half
+    must not retire a pick before its pullback half is placed) and
+    ``keys_with_any_submission`` counts. No test in this file built one before
+    the two-fold view, which is why nothing here caught the 2026-10-30 LIVE
+    incident.
+    """
+    path = _submissions_path(home, env)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(
+            json.dumps(
+                {
+                    "ticker": ticker.upper(),
+                    "trade_date": trade_date,
+                    "tranche": "now",
+                    "tranche_meta": {"outcome": outcome},
+                }
+            )
+            + "\n"
+        )
+
+
 def _append_raw(path: Path, record: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
@@ -284,7 +315,7 @@ class PicksCommandOutputTest(unittest.TestCase):
         _arm(self.home, "KO", "2026-07-20")
         result = _run(self.runner, "--format", "json")
         payload = json.loads(result.stdout)
-        self.assertEqual(payload["schema"], "alphalens.broker.picks/v2")
+        self.assertEqual(payload["schema"], "alphalens.broker.picks/v3")
         self.assertEqual(payload["env"], "sim")
 
     def test_counts_cover_every_pick_even_when_state_filters_rows(self) -> None:
@@ -500,6 +531,192 @@ class PicksCommandEnvTest(unittest.TestCase):
         result = _run(self.runner, "--state", "queued")
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("queued", result.stderr)
+
+
+class PicksCommandNowTrancheRecordTest(unittest.TestCase):
+    """What the view says when the only submission record for a pick is an
+    immediate tier's own ``tranche == "now"`` line.
+
+    The fixtures below vary the submission RECORD, not the pick document: the
+    view never decodes a document's entry tiers, it joins keys, so the record's
+    shape is the whole input. (``_intent`` builds a single default-``pullback``
+    tier; naming these tests after an immediate PICK would describe a fixture
+    that does not exist.)
+
+    Measured on LIVE 2026-10-30: NVDA, AMAT and AVGO were each armed with one
+    immediate tier, placed and FILLED at 17:49 UTC with resting disaster stops,
+    and this view reported PENDING for all three because the state came from the
+    drain's retirement fold, which skips exactly that record.
+    """
+
+    def setUp(self) -> None:
+        self.runner = CliRunner()
+        self.home = isolate_home(self)
+
+    def test_a_placed_now_tranche_reads_placed_and_keeps_its_window(self) -> None:
+        # The 2026-10-30 incident, reduced, plus the half the one-line swap
+        # would have cost. Red before the two-fold view on the state; red on
+        # `window_end` if the window is keyed on the existence fold instead.
+        _arm(self.home, "NVDA", "2026-10-30")
+        _submit_now(self.home, "NVDA", "2026-10-30")
+        result = _run(self.runner, "--format", "json")
+        self.assertEqual(result.exit_code, 0, result.output)
+        row = _rows(result)["NVDA"]
+        self.assertEqual(row["state"], "PLACED")
+        self.assertIsNotNone(
+            row["window_end"],
+            "the drain has not retired it, so its window still stands",
+        )
+        self.assertIn("overdue", row, "the row must still publish the field")
+        self.assertFalse(row["overdue"], "its window has not ended yet")
+
+    def test_a_placed_now_tranche_reads_placed_in_human_mode_too(self) -> None:
+        # Every other test here reads JSON, and the incident was a person
+        # reading a terminal. Kills a renderer that resolves the state twice.
+        _arm(self.home, "NVDA", "2026-10-30")
+        _submit_now(self.home, "NVDA", "2026-10-30")
+        result = _run(self.runner)
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertRegex(result.stdout, r"NVDA\s+2026-10-30\s+PLACED")
+        self.assertNotIn("PENDING", result.stdout)
+
+    def test_a_pick_the_capital_gate_holds_keeps_its_message_when_placed(self) -> None:
+        # Kills passing the existence fold to `open_waits`. The pick is PLACED
+        # because a record exists, and the gate that still holds the rest of it
+        # must stay on the row — the swap drops the whole message.
+        _arm(self.home, "KO", "2026-07-20")
+        _wait(self.home, "KO", "2026-07-20")
+        _submit_now(self.home, "KO", "2026-07-20")
+        row = _rows(_run(self.runner, "--format", "json"))["KO"]
+        self.assertEqual(row["state"], "PLACED")
+        self.assertIsNotNone(row["wait"], "the drain still owes the rest of it")
+        self.assertIn("needs more than is free", row["detail"])
+
+    def test_a_now_tranche_refused_above_cap_stays_pending(self) -> None:
+        # `_NO_ORDER_OUTCOMES` is what keeps a tranche that was never submitted
+        # out of PLACED. `test_picks.py` already pins the fold itself; this
+        # pins that the VIEW inherits it, which is the new coupling.
+        _arm(self.home, "NVDA", "2026-10-30")
+        _submit_now(self.home, "NVDA", "2026-10-30", outcome="refused_cap")
+        row = _rows(_run(self.runner, "--format", "json"))["NVDA"]
+        self.assertEqual(row["state"], "PENDING")
+
+    def test_an_unhashable_outcome_does_not_crash_the_view(self) -> None:
+        # The existence fold tests membership in a frozenset, so a non-string
+        # outcome off DISK used to raise `TypeError: unhashable type: 'list'`.
+        # Before the two-fold view this command never called that fold, so the
+        # record rendered harmlessly; a read-only command must not start
+        # crashing with an empty stdout on a journal line it can skip.
+        _arm(self.home, "NVDA", "2026-10-30")
+        _append_raw(
+            _submissions_path(self.home),
+            {
+                "ticker": "NVDA",
+                "trade_date": "2026-10-30",
+                "tranche": "now",
+                "tranche_meta": {"outcome": ["placed"]},
+            },
+        )
+        result = _run(self.runner, "--format", "json")
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(
+            _rows(result)["NVDA"]["state"],
+            "PLACED",
+            "an outcome we cannot read means an order MAY exist",
+        )
+
+    def test_the_retirement_fold_never_holds_a_key_the_existence_fold_lacks(self) -> None:
+        # The split keys the state on one fold and the window on the other, and
+        # nothing in either fold enforces an order between them: retirement
+        # filters on `tranche`, existence on `tranche_meta.outcome`. A record
+        # with no `tranche` and a refusal outcome would sit in the retirement
+        # set alone, and such a pick reads PENDING — "the drain will place it" —
+        # about a pick the drain has retired, with no window to hint at it.
+        # No writer emits that shape today; this fails the moment one does.
+        from alphalens_pipeline.brokers.automanager.picks import (
+            keys_with_any_submission,
+            submitted_pick_keys,
+        )
+
+        shapes = [
+            {"ticker": "KO", "trade_date": "2026-07-20", "tranche": "now"},
+            {
+                "ticker": "KO",
+                "trade_date": "2026-07-20",
+                "tranche": "now",
+                "tranche_meta": {"outcome": "placed"},
+            },
+            {
+                "ticker": "KO",
+                "trade_date": "2026-07-20",
+                "tranche": "now",
+                "tranche_meta": {"outcome": "attempt"},
+            },
+            {"ticker": "KO", "trade_date": "2026-07-20"},
+            {
+                "ticker": "KO",
+                "trade_date": "2026-07-20",
+                "tranche_meta": {"outcome": "placed"},
+            },
+            # The shape that actually broke the inclusion, and the reason
+            # `_records_an_order` consults the outcome only for a now tranche:
+            # `refused_cap` is the now vocabulary, and a pullback rung has no
+            # operator cap to refuse. Without this row the test passes while
+            # proving nothing.
+            {
+                "ticker": "KO",
+                "trade_date": "2026-07-20",
+                "tranche_meta": {"outcome": "refused_cap"},
+            },
+            {
+                "ticker": "KO",
+                "trade_date": "2026-07-20",
+                "tranche_meta": {"outcome": ["refused_cap"]},
+            },
+        ]
+        for record in shapes:
+            with self.subTest(record=record):
+                retired = submitted_pick_keys([record])
+                at_broker = keys_with_any_submission([record])
+                self.assertLessEqual(
+                    retired,
+                    at_broker,
+                    "a retired key the existence fold lacks reads PENDING about a "
+                    "pick the drain is done with",
+                )
+
+    def test_the_view_calls_both_folds_and_its_help_names_them(self) -> None:
+        # Drift in BOTH directions: code that stops calling one fold, and help
+        # that keeps claiming the view performs only the drain's join. The body
+        # is stripped of comments first — a comment naming a fold must not
+        # satisfy "the view calls it".
+        import inspect
+
+        from alphalens_cli.commands.broker import picks_command
+
+        doc = picks_command.__doc__ or ""
+        source = inspect.getsource(picks_command).replace(doc, "")
+        body = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
+        for fold in ("keys_with_any_submission", "submitted_pick_keys"):
+            self.assertIn(f"{fold}(", body, f"the view must CALL {fold}")
+            self.assertIn(fold, doc, f"the published help must name {fold}")
+
+    def test_the_help_refuses_to_call_placed_a_venue_claim(self) -> None:
+        # The paragraph that does the real work of this change was unpinned:
+        # deleting it left the whole suite green. It is the only thing standing
+        # between PLACED and an operator reading it as "my order is at the
+        # venue", which it is not, in three separate ways.
+        from alphalens_cli.commands.broker import picks_command
+
+        doc = picks_command.__doc__ or ""
+        self.assertIn("NOT A VENUE CLAIM", doc.upper())
+        self.assertIn("entry_trails.jsonl", doc, "the journal this command does not read")
+        self.assertIn("broker orders", doc, "where the venue question IS answered")
+        self.assertNotIn(
+            "use ``broker reconcile``",
+            doc,
+            "reconcile reads submissions.jsonl, so it cannot answer it either",
+        )
 
 
 if __name__ == "__main__":

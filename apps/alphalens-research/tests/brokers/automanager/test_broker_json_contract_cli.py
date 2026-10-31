@@ -160,7 +160,15 @@ _JSON_COMMANDS: tuple[tuple[str, list[str], bool, tuple[str, ...]], ...] = (
         ("disarmed", "pick_key", "generation", "watches_cancelled", "picks_journal"),
     ),
     ("cancel", ["cancel", "O-1"], True, ("order_id", "cancelled")),
-    ("picks", ["picks"], True, ("picks", "counts", "picks_journal", "waits_journal")),
+    # `submissions_journal` is required too: the two-fold state resolves from
+    # that journal, so the field naming it is how a reader knows WHICH file the
+    # word PLACED was read out of. It was publishable-and-deletable before.
+    (
+        "picks",
+        ["picks"],
+        True,
+        ("picks", "counts", "picks_journal", "submissions_journal", "waits_journal"),
+    ),
     ("watches", ["watches"], True, ("watches", "watching", "journal")),
     ("status", ["status", "--offline"], True, ("exposure", "health", "orders", "waiting_picks")),
     ("stream-status", ["stream-status"], True, ("gauges", "job", "source")),
@@ -283,7 +291,7 @@ _CASHBOOK_SIM_REFUSAL: dict[str, str] = {
 # answers `v2` because #1732 removed its required `slots` section.
 # `picks` answers `v2` because #1734 split WAITING out of PENDING: a pick the
 # capital gates hold every tick is no longer "pending" in the v1 sense.
-_SCHEMA_VERSIONS: Mapping[str, str] = {"arm": "v2", "status": "v2", "picks": "v2"}
+_SCHEMA_VERSIONS: Mapping[str, str] = {"arm": "v2", "status": "v2", "picks": "v3"}
 
 
 def _schema_id(name: str) -> str:
