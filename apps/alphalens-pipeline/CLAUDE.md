@@ -39,7 +39,7 @@ longer lists WHICH client owns which vendor — #1782 cut that table — so read
 | SEC EDGAR | per-IP (the User-Agent identifies the caller, it does not scope the quota) | 10 req/s | VPS and Mac hold independent buckets; every process on ONE host shares one bucket, however many keys it has. |
 | Alpha Vantage | per API key | 25 req/day (free tier) | A second key is a second pool; one key called from many hosts is still one pool. |
 | Polygon | per API key | 5 req/min on Stocks Basic, the free tier this project is on (Starter, $29/mo, is unlimited) | Quota follows the key, not the host. |
-| OpenRouter | per API key | no free tier on v4-pro; prices in `data/alt_data/openrouter_client.py:52-57` | The pipeline uses its own key, so its cost stays separate from review tooling's. |
+| OpenRouter | per API key | no free tier on v4-pro; prices in the "Pricing era" note in `data/alt_data/openrouter_client.py` | The pipeline uses its own key, so its cost stays separate from review tooling's. |
 
 - The per-IP row is why `data/alt_data/sec_rate_coordinator.py` exists: on the VPS three processes
   (`edgar-detect`, thematic ingest, the companyfacts preload) share one residential IP, each with
