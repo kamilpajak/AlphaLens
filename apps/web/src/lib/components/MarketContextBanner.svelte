@@ -126,7 +126,14 @@
      "top catalyst" strip (same border-grid divider + micro-label typography), so
      the index-level context reads as native header chrome, not a floating banner. -->
 <section aria-label="market context" class="border-t border-grid px-4 sm:px-6 py-3">
-	<div class="flex items-start justify-between gap-x-4 gap-y-2 flex-wrap">
+	<!-- LEFT-ALIGNED, not space-between. With rows that disappear, the number of
+	     children on this row is 2, 3 or 4 depending on the date, and
+	     `justify-between` spread whatever survived to the outer edges — one
+	     surviving cell ended up roughly 940px away from the label on a wide
+	     viewport, which reads as a rendering fault rather than as a group. A
+	     fixed `gap-x-6` keeps every count reading the same, and only the toggle
+	     is pushed to the right edge, with `ml-auto` on the button itself. -->
+	<div class="flex items-start gap-x-6 gap-y-2 flex-wrap">
 		<div class="flex flex-col gap-1.5 min-w-0">
 			<JargonTip {...tipProps('market context')} placement="below">
 				<span class="text-[10px] uppercase tracking-widest text-fg-muted">market context</span>
@@ -177,13 +184,16 @@
 			</dl>
 		{/if}
 
+		<!-- The drawer is removed from the DOM while closed rather than hidden, so
+		     `aria-controls` is bound only while the drawer exists — a constant one
+		     would name an id that is not in the document. -->
 		{#if residual.length > 0}
 			<button
 				type="button"
 				onclick={() => (requested = !requested)}
 				aria-expanded={open}
-				aria-controls="market-context-axes"
-				class="inline-flex items-center gap-1 text-[10px] uppercase tracking-widest text-fg-muted hover:text-fg transition-colors shrink-0 whitespace-nowrap"
+				aria-controls={open ? 'market-context-axes' : undefined}
+				class="ml-auto inline-flex items-center gap-1 text-[10px] uppercase tracking-widest text-fg-muted hover:text-fg transition-colors shrink-0 whitespace-nowrap"
 			>
 				{open ? 'hide' : 'more'}
 				<ChevronDown class="size-3 transition-transform {open ? 'rotate-180' : ''}" />
