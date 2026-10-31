@@ -7,7 +7,9 @@ numeric facts to CLASSIFY (not compute) three Buffett qualities:
 * F3 — moat type + trend (enums)
 * F4 — management candor (enum)
 
-DOCTRINE (CLAUDE.md "LLM training-cutoff blindness"): numbers come from
+DOCTRINE (the root CLAUDE.md code convention "Never ask an LLM for a numeric or
+time-sensitive value"; it was headed "LLM training-cutoff blindness" until
+#1782): numbers come from
 authoritative sources, pre-computed in Python, INJECTED into the prompt as
 facts; the LLM emits NO numbers. The enforcement guard tested here is:
 

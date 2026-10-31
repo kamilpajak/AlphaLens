@@ -17,9 +17,11 @@ here, and it is NOT re-injected after `/compact`.
   real schema difference does.
 - Second gate in the same file: `test_no_breaking_openapi_drift` diffs the live schema against
   `docs/openapi-parity/legacy.json` (the frozen FastAPI contract) and fails on a dropped path, a
-  removed query param, or a response-field removal classified as breaking. When a removal is
-  intended, add the name to `INTENTIONAL_DROPS` in `scripts/openapi_parity.py:42` with a
-  justification.
+  removed query param, or a response-field removal classified as breaking. Each of the three has
+  a different escape hatch, and one has none: an intended RESPONSE-FIELD removal goes in
+  `INTENTIONAL_DROPS` in `scripts/openapi_parity.py` with a justification, a path that only ever
+  existed in the legacy contract goes in `LEGACY_ONLY_OK` in the same file, and a removed QUERY
+  PARAM has no allowlist at all — restore the parameter or change the contract on purpose.
 - Run both: `just test-django`, or just the gate with
   `cd apps/alphalens-django && uv run pytest briefs/tests/test_openapi_parity.py`.
 - Write docstrings that do not enumerate values the pipeline owns (for example marker kinds) —

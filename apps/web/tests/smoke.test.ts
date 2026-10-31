@@ -956,10 +956,11 @@ test.describe('experiments — appendix card layout', () => {
 		expect(tables, 'methodology.artifacts is card grid, not a table').toBe(0);
 	});
 
-	test('infrastructure.live section is gone (lived in deploy/systemd + CLAUDE.md) (P-cards.3)', async ({ page }) => {
+	test('infrastructure.live section is gone (lived in deploy/systemd) (P-cards.3)', async ({ page }) => {
 		await gotoExperiments(page);
 		// The static live-infra snapshot drifted from reality and duplicated the
-		// authoritative VPS-backfills table in CLAUDE.md, so it was removed.
+		// unit table that was then in the root CLAUDE.md, so it was removed. That
+		// table now lives in deploy/systemd/README.md under "Active units".
 		const infra = await page.locator('section#infra').count();
 		expect(infra, 'no infrastructure.live section on /experiments').toBe(0);
 	});

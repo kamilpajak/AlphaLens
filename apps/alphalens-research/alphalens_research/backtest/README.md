@@ -85,7 +85,7 @@ The harness itself is pure pandas, but running a backtest end-to-end needs two e
 
 ### OHLCV via Lean CSV
 
-The default scorers read OHLCV from `~/.alphalens/lean/data/equity/usa/daily/`. The top-level `CLAUDE.md` has the full setup: install Docker Desktop, set `POLYGON_API_KEY`, then run the Polygon → Lean CSV sync (a one-time ~100-minute bootstrap at 5 req/min on Polygon's free Basic tier, then daily incremental updates of a single grouped-daily call).
+The default scorers read OHLCV from `~/.alphalens/lean/data/equity/usa/daily/`. The setup is NOT in `CLAUDE.md` any more — it left the root file in April 2026 with the archived Layer 2c notes, and the pointer here was dead for months. The steps that still apply (Docker Desktop, `POLYGON_API_KEY`, the one-time ~100-minute bootstrap at 5 req/min on Polygon's free Stocks Basic tier, then one grouped-daily call per session) are in `git show be4b7f7d:CLAUDE.md`, under "Lean screener requires Docker + Polygon Basic key". Why the Lean screener itself is closed: [ADR 0010](../../../../docs/adr/0010-archive-extracted-and-removed.md) and `docs/research/paradigm_failures_postmortem.md`.
 
 If the cache is empty, `load_lean_histories()` returns empty DataFrames and `BacktestEngine` raises `"No trading days found for benchmark ..."`. Fix: populate the cache first.
 

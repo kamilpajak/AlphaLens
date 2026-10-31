@@ -18,7 +18,9 @@ it is NOT re-injected after `/compact`.
   source and the instrument currency off the record; the direction token from the engine's own
   `Fx.pair_unit()`. The bar window obeys it too: grid and ticker from `instrument.{mic, ticker}`,
   the required end from `config.entry_deadline` plus one session of that venue's calendar, the
-  anchor from the record's `exits[-1].venue_time`, the action-window padding from
+  soft margin's anchor from the LATER of `config.entry_deadline` and the record's
+  `exits[-1].venue_time` (the deadline alone when nothing filled), the action-window padding
+  from
   `corporate_actions.ACTION_WINDOW_{PRE,POST}_CALENDAR_DAYS`, and the series' granularity
   MEASURED from the series (its modal `t` spacing), never stated.
 - **The fields the door computes come from `supplied_derived_paths`**, never from a list written
