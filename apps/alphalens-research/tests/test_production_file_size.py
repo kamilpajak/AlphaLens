@@ -313,7 +313,15 @@ BASELINE: dict[str, int] = {
     # are that docstring, and they are the measurement (the extra fold costs
     # 0.251 ms on a 75-line journal, 0.00056% of a 45 s tick) plus the reason
     # the chain gauge's "never a second read" argument does not carry over.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8121,
+    # Raised by 15, all of it comment and none of it code: the entry-trail
+    # watcher section claimed "STRICTLY DRY-RUN: the pass NEVER places, amends,
+    # or cancels a broker order" while `_arm_native_trail` POSTs a native Saxo
+    # trailing-limit entry order from inside it. The room is the corrected
+    # statement, the measurement that settles it (MSFT filled 2026-10-30 at
+    # 520.92, above its own 518.42 limit, which a resting buy limit cannot do),
+    # and a line saying the DRY-RUN wording belongs to the pure engine in
+    # `entry_trail_watcher.py` so it is not reintroduced here.
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8136,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3302,
