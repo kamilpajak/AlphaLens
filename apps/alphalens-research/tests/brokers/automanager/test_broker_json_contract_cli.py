@@ -291,7 +291,7 @@ _CASHBOOK_SIM_REFUSAL: dict[str, str] = {
 # answers `v2` because #1732 removed its required `slots` section.
 # `picks` answers `v2` because #1734 split WAITING out of PENDING: a pick the
 # capital gates hold every tick is no longer "pending" in the v1 sense.
-_SCHEMA_VERSIONS: Mapping[str, str] = {"arm": "v2", "status": "v2", "picks": "v2"}
+_SCHEMA_VERSIONS: Mapping[str, str] = {"arm": "v2", "status": "v2", "picks": "v3"}
 
 
 def _schema_id(name: str) -> str:

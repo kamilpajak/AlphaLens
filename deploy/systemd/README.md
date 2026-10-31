@@ -2243,7 +2243,7 @@ pick's validity window — `order_ttl_days` sessions of its venue counted from
 `trade_date`, the same window a placed entry rests in — and a pick still
 unplaced at its end gets one `expired` line in `picks.jsonl` and one page
 (`pick-expired:<pick key>`). A pick placed late rests only for what is left of
-its window. `broker picks` shows `WAITING` / `EXPIRED` (`alphalens.broker.picks/v2`)
+its window. `broker picks` shows `WAITING` / `EXPIRED` (`alphalens.broker.picks/v3`)
 and `broker status` lists `waiting_picks` with the gate, its message as of when,
 and the window end. Two caveats on that row, both from the two-fold state: a
 MIXED pick whose immediate tier already reached the broker reads `PLACED`

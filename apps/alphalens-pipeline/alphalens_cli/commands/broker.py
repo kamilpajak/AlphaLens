@@ -1651,7 +1651,14 @@ def disarm_command(
 
 # v2 (#1734): WAITING split out of PENDING. A pick the capital gates hold every
 # tick read PENDING under v1, which promised a placement that was not coming.
-_PICKS_SCHEMA = "alphalens.broker.picks/v2"
+# v3: PLACED now answers "the journal records an order for this pick" instead of
+# "the drain has retired it". A pick whose only entry tier is immediate read
+# PENDING under v2 — the retirement fold skips its own record (#1247) — while it
+# was filled at the broker with a resting stop. No field was added, renamed or
+# retyped; an existing value was RE-PARTITIONED, which is the same kind of
+# change the v2 bump above exists for, so the version is the only signal that
+# two stored envelopes mean different things by the same word.
+_PICKS_SCHEMA = "alphalens.broker.picks/v3"
 
 # The states the view resolves. UNREADABLE exists because an armed line the
 # decoder rejects is skipped by the drain FOREVER and today announces itself

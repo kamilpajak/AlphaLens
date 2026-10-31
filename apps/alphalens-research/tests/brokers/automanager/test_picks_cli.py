@@ -315,7 +315,7 @@ class PicksCommandOutputTest(unittest.TestCase):
         _arm(self.home, "KO", "2026-07-20")
         result = _run(self.runner, "--format", "json")
         payload = json.loads(result.stdout)
-        self.assertEqual(payload["schema"], "alphalens.broker.picks/v2")
+        self.assertEqual(payload["schema"], "alphalens.broker.picks/v3")
         self.assertEqual(payload["env"], "sim")
 
     def test_counts_cover_every_pick_even_when_state_filters_rows(self) -> None:

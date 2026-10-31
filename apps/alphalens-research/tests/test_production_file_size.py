@@ -159,7 +159,12 @@ BASELINE: dict[str, int] = {
     # submissions journal and cannot see an entry-trail order either. PLACED now
     # states all three ways it is not a venue claim, because a one-line hedge is
     # what produced the wrong instruction.
-    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3306,
+    # Plus 7 for the v3 bump: `picks` re-partitioned an existing state value, so
+    # the envelope version is the only thing that tells two stored payloads they
+    # mean different things by the word PLACED. The room is the note recording
+    # WHY, beside the v2 note it mirrors — a bare version bump with no reason
+    # written next to it is the shape that makes the next one a guess.
+    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3313,
     # Raised by 8: the score stage now also stamps the three raw broad-index
     # 5-session returns beside the market-state label. The room is 1 line of
     # lazy call and 7 of comment saying why the family is separate from the
