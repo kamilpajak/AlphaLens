@@ -223,9 +223,27 @@ const _MARKET_STATE_TONES: Record<string, MarketStateTone> = {
 	bear_quiet: 'red-dim'
 };
 
+/**
+ * Whether `state` is one of the four real classifier states.
+ *
+ * THE ONE SOURCE OF TRUTH for "is there a regime word on this date?". Both
+ * displays of the label depend on this question: `marketStateLabel` turns a
+ * `false` into the word `unknown`, and the banner's drivers drop their flip
+ * points on a `false`, because a flip point annotates a label and there is
+ * none to annotate. A second copy of the rule in the component would let the
+ * strip print `market · unknown` while still claiming "volatile at 25".
+ */
+export function isKnownMarketState(state: string | null | undefined): boolean {
+	// `Object.hasOwn`, never the `in` operator: `in` walks the prototype chain,
+	// so `'toString' in _MARKET_STATE_TONES` is true and a payload carrying
+	// `market_state: "toString"` would pass as a regime word, print flip points,
+	// and make the tone lookup return a function typed as a tone.
+	return !!state && Object.hasOwn(_MARKET_STATE_TONES, state);
+}
+
 export function marketStateTone(state: string | null | undefined): MarketStateTone {
-	if (!state) return 'muted';
-	return _MARKET_STATE_TONES[state] ?? 'muted';
+	if (!isKnownMarketState(state)) return 'muted';
+	return _MARKET_STATE_TONES[state as string];
 }
 
 /** Hyphenated chip label for a regime state (`bull_quiet` → `bull-quiet`). Any
@@ -234,8 +252,8 @@ export function marketStateTone(state: string | null | undefined): MarketStateTo
  *  could not decide it (too little stored history, or a low realized-vol leg
  *  with no VIX print reaching the date), or a store / FRED read failed. */
 export function marketStateLabel(state: string | null | undefined): string {
-	if (!state || !(state in _MARKET_STATE_TONES)) return 'unknown';
-	return state.replaceAll('_', '-');
+	if (!isKnownMarketState(state)) return 'unknown';
+	return (state as string).replaceAll('_', '-');
 }
 
 /**
