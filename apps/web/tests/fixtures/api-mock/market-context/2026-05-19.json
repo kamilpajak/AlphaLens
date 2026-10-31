@@ -1,0 +1,33 @@
+{
+  "_provenance": [
+    "The index-level MARKET CONTEXT payload for brief date 2026-05-19 — the date the owner",
+    "opened, and the shape 47 of 164 published brief dates carry: the three 5-session index",
+    "returns are real, the whole market_state family is absent because that signal only ships",
+    "from 2026-07-05. (164/47 measured on production Postgres 2026-10-30, stated by the task",
+    "author and not re-measured here.)",
+    "",
+    "The three fractions are FULL PRECISION as produced on 2026-10-31 by the production writer",
+    "itself, run against the real split-adjusted grouped-daily store on the author's Mac:",
+    "",
+    "  from alphalens_pipeline.market.market_state import five_session_index_returns",
+    "  five_session_index_returns(datetime.date(2026, 5, 19))",
+    "  -> {'market_ret5_spy': -0.006028339971280605,",
+    "      'market_ret5_qqq': -0.00807363836887054,",
+    "      'market_ret5_iwm': -0.033867714194712795}",
+    "",
+    "They round to the -0.60% / -0.81% / -3.39% on the owner's screen, which is what ties this",
+    "fixture to what he actually looked at. The mirror holds 2026-05-19 itself, so there is no",
+    "rolled-back anchor here (unlike the 2026-09-05 trio in the stories file).",
+    "",
+    "Stored as a bare index-level payload rather than a whole day file: no candidate row for",
+    "this date is in the repo, and the strip reads only these keys.",
+    "",
+    "The market_state keys are ABSENT ON PURPOSE. Do not add nulls for them — the component",
+    "takes `undefined` for an unstamped column, and writing a plausible label here would be",
+    "invented data on the page."
+  ],
+  "date": "2026-05-19",
+  "market_ret5_spy": -0.006028339971280605,
+  "market_ret5_qqq": -0.00807363836887054,
+  "market_ret5_iwm": -0.033867714194712795
+}
