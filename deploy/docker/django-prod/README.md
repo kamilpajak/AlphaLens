@@ -117,7 +117,9 @@ open http://localhost:8080/brief/<date>
 The `pnpm build` step is mandatory on macOS Docker Desktop — if the
 `apps/web/build/` directory is missing at container start, the bind-mount
 silently produces an empty dir and nginx serves a 403 + redirection cycle.
-CLAUDE.md "workflow conventions" documents the gotcha + restart workaround.
+Already up with an empty mount: build, then `docker compose restart nginx` from this
+directory. `apps/web/CLAUDE.md` section "Build before `docker compose up` (local Docker stack
+only)" has the full symptom list; it does NOT load for work under `deploy/`, so read it directly.
 
 ## Cloudflare config
 

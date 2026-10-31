@@ -44,8 +44,9 @@ services:
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
       # Operator runs `pnpm --filter web build` first; nginx serves the
-      # static artifact + reverse-proxies /api/* to django:8000. CLAUDE.md
-      # documents the macOS Docker Desktop gotcha (empty bind-mount when
-      # the source path is missing at container start).
+      # static artifact + reverse-proxies /api/* to django:8000.
+      # `apps/web/CLAUDE.md` documents the macOS Docker Desktop gotcha (empty
+      # bind-mount when the source path is missing at container start); it
+      # moved out of the root CLAUDE.md in #1779.
       - ${SPA_DIST:-../../../apps/web/build}:/usr/share/nginx/html:ro
     restart: unless-stopped

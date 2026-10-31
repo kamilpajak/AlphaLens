@@ -11,7 +11,9 @@ candidate, three Buffett qualities that the quantitative lens cannot derive:
 * **F4 — management candor** (``management_candor``: enum) — does the MD&A read
   as candid, mixed, or promotional?
 
-DOCTRINE — "LLM training-cutoff blindness" (CLAUDE.md). The LLM NEVER produces a
+DOCTRINE — the root ``CLAUDE.md`` code convention "Never ask an LLM for a numeric
+or time-sensitive value ... compute it and inject the fact" (it carried the
+heading "LLM training-cutoff blindness" until #1782). The LLM NEVER produces a
 number. All numbers (ROIC, operating margin, the net-buyback flag) are computed
 upstream in Python (the Buffett :class:`~alphalens_pipeline.experts.buffett.comparison.BuffettPanel`)
 and INJECTED into the prompt as a labelled FACTS block. The model only reasons /
