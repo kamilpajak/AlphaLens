@@ -1,11 +1,17 @@
 /**
- * Every animation the SPA runs stops under `prefers-reduced-motion: reduce`.
+ * The two animations in `app.css` stop under `prefers-reduced-motion: reduce`.
  *
- * Two animations survive in `app.css`: `fade-up`, a one-shot 0.45s entrance
- * with an 8px slide used on most page sections, and `blink`, an infinite 1.2s
- * opacity toggle on the MarketSession open-state dot. Both are decorative —
- * the open state is also carried by a green dot, the word "live" and a
- * countdown — so both are switched off entirely rather than shortened.
+ * They are `fade-up`, a one-shot 0.45s entrance with an 8px slide used on most
+ * page sections, and `blink`, an infinite 1.2s opacity toggle on the
+ * MarketSession open-state dot. Both are decorative — the open state is also
+ * named in words beside a coloured dot — so both are switched off entirely
+ * rather than shortened.
+ *
+ * This file names those two classes, so it cannot see a THIRD animation added
+ * later. That is covered separately by `tests/unit/inlineAnimation.test.ts`,
+ * which requires every selector animating in `app.css` to appear inside the
+ * reduced-motion block. CSS transitions are out of scope for both: four
+ * chevrons still rotate under the preference.
  *
  * Each assertion is paired with the SAME read taken without the preference, so
  * a rule that stopped matching for an unrelated reason cannot pass as a

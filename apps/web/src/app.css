@@ -173,12 +173,15 @@ body {
      none` also drops the `backwards` fill, so the element renders in its
      final state instead of staying at opacity 0.
    - `blink` is an infinite 1.2s opacity toggle on the MarketSession open-state
-     dot. The open branch already names the state three other ways — a green
-     dot, the word "live" and a "closes in" countdown — and the closed branch
-     uses a static grey dot, so trading state never rested on the motion.
+     dot. The open branch names the state in words — "live" in green — beside a
+     green dot, and the closed branch reads "closed" beside a grey one, so
+     trading state never rested on the motion. The "closes in" countdown is NOT
+     a third cue to lean on: it is `hidden lg:inline`, so below 1024px only the
+     word and the dot colour remain.
      WCAG 2.2.2 asks for any blink over five seconds to be stoppable, and this
-     one never stops; it is not flagged by the linter only because it animates
-     opacity rather than `transform`. */
+     one never stops. Stopping it here settles that only for visitors who set
+     the preference; the default visitor still gets the infinite flash, so
+     2.2.2 is not met by this rule alone. */
 @media (prefers-reduced-motion: reduce) {
 	.fade-up,
 	.blink {
