@@ -596,6 +596,53 @@ def _render_totals_human(body: dict[str, Any]) -> None:
     _render_totals_balance(body["balance_checks"])
 
 
+def _apply_sweep_or_fail(plan: Any, swept_at: dt.datetime) -> None:
+    """Append one planned sweep, turning every store failure into its CLI code.
+
+    Split out of ``sync_command`` so three exception arms one level deep stop
+    costing it six cognitive-complexity points. Nothing about the contract moves:
+    the same three codes, the same three messages and the same three ``details``
+    dicts, and the rendering stays entirely with the caller.
+
+    No ``SimCashBookRefusedError`` arm: the caller's authorisation step has
+    already asked the same guard about the same ``resolved_env``, so this call
+    can no longer raise it. A second handler for one exception is two messages
+    for one event, and a gate beside a delegate silently killing that delegate's
+    own arm is a defect this repo has a note on.
+    """
+    from alphalens_pipeline.account_cash import sweep
+    from alphalens_pipeline.brokers.journal import JournalWriteError
+
+    try:
+        sweep.apply_sweep(plan, now=swept_at)
+    except sweep.SweepBusyError as exc:
+        raise _fail_with("cashbook_sweep_busy", str(exc), details={"lock": exc.lock}) from exc
+    except JournalWriteError as exc:
+        raise _fail_with(
+            "queue_write_failed",
+            f"could not append to the account cash book: {exc}",
+            details={"journal": _failed_file(exc)},
+        ) from exc
+    except OSError as exc:
+        # The lock, not a journal: it is taken before the first append, so an
+        # unwritable store root fails HERE and nothing was written. Same code,
+        # because it is the same failure mode — a store write did not happen,
+        # nothing is in flight, and a re-run is safe once the cause clears.
+        # Ordered after `JournalWriteError`, which is itself an `OSError`
+        # subclass and names its journal.
+        #
+        # Published under `details.lock`, the key the lock already owns in this
+        # contract (`cashbook_sweep_busy` publishes it), and `details.journal`
+        # stays null: the published row says that key names the file an append
+        # failed on, and this file is neither a journal nor one anything
+        # appended to.
+        raise _fail_with(
+            "queue_write_failed",
+            f"could not take the account cash book's sweep lock: {exc}",
+            details={"journal": None, "lock": _failed_file(exc)},
+        ) from exc
+
+
 @cashbook_app.command("sync")
 def sync_command(
     since: str = _SINCE_OPTION,
@@ -651,7 +698,6 @@ def sync_command(
     from alphalens_pipeline.account_cash import paths, store, sweep
     from alphalens_pipeline.brokers.account_cash import SupportsAccountCash
     from alphalens_pipeline.brokers.automanager import state_paths
-    from alphalens_pipeline.brokers.journal import JournalWriteError
     from broker_contract.contract import BrokerError
 
     from alphalens_cli.commands.broker import _apply_env_option, _cli_broker
@@ -731,39 +777,7 @@ def sync_command(
     rendered = _render_json(body) if resolved_format == _FORMAT_JSON else None
 
     if not dry_run:
-        try:
-            sweep.apply_sweep(plan, now=swept_at)
-        # No `SimCashBookRefusedError` arm: the authorisation above has already
-        # asked the same guard about the same `resolved_env`, so this call can
-        # no longer raise it. A second handler for one exception is two
-        # messages for one event, and a gate beside a delegate silently killing
-        # that delegate's own arm is a defect this repo has a note on.
-        except sweep.SweepBusyError as exc:
-            raise _fail_with("cashbook_sweep_busy", str(exc), details={"lock": exc.lock}) from exc
-        except JournalWriteError as exc:
-            raise _fail_with(
-                "queue_write_failed",
-                f"could not append to the account cash book: {exc}",
-                details={"journal": _failed_file(exc)},
-            ) from exc
-        except OSError as exc:
-            # The lock, not a journal: it is taken before the first append, so
-            # an unwritable store root fails HERE and nothing was written. Same
-            # code, because it is the same failure mode — a store write did not
-            # happen, nothing is in flight, and a re-run is safe once the cause
-            # clears. Ordered after `JournalWriteError`, which is itself an
-            # `OSError` subclass and names its journal.
-            #
-            # Published under `details.lock`, the key the lock already owns in
-            # this contract (`cashbook_sweep_busy` publishes it), and
-            # `details.journal` stays null: the published row says that key
-            # names the file an append failed on, and this file is neither a
-            # journal nor one anything appended to.
-            raise _fail_with(
-                "queue_write_failed",
-                f"could not take the account cash book's sweep lock: {exc}",
-                details={"journal": None, "lock": _failed_file(exc)},
-            ) from exc
+        _apply_sweep_or_fail(plan, swept_at)
 
     if rendered is not None:
         typer.echo(rendered)
