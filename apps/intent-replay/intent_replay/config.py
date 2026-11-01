@@ -654,13 +654,12 @@ def _costs(reader: _Reader, node: Any, path: str, *, fx: Fx | None) -> Costs | N
         if "commission_rate" in node
         else None
     )
+    # Hoisted out of the `minimum` expression rather than nested in it. Reading
+    # `fx.instrument_currency` unconditionally is free: `Fx` is a frozen slots dataclass
+    # and the attribute is a plain field, so there is nothing to evaluate twice.
+    minimum_unit = None if fx is None else fx.instrument_currency
     minimum = (
-        _quantity(
-            reader,
-            node["min_commission"],
-            _path(path, "min_commission"),
-            None if fx is None else fx.instrument_currency,
-        )
+        _quantity(reader, node["min_commission"], _path(path, "min_commission"), minimum_unit)
         if "min_commission" in node
         else None
     )
