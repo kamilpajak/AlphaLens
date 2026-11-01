@@ -323,7 +323,13 @@ BASELINE: dict[str, int] = {
     # `entry_trail_watcher.py` so it is not reintroduced here.
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8136,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
+    # +24 for PR #1840, to take Sonar python:S3776 off ``select_stop_move_lines``: the
+    # four skip guards move into ``_stop_move_window_ts`` with the docstring that names
+    # every reason a line is skipped and the note that their ORDER is load-bearing.
+    # Counted with ``wc -l`` on the merged file, not from the diff — the comment on the
+    # ``control_loop.py`` entry above records an earlier attempt that counted from a
+    # diff and shipped this gate red.
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1407,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3302,
     # Raised from 2416 for #1689's account-cash capability. The room goes to
     # ONE method, ``list_account_cash``: the SIM refusal, the two key
