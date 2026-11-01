@@ -190,5 +190,57 @@ class TestBuildViaLoader(unittest.TestCase):
         self.assertEqual(setup.status, STATUS_OK)
 
 
+class TestTheDisasterFloorLoop(unittest.TestCase):
+    """``_raise_stop_to_disaster_floor`` driven directly.
+
+    Driven at the helper rather than through a frame on purpose. Its ``None``
+    branch - raising the stop leaves no tier at all - was not reached by any of
+    3000 synthetic lognormal frames across 1% to 9% daily volatility, so a
+    frame-level test for it would assert nothing while appearing to cover it.
+    Extracting the loop to module level is what makes this reachable at all.
+    """
+
+    _TIER = (builder.EntryTier(limit=100.0, alloc_pct=100.0, atr_distance=0.5, tag="t"),)
+
+    def test_a_stop_already_above_the_floor_is_returned_untouched(self):
+        tiers = list(self._TIER)
+        self.assertEqual(
+            builder._raise_stop_to_disaster_floor(
+                100.0, 2.0, [(100.0, "t")], 80.0, 100.0, tiers, None
+            ),
+            (80.0, 100.0, tiers),
+        )
+
+    def test_a_deeper_stop_is_raised_to_the_floor_and_the_tiers_re_derived(self):
+        raised = builder._raise_stop_to_disaster_floor(
+            100.0, 2.0, [(99.0, "a"), (98.0, "b")], 10.0, 100.0, list(self._TIER), None
+        )
+        assert raised is not None
+        stop, _blended, tiers = raised
+        # 100.0 * 0.75, the floor itself - the loop stops AT it, so `>=` and not `>`.
+        self.assertEqual(stop, 100.0 * builder._DISASTER_FLOOR_FRAC)
+        self.assertEqual([t.tag for t in tiers], ["a", "b"])
+
+    def test_it_reports_no_structure_when_raising_the_stop_leaves_no_tier(self):
+        self.assertIsNone(
+            builder._raise_stop_to_disaster_floor(
+                100.0, 2.0, [], 10.0, 100.0, list(self._TIER), None
+            )
+        )
+
+    def test_it_stops_at_the_floor_rather_than_strictly_above_it(self):
+        """The termination guard is ``stop >= floor``. With a strict ``>`` a stop
+        landing exactly on the floor re-assigns the same value, re-derives the same
+        tiers and loops forever - measured: that mutation hangs the suite instead of
+        failing it. This pins the boundary so the hang cannot be reintroduced."""
+        floor = 100.0 * builder._DISASTER_FLOOR_FRAC
+        self.assertEqual(
+            builder._raise_stop_to_disaster_floor(
+                100.0, 2.0, [(100.0, "t")], floor, 100.0, list(self._TIER), None
+            ),
+            (floor, 100.0, list(self._TIER)),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

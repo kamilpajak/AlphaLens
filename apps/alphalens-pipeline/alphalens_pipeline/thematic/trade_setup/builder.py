@@ -122,6 +122,37 @@ def _assemble_tiers(
     return tiers, blended
 
 
+def _raise_stop_to_disaster_floor(
+    close: float,
+    atr: float,
+    candidates: list[tuple[float, str]],
+    stop: float,
+    blended: float,
+    tiers: list[EntryTier],
+    risk_distribution: list[float] | None,
+) -> tuple[float, float, list[EntryTier]] | None:
+    """``(stop, blended_entry, tiers)`` with the -25% disaster floor honoured, or
+    ``None`` when raising the stop leaves no tier at all.
+
+    Never risk more than :data:`_DISASTER_FLOOR_FRAC` from the blended entry. If the
+    structural stop is deeper, raise it and re-validate tiers (a raised stop can push
+    the deepest tier inside the min-stop-distance).
+
+    Loop, not a single pass: dropping a deep tier RAISES the blended entry, which
+    raises the floor again - a single ``if`` could leave the stop below the new floor.
+    Converges: each pass either satisfies the floor or drops at least one tier
+    (finite), so it terminates.
+    """
+    while True:
+        floor = blended * _DISASTER_FLOOR_FRAC
+        if stop >= floor:
+            return stop, blended, tiers
+        stop = floor
+        tiers, blended = _assemble_tiers(close, atr, candidates, stop, risk_distribution)
+        if not tiers:
+            return None
+
+
 def build_trade_setup_from_frame(
     ohlcv: pd.DataFrame,
     *,
@@ -183,21 +214,12 @@ def build_trade_setup_from_frame(
     if not tiers:
         return TradeSetup.no_structure(asof_close=close, atr=atr, order_ttl_days=order_ttl_days)
 
-    # -25% disaster floor: never risk more than 25% from the blended entry.
-    # If the structural stop is deeper, raise it and re-validate tiers (a
-    # raised stop can push the deepest tier inside the min-stop-distance).
-    # Loop, not a single pass: dropping a deep tier RAISES the blended entry,
-    # which raises the floor again — a single `if` could leave the stop below
-    # the new floor. Converges: each pass either satisfies the floor or drops
-    # >=1 tier (finite), so it terminates.
-    while True:
-        floor = blended * _DISASTER_FLOOR_FRAC
-        if stop >= floor:
-            break
-        stop = floor
-        tiers, blended = _assemble_tiers(close, atr, candidates, stop, risk_distribution)
-        if not tiers:
-            return TradeSetup.no_structure(asof_close=close, atr=atr, order_ttl_days=order_ttl_days)
+    floored = _raise_stop_to_disaster_floor(
+        close, atr, candidates, stop, blended, tiers, risk_distribution
+    )
+    if floored is None:
+        return TradeSetup.no_structure(asof_close=close, atr=atr, order_ttl_days=order_ttl_days)
+    stop, blended, tiers = floored
 
     prices = [t.limit for t in tiers]
     weights = risk_distribution[: len(prices)] if risk_distribution else None
