@@ -324,6 +324,40 @@ class EdgarFundamentalsStore:
                 available.append(ticker)
         return sorted(set(available))
 
+    def _partition_by_freshness(
+        self, tickers: list[str], ref: date, *, refresh_stale: bool
+    ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+        """``(missing, stale)`` as ``(ticker, cik)`` pairs; an unresolved ticker lands
+        in neither and is logged.
+
+        An unreadable file belongs with the missing ones, not the stale ones. It is
+        not an out-of-date answer, it is no answer, and the stale path both budgets it
+        and sorts it last (its data age is unknown), so on a large universe it could
+        wait indefinitely.
+
+        A method rather than a module-level function, which is the weaker boundary of
+        the two: this block's job IS to ask the store four questions - ``_cik_for``,
+        ``_dir``, ``_reader.get_cik_table`` and ``_is_stale`` - and a free function
+        would have to take all four as parameters, or take the store itself and be a
+        method in disguise. It costs nothing on the metric: the complexity visitor does
+        not charge for sitting inside a class.
+        """
+        missing: list[tuple[str, str]] = []
+        stale: list[tuple[str, str]] = []
+        for ticker in tickers:
+            cik = self._cik_for(ticker)
+            if cik is None:
+                logger.warning("ticker %s unresolved (no CIK from SEC), skipping", ticker)
+                continue
+            if (
+                not (self._dir / f"{cik}.parquet").exists()
+                or self._reader.get_cik_table(cik) is None
+            ):
+                missing.append((ticker, cik))
+            elif refresh_stale and self._is_stale(cik, ref):
+                stale.append((ticker, cik))
+        return missing, stale
+
     def preload(
         self,
         tickers: list[str],
@@ -363,24 +397,7 @@ class EdgarFundamentalsStore:
         ref = today or date.today()
         budget = REFETCH_BUDGET_PER_CALL if refresh_budget is None else refresh_budget
 
-        missing: list[tuple[str, str]] = []
-        stale: list[tuple[str, str]] = []
-        for ticker in tickers:
-            cik = self._cik_for(ticker)
-            if cik is None:
-                logger.warning("ticker %s unresolved (no CIK from SEC), skipping", ticker)
-                continue
-            # An unreadable file belongs with the missing ones, not the stale ones.
-            # It is not an out-of-date answer, it is no answer, and the stale path
-            # both budgets it and sorts it last (its data age is unknown), so on a
-            # large universe it could wait indefinitely.
-            if (
-                not (self._dir / f"{cik}.parquet").exists()
-                or self._reader.get_cik_table(cik) is None
-            ):
-                missing.append((ticker, cik))
-            elif refresh_stale and self._is_stale(cik, ref):
-                stale.append((ticker, cik))
+        missing, stale = self._partition_by_freshness(tickers, ref, refresh_stale=refresh_stale)
 
         if missing:
             logger.info("preload: fetching %d missing companyfacts from SEC", len(missing))
