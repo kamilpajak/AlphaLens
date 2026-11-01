@@ -344,7 +344,13 @@ BASELINE: dict[str, int] = {
     # with it (owner decision 2026-10-13, epic #1526).
     "apps/alphalens-pipeline/alphalens_pipeline/feedback/ladder_replay.py": 1917,
     "apps/alphalens-pipeline/alphalens_pipeline/feedback/population_ladder_monitor.py": 3347,
-    "apps/alphalens-pipeline/alphalens_pipeline/feedback/selection_label.py": 1354,
+    # +3 to spell the `~/.alphalens` root ONCE (Sonar python:S1192 flagged it four
+    # times over): one line for the `_ALPHALENS_HOME` constant and two for the note
+    # that it is module-private on purpose, because no repo-wide home constant
+    # exists and adding one would couple the twenty modules that each resolve the
+    # root for themselves. A named constant cannot be introduced for free, so this
+    # entry moves rather than the fix being dropped.
+    "apps/alphalens-pipeline/alphalens_pipeline/feedback/selection_label.py": 1357,
     "apps/alphalens-pipeline/alphalens_pipeline/thematic/mapping/channel_assessor.py": 1267,
     "apps/alphalens-pipeline/alphalens_pipeline/thematic/mapping/orchestrator.py": 1626,
     "apps/alphalens-research/alphalens_research/eval/faithfulness.py": 1034,

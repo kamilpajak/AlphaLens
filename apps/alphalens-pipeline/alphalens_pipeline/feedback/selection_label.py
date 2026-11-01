@@ -102,13 +102,16 @@ MIN_RESID_OBS = 30  # fewer residuals -> no scaled label
 #: the next - the store side of the audit must not depend on that optimisation.
 AUDIT_LEAD_SESSIONS = 20
 
-DEFAULT_LABELS_DIR = Path.home() / ".alphalens" / "selection_labels"
-DEFAULT_NEWS_DIR = Path.home() / ".alphalens" / "thematic_news"
+#: Spelled once so the four defaults cannot drift. Module-private, like the same constant
+#: in `alphalens_cli/commands/{buffett,feedback}.py`: there is no repo-wide home constant.
+_ALPHALENS_HOME = Path.home() / ".alphalens"
+DEFAULT_LABELS_DIR = _ALPHALENS_HOME / "selection_labels"
+DEFAULT_NEWS_DIR = _ALPHALENS_HOME / "thematic_news"
 #: A SEPARATE directory on purpose. #1227 is registered and pending on a panel drawn
 #: from `selection_labels`; writing a nine-times-larger population into those files
 #: would change what that frozen panel contains.
-DEFAULT_NEWS_LABELS_DIR = Path.home() / ".alphalens" / "news_labels"
-DEFAULT_BRIEFS_DIR = Path.home() / ".alphalens" / "thematic_briefs"
+DEFAULT_NEWS_LABELS_DIR = _ALPHALENS_HOME / "news_labels"
+DEFAULT_BRIEFS_DIR = _ALPHALENS_HOME / "thematic_briefs"
 
 STATUS_OK = "ok"
 STATUS_SET_FINAL_AFTER_OPEN = "set_final_after_open"
