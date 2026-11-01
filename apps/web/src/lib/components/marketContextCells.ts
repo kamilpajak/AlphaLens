@@ -115,6 +115,18 @@ function levelBelowFlip(
 	return Number.isFinite(v) ? belowFlipSafe(v as number, digits, flipAt) : null;
 }
 
+/** `on` / `off` for a real squeeze reading, `null` for an absence.
+ *
+ *  `=== true` / `=== false`, never truthiness: `false` is a real reading ("no
+ *  squeeze today") and only null / undefined is an absence. Two guards rather
+ *  than one expression, because a three-way answer does not read as a chain of
+ *  ternaries. */
+function squeezeLabel(squeezeOn: boolean | null | undefined): string | null {
+	if (squeezeOn === true) return 'on';
+	if (squeezeOn === false) return 'off';
+	return null;
+}
+
 /** Keep only the cells whose value resolved, dropping the flip point with it. */
 function present(
 	rows: { key: string; value: string | null; flip?: string }[]
@@ -227,8 +239,6 @@ export interface ResidualInputs {
 export function residualCells({ vixDecile, squeezeOn }: ResidualInputs): MarketContextCell[] {
 	return present([
 		{ key: 'vix %ile', value: pctile01(vixDecile) },
-		// `=== true` / `=== false`, never truthiness: `false` is a real reading
-		// ("no squeeze today"), and only null / undefined is an absence.
-		{ key: 'squeeze', value: squeezeOn === true ? 'on' : squeezeOn === false ? 'off' : null }
+		{ key: 'squeeze', value: squeezeLabel(squeezeOn) }
 	]);
 }
