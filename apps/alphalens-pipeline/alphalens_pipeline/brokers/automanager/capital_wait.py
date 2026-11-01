@@ -284,7 +284,11 @@ def expire(
     pick_key: str,
     window: PickWindow,
     alert_throttled: Callable[[str, str], bool] | None,
-    at_broker: bool = False,
+    # REQUIRED, no default. The two branches differ by whether the operator is
+    # told to arm a replacement, and the dangerous answer is the cheap one to get
+    # by accident. A caller that cannot establish whether an order rests at the
+    # broker has to say which way it is guessing, in writing, at the call site.
+    at_broker: bool,
 ) -> None:
     """Retire an armed pick still unplaced at the end of its window.
 
