@@ -155,20 +155,35 @@ body {
 	animation: blink 1.2s steps(1) infinite;
 }
 
-@keyframes ticker {
-	from { transform: translateX(0); }
-	to { transform: translateX(-50%); }
-}
-.ticker-track {
-	animation: ticker 60s linear infinite;
-}
-
 @keyframes fade-up {
 	from { opacity: 0; transform: translateY(8px); }
 	to { opacity: 1; transform: translateY(0); }
 }
 .fade-up {
 	animation: fade-up 0.45s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+
+/* Honour `prefers-reduced-motion: reduce`. UNLAYERED on purpose: the two
+   animation rules above are unlayered too, and a rule inside `@layer base`
+   cannot override one outside it.
+
+   Both animations go entirely rather than being shortened, because neither
+   carries information:
+   - `fade-up` is a decorative 0.45s entrance with an 8px slide. `animation:
+     none` also drops the `backwards` fill, so the element renders in its
+     final state instead of staying at opacity 0.
+   - `blink` is an infinite 1.2s opacity toggle on the MarketSession open-state
+     dot. The open branch already names the state three other ways — a green
+     dot, the word "live" and a "closes in" countdown — and the closed branch
+     uses a static grey dot, so trading state never rested on the motion.
+     WCAG 2.2.2 asks for any blink over five seconds to be stoppable, and this
+     one never stops; it is not flagged by the linter only because it animates
+     opacity rather than `transform`. */
+@media (prefers-reduced-motion: reduce) {
+	.fade-up,
+	.blink {
+		animation: none;
+	}
 }
 
 .corners {
