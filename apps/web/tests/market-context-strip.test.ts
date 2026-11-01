@@ -237,6 +237,9 @@ function pairGaps(page: Page, selector: string): Promise<number[]> {
  * deletes `market_state_vix_decile` and keeps the real `squeeze_on`, so no
  * extra payload is composed for it.
  */
+/** The drawer list's accessible name, as the component sets it. */
+const DRAWER_LIST_LABEL = 'market context residuals';
+
 const DRAWER_SHAPES: [date: string, terms: string[], values: string[]][] = [
 	[LABELLED_DATE, ['vix %ile', 'squeeze'], [VIX_PCTILE_CELL_VALUE, SQUEEZE_CELL_VALUE]],
 	[NO_LABEL_DATE, ['squeeze'], [SQUEEZE_CELL_VALUE]]
@@ -295,8 +298,12 @@ test.describe('market-context strip — a cell with no value is not rendered', (
 		// holds 8 <dd> on this very date — a bare `dl dd` fails on the
 		// explanation while the strip is empty exactly as required.
 		//
-		// The index row, the driver row and the drawer all carry an aria-label,
-		// so this covers all three.
+		// It covers the index row and the driver row. It does NOT cover the
+		// drawer, whatever its label: `{#if residual.length > 0}` keeps the
+		// whole drawer out of the DOM on this date, which the zero-button
+		// assertion above already states. Saying "all three" here would be a
+		// property that is true and empty. The drawer's own list is gated by
+		// the geometry test, which locates it by that label.
 		await expect(s.locator('dl[aria-label] dd')).toHaveCount(0);
 
 		// An expander onto nothing is worse than no expander.
@@ -428,7 +435,11 @@ test.describe('market-context strip — a cell with no value is not rendered', (
 				const s = strip(page);
 				await s.getByRole('button', { name: /more/i }).click();
 
-				const drawer = s.locator('#market-context-axes dl');
+				// Located by its accessible NAME, not by the wrapper's id. The drawer
+				// was the only one of the strip's three lists without one, and the
+				// empty-date test cannot pin it (see there), so this is where the
+				// label is held: delete it and these assertions stop matching.
+				const drawer = s.locator(`dl[aria-label="${DRAWER_LIST_LABEL}"]`);
 				await expect(drawer).toBeVisible();
 
 				// The right cells, in order, still as <dt>/<dd> pairs — one group
@@ -446,7 +457,7 @@ test.describe('market-context strip — a cell with no value is not rendered', (
 					0
 				);
 				const [reference] = driverGaps;
-				const gaps = await pairGaps(page, '#market-context-axes dl > div');
+				const gaps = await pairGaps(page, `dl[aria-label="${DRAWER_LIST_LABEL}"] > div`);
 				expect(gaps).toHaveLength(terms.length);
 				for (const gap of gaps) {
 					expect(

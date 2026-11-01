@@ -297,9 +297,15 @@
 			     groups sit on one `gap-x-4` baseline row: the same shape as the index
 			     and driver rows, so the drawer and the face read alike. No track
 			     width is handed to a pair any more, so no cell count and no viewport
-			     can spread one again. `whitespace-nowrap` sits on the group rather
-			     than the `<dd>` so `vix %ile` cannot break across its own space
-			     either. -->
+			     can spread one again — that part is measured, by the geometry test.
+			     `whitespace-nowrap` sits on the group rather than the `<dd>` so
+			     `vix %ile` cannot break across its own space. That one is NOT
+			     measured and cannot be at any realistic width: two cells are about
+			     160px inside a 302px row at 360px, so nothing needs to break. It is
+			     here because the atomic-token rule in `apps/web/CLAUDE.md` is a
+			     review-time rule that nothing enforces, and the face rows carry it.
+			     The `<dl>` differs from theirs in one class: no `min-w-0`, which is
+			     inert while this list is the only child of a block. -->
 			<dl
 				aria-label="market context residuals"
 				class="flex items-baseline gap-x-4 gap-y-1 flex-wrap text-[11px]"
