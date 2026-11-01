@@ -95,14 +95,21 @@ def _float_env(name: str, default: float) -> float:
 
 
 def check(
-    pick,
     journal_view: JournalView,
     session_state: SessionState,
     *,
     kill_path: Path | None = None,
     global_kill_path: Path | None = None,
 ) -> Decision:
-    """Return Allow iff every rail clears; else the first Refuse. Pure predicate."""
+    """Return Allow iff every rail clears; else the first Refuse. Pure predicate.
+
+    Takes no pick. Every rail here is pick-INDEPENDENT - the KILL files, the master
+    arm and the day's realized r hold for the whole session, not for one candidate.
+    A leading `pick` parameter sat here unread until #1192 removed the one rail that
+    needed it (the pre-sizing portfolio-gross arm, see the note below); what replaced
+    it is `control_loop._check_gross_cap`, which runs after sizing and reads the
+    candidate from its own arguments.
+    """
     kill = kill_path or state_paths.kill_file_path()
     if kill.exists():
         return Refuse(f"KILL file present at {kill} — emergency stop, placement halted")

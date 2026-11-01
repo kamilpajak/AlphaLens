@@ -479,7 +479,6 @@ class ManagerWorld:
         picks the manager holds is bounded by money, in the post-sizing gates,
         never here."""
         decision = safety.check(
-            _pick("KO"),
             safety.JournalView(realized_r_today=realized_r_today),
             self._chain,
             kill_path=self.kill_file,
