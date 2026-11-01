@@ -102,8 +102,8 @@ MIN_RESID_OBS = 30  # fewer residuals -> no scaled label
 #: the next - the store side of the audit must not depend on that optimisation.
 AUDIT_LEAD_SESSIONS = 20
 
-#: Spelled once so the four defaults cannot drift. Module-private, like the same constant
-#: in `alphalens_cli/commands/{buffett,feedback}.py`: there is no repo-wide home constant.
+#: Spelled once so the four defaults below cannot drift. Module-private, as in three
+#: other modules: 137 build this root for themselves and share no constant (see BASELINE).
 _ALPHALENS_HOME = Path.home() / ".alphalens"
 DEFAULT_LABELS_DIR = _ALPHALENS_HOME / "selection_labels"
 DEFAULT_NEWS_DIR = _ALPHALENS_HOME / "thematic_news"

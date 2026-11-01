@@ -103,12 +103,17 @@ def check(
 ) -> Decision:
     """Return Allow iff every rail clears; else the first Refuse. Pure predicate.
 
-    Takes no pick. Every rail here is pick-INDEPENDENT - the KILL files, the master
-    arm and the day's realized r hold for the whole session, not for one candidate.
-    A leading `pick` parameter sat here unread until #1192 removed the one rail that
-    needed it (the pre-sizing portfolio-gross arm, see the note below); what replaced
-    it is `control_loop._check_gross_cap`, which runs after sizing and reads the
-    candidate from its own arguments.
+    Takes no pick. Every rail here is pick-INDEPENDENT — the KILL files, the master
+    arm, the OAuth chain and the day's realized r hold for the whole session, not for
+    one candidate.
+
+    A leading ``pick`` parameter sat here from the MVP (#876) and was read by NO rail
+    in any version of this function, including the pre-sizing portfolio-gross arm the
+    note below describes: that arm compared ``journal_view.gross_committed`` against
+    ``broker_view.equity``, never the candidate. So nothing was lost when #1192
+    removed it, and nothing is lost by dropping the parameter now. Its replacement,
+    ``pick_money_gates._check_gross_cap``, runs after sizing and reads the candidate
+    from its own arguments.
     """
     kill = kill_path or state_paths.kill_file_path()
     if kill.exists():
@@ -128,8 +133,9 @@ def check(
     # ACCOUNT currency (~3.7x looser than it read on a PLN account holding USD
     # instruments), it ran before sizing so the candidate never counted, and it
     # saw only WORKING verdicts so filled exposure dropped out. The rail is
-    # `control_loop._check_gross_cap`, which runs post-sizing with `fx` in hand
-    # and folds working + candidate + filled + watching in one currency.
+    # `pick_money_gates._check_gross_cap`, which runs post-sizing with `fx` in
+    # hand and folds working + candidate + filled + watching in one currency.
+    # (It is CALLED from `control_loop`, which is what this comment used to name.)
     #
     # Repairing the FULL rail in place was not possible, though the committed
     # term alone was: each journaled record carries its own `fx_rate`, so that
