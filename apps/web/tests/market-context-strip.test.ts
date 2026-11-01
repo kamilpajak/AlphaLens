@@ -137,6 +137,10 @@ const VIX_KEYS = ['market_state_vix', 'market_state_vix_decile'];
 const DIST200_CELL_VALUE = '+8.1%';
 const ATR_PCTILE_CELL_VALUE = '10';
 const VIX_CELL_VALUE = '16.6';
+/** The two residual (drawer) cells of the same capture: `market_state_vix_decile`
+ *  is `0.3968…` and `market_state_squeeze_on` is `false`. */
+const VIX_PCTILE_CELL_VALUE = '40';
+const SQUEEZE_CELL_VALUE = 'off';
 const NO_LABEL_DAY = {
 	...LABELLED_DAY,
 	date: NO_LABEL_DATE,
@@ -197,6 +201,47 @@ function installMockedApi(page: Page) {
 
 const strip = (page: Page) => page.getByRole('region', { name: 'market context' });
 
+/**
+ * The rendered horizontal distance, in CSS pixels, from the last glyph of each
+ * `<dt>` to the first glyph of its own `<dd>` — one number per `<dt>`/`<dd>`
+ * group matched by `selector`.
+ *
+ * Geometry, because every text and structure assertion in this file passes
+ * whether the pair sits together or a hand's width apart, which is how the
+ * drawer shipped with its terms parked at one edge and its values at the other.
+ *
+ * GLYPHS, not boxes. A box measurement would be fooled by the obvious
+ * regression: let the `<dd>` stretch and right-align its text (`grow` plus
+ * `text-right`, which `CandidateCard.svelte` does for its own value column) and
+ * the two boxes still touch while the reader sees the same gap as before. A
+ * `Range` over each element's contents measures where the text actually is.
+ */
+function pairGaps(page: Page, selector: string): Promise<number[]> {
+	return page.locator(selector).evaluateAll((groups) =>
+		groups.map((g) => {
+			const textBox = (el: Element) => {
+				const range = document.createRange();
+				range.selectNodeContents(el);
+				return range.getBoundingClientRect();
+			};
+			return textBox(g.querySelector('dd')!).left - textBox(g.querySelector('dt')!).right;
+		})
+	);
+}
+
+/**
+ * The drawer at its two reachable cell counts, with the cells each one holds.
+ *
+ * `residualCells` returns at most TWO — the drivers were promoted to the face —
+ * and often one. `NO_LABEL_DATE` is the one-cell shape for free: it already
+ * deletes `market_state_vix_decile` and keeps the real `squeeze_on`, so no
+ * extra payload is composed for it.
+ */
+const DRAWER_SHAPES: [date: string, terms: string[], values: string[]][] = [
+	[LABELLED_DATE, ['vix %ile', 'squeeze'], [VIX_PCTILE_CELL_VALUE, SQUEEZE_CELL_VALUE]],
+	[NO_LABEL_DATE, ['squeeze'], [SQUEEZE_CELL_VALUE]]
+];
+
 test.describe('market-context strip — a cell with no value is not rendered', () => {
 	test('a date WITH drivers shows them, each beside its flip point', async ({ page }) => {
 		await installMockedApi(page);
@@ -240,10 +285,18 @@ test.describe('market-context strip — a cell with no value is not rendered', (
 		await expect(s.locator('dl[aria-label="market state drivers"]')).toHaveCount(0);
 		await expect(s.locator('dl[aria-label="index 5-session returns"]')).toHaveCount(0);
 
-		// No cell survives anywhere in the strip. Asserted on <dd>, not on free
-		// text: the glossary tooltip inside this same region carries em dashes
-		// and the phrase "bear below" in its prose, so a text locator would
-		// match the explanation rather than the data and could never fail.
+		// No cell survives in any of the strip's three lists. Two scopings are
+		// deliberate here. On <dd> rather than free text, because the glossary
+		// tooltip inside this same region carries em dashes and the phrase
+		// "bear below" in its prose, so a text locator would match the
+		// explanation rather than the data and could never fail. And on
+		// `dl[aria-label]` rather than `dl`, because that tooltip renders its
+		// threshold bands through `MetricGrid`, whose own <dl> is unlabelled and
+		// holds 8 <dd> on this very date — a bare `dl dd` fails on the
+		// explanation while the strip is empty exactly as required.
+		//
+		// The index row, the driver row and the drawer all carry an aria-label,
+		// so this covers all three.
 		await expect(s.locator('dl[aria-label] dd')).toHaveCount(0);
 
 		// An expander onto nothing is worse than no expander.
@@ -333,5 +386,75 @@ test.describe('market-context strip — a cell with no value is not rendered', (
 		await expect(drivers).not.toContainText('volatile at');
 		await expect(drivers).not.toContainText('bear below');
 		await expect(drivers).not.toContainText('(');
+	});
+
+	// THE DRAWER MUST READ LIKE THE FACE ROWS, gated by MEASUREMENT because the
+	// defect it replaces was invisible to every other kind of assertion in this
+	// file.
+	//
+	// The drawer used to be a `grid grid-cols-2 sm:grid-cols-4` whose every cell
+	// was `flex items-center justify-between`. The four columns were a leftover:
+	// they were sized when four residual cells existed, and once the drivers were
+	// promoted to the face `residualCells` returns at most TWO. So each term was
+	// pinned to the left edge of a quarter-width column and its value to the
+	// right edge of it.
+	//
+	// Measured with this suite on 2026-11-01, as the gap from a term's right edge
+	// to its value's left edge:
+	//
+	//            viewport   drawer (before)   drawer (after)   driver row
+	//            1280px     217.9 px          6 px             6 px
+	//            360px       75.1 px          6 px             6 px
+	//
+	// The bound is NOT a literal. The driver row on the SAME page is measured and
+	// the drawer must match it, because both carry `gap-1.5` and the right answer
+	// is equality — a token change then moves both together instead of making
+	// this test lie. 1 CSS px of slack covers sub-pixel layout rounding; the
+	// defect was 36× that bound at 1280px and 12× at 360px, so the slack is not
+	// what decides the verdict.
+	//
+	// Checked at BOTH cell counts on purpose: the claim is that the count does
+	// not change how a pair reads, which neither count can show on its own. And
+	// at phone width, because the old gap shrank with the viewport without ever
+	// closing.
+	test('the drawer puts each term beside its value, at one cell and at two', async ({ page }) => {
+		await installMockedApi(page);
+
+		for (const width of [1280, 360]) {
+			await page.setViewportSize({ width, height: 900 });
+
+			for (const [date, terms, values] of DRAWER_SHAPES) {
+				await page.goto(`/brief/${date}`);
+				const s = strip(page);
+				await s.getByRole('button', { name: /more/i }).click();
+
+				const drawer = s.locator('#market-context-axes dl');
+				await expect(drawer).toBeVisible();
+
+				// The right cells, in order, still as <dt>/<dd> pairs — one group
+				// each, so no column track can lay a pair out instead of the group.
+				await expect(drawer.locator('dt')).toHaveText(terms);
+				await expect(drawer.locator('dd')).toHaveText(values);
+				await expect(drawer.locator('> div')).toHaveCount(terms.length);
+
+				// ...and the geometry, calibrated against the row above it. The
+				// calibration is asserted first: a date whose driver row is absent
+				// (the 29% shape has none) would otherwise make every comparison
+				// NaN and print "driver row is undefinedpx".
+				const driverGaps = await pairGaps(page, 'dl[aria-label="market state drivers"] > div');
+				expect(driverGaps.length, `${date}: no driver row to calibrate against`).toBeGreaterThan(
+					0
+				);
+				const [reference] = driverGaps;
+				const gaps = await pairGaps(page, '#market-context-axes dl > div');
+				expect(gaps).toHaveLength(terms.length);
+				for (const gap of gaps) {
+					expect(
+						Math.abs(gap - reference),
+						`${date} at ${width}px: drawer term-to-value gap is ${gap}px, driver row is ${reference}px`
+					).toBeLessThanOrEqual(1);
+				}
+			}
+		}
 	});
 });
