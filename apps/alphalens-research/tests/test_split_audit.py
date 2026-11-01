@@ -104,6 +104,31 @@ class TestTheLevelRatio(unittest.TestCase):
         ratios = sa.level_ratios(store_closes=store, reference=_reference(s, [10.0, 11.0, 12.0]))
         self.assertEqual(sorted(ratios), [s[0], s[2]])
 
+    def test_a_negative_close_on_either_side_contributes_no_ratio(self):
+        """The positivity half of the filter, which NaN and inf do not exercise: a
+        negative placeholder close casts, is finite, and would otherwise produce a
+        negative ratio. Measured: with this unpinned, relaxing ``price > 0`` to
+        ``price != 0`` survived the whole suite, and a negative ratio stops the row
+        being reported as unchecked - it is published as a real comparison."""
+        s = _sessions(2)
+        self.assertEqual(
+            sa.level_ratios(
+                store_closes=_store(s, [-5.0, 11.0]),
+                reference=_reference(s, [10.0, -11.0]),
+            ),
+            {},
+        )
+
+    def test_a_close_that_is_not_a_number_at_all_contributes_no_ratio(self):
+        """``None`` rather than a string, because the two raise DIFFERENT exceptions:
+        ``float("n/a")`` raises ValueError and ``float(None)`` raises TypeError. With
+        only the string cases, narrowing the filter's ``except`` to ValueError alone
+        survived the suite."""
+        s = _sessions(2)
+        store = {s[0]: None, s[1]: 11.0}
+        reference = pd.Series([10.0, None], index=pd.to_datetime(s), dtype=object)
+        self.assertEqual(sa.level_ratios(store_closes=store, reference=reference), {})
+
     def test_a_nan_or_infinite_close_on_either_side_contributes_no_ratio(self):
         """Both non-finite values, because they are rejected by DIFFERENT halves of
         the filter. ``nan > 0`` is already False, so the comparison alone stops a NaN

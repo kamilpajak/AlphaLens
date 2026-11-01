@@ -191,13 +191,18 @@ class TestBuildViaLoader(unittest.TestCase):
 
 
 class TestTheDisasterFloorLoop(unittest.TestCase):
-    """``_raise_stop_to_disaster_floor`` driven directly.
+    """``_raise_stop_to_disaster_floor`` driven directly AND through a frame.
 
-    Driven at the helper rather than through a frame on purpose. Its ``None``
-    branch - raising the stop leaves no tier at all - was not reached by any of
-    3000 synthetic lognormal frames across 1% to 9% daily volatility, so a
-    frame-level test for it would assert nothing while appearing to cover it.
-    Extracting the loop to module level is what makes this reachable at all.
+    Directly, because the loop's boundary conditions are awkward to reach from
+    OHLCV and reading them off a frame would say nothing about which guard fired.
+    Extracting the loop to module level is what makes that possible.
+
+    Through a frame too, because its ``None`` branch has a production consequence
+    - the caller turning it into ``NO_STRUCTURE`` - and the direct tests cannot
+    reach that line. The branch needs a daily range around 41%, i.e. a corrupted
+    or unadjusted frame rather than a merely volatile one: 3000 synthetic
+    lognormal frames across 1% to 9% daily volatility never produced it, which is
+    why an earlier version of this class claimed it was unreachable. It is not.
     """
 
     _TIER = (builder.EntryTier(limit=100.0, alloc_pct=100.0, atr_distance=0.5, tag="t"),)
@@ -227,6 +232,44 @@ class TestTheDisasterFloorLoop(unittest.TestCase):
                 100.0, 2.0, [], 10.0, 100.0, list(self._TIER), None
             )
         )
+
+    def test_a_frame_whose_range_leaves_no_tier_degrades_to_no_structure(self):
+        """The helper's ``None`` reaching its caller, which the direct tests cannot
+        see. A flat series with a 20.5% half-range (41% daily) drives the stop to the
+        disaster floor and the raised stop then invalidates every tier. The 20.0%
+        case beside it still builds a setup, so this pins the boundary rather than
+        asserting that any extreme frame fails."""
+        flat = [100.0] * 260
+        no_structure = builder.build_trade_setup_from_frame(
+            _synth_frame(flat, half_range=0.205), risk_budget_pct=1.0, order_ttl_days=7
+        )
+        self.assertEqual(no_structure.status, STATUS_NO_STRUCTURE)
+        self.assertEqual(no_structure.entry_tiers, ())
+        self.assertEqual(no_structure.asof_close, 100.0)
+
+        still_fine = builder.build_trade_setup_from_frame(
+            _synth_frame(flat, half_range=0.20), risk_budget_pct=1.0, order_ttl_days=7
+        )
+        self.assertEqual(still_fine.status, STATUS_OK)
+
+    def test_the_risk_distribution_reaches_the_re_derived_tiers(self):
+        """``risk_distribution`` is threaded through the helper only to be handed to
+        ``_assemble_tiers`` on the re-derive. Nothing else reads it here, so a
+        forward that dropped it would be invisible: it changes the allocations and
+        the blended entry only on the path that re-derives."""
+        biased = builder._raise_stop_to_disaster_floor(
+            100.0, 2.0, [(99.0, "a"), (98.0, "b")], 10.0, 100.0, list(self._TIER), [0.9, 0.1]
+        )
+        equal = builder._raise_stop_to_disaster_floor(
+            100.0, 2.0, [(99.0, "a"), (98.0, "b")], 10.0, 100.0, list(self._TIER), None
+        )
+        assert biased is not None and equal is not None
+        # Not an exact 90: equal-risk weighting scales each weight by that tier's
+        # notional, so a 0.9 weight lands near 90 rather than on it. What matters is
+        # that the bias arrives at all, and the equal default does not look like it.
+        self.assertGreater(biased[2][0].alloc_pct, 85.0)
+        self.assertLess(equal[2][0].alloc_pct, 55.0)
+        self.assertNotAlmostEqual(biased[1], equal[1], places=4)
 
     def test_it_stops_at_the_floor_rather_than_strictly_above_it(self):
         """The termination guard is ``stop >= floor``. With a strict ``>`` a stop

@@ -6488,6 +6488,15 @@ class TestEveryStopMoveMarkerHasAnAlertReason(IsolatedHomeTestCase):
     def test_the_pass_and_the_formatter_know_the_same_markers(self) -> None:
         self.assertEqual(set(sj._STOP_MOVE_LEVEL_KEY), set(trade_alerts.REASON_BY_STOP_MARKER))
 
+    def test_broker_trades_knows_the_same_markers_too(self) -> None:
+        """The THIRD consumer of the selector keeps its own kind map, and it reads it
+        with a bare subscript (`trades.py` 1905 and 2257), not `.get`. A kind added to
+        the selector and to `trade_alerts` would satisfy the gate above, reach
+        `broker trades`, and raise KeyError there with CI green."""
+        from alphalens_pipeline.brokers.automanager import trades
+
+        self.assertEqual(set(sj._STOP_MOVE_LEVEL_KEY), set(trades._REASON_BY_STOP_MOVE_KIND))
+
 
 class TestExecuteAmendStopJournalsReanchored(IsolatedHomeTestCase):
     """PR-6b: a CONFIRMED AmendStop success journals a ``reanchored`` marker

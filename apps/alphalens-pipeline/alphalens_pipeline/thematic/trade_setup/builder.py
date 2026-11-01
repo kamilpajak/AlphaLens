@@ -134,9 +134,10 @@ def _raise_stop_to_disaster_floor(
     """``(stop, blended_entry, tiers)`` with the -25% disaster floor honoured, or
     ``None`` when raising the stop leaves no tier at all.
 
-    Never risk more than :data:`_DISASTER_FLOOR_FRAC` from the blended entry. If the
-    structural stop is deeper, raise it and re-validate tiers (a raised stop can push
-    the deepest tier inside the min-stop-distance).
+    Never risk more than ``1 - _DISASTER_FLOOR_FRAC``, i.e. 25%, from the blended
+    entry - the constant is the floor as a FRACTION OF the entry (0.75), not the risk
+    it allows. If the structural stop is deeper, raise it and re-validate tiers (a
+    raised stop can push the deepest tier inside the min-stop-distance).
 
     Loop, not a single pass: dropping a deep tier RAISES the blended entry, which
     raises the floor again - a single ``if`` could leave the stop below the new floor.

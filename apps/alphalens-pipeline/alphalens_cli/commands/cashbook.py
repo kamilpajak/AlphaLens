@@ -59,7 +59,7 @@ this binary's import cost on every fire.
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import typer
 
@@ -78,6 +78,13 @@ from alphalens_cli.commands._cli_envelope import (
 
 _SYNC_SCHEMA = "alphalens.cashbook.sync/v1"
 _TOTALS_SCHEMA = "alphalens.cashbook.totals/v1"
+
+if TYPE_CHECKING:
+    # Type-only, guarded so it never runs at import time: this file's lazy-CLI
+    # startup budget forbids a module-level pipeline import, and
+    # `from __future__ import annotations` keeps the annotation a string.
+    from alphalens_pipeline.account_cash.sweep import SweepPlan
+
 
 cashbook_app = typer.Typer(
     name="cashbook",
@@ -596,7 +603,7 @@ def _render_totals_human(body: dict[str, Any]) -> None:
     _render_totals_balance(body["balance_checks"])
 
 
-def _apply_sweep_or_fail(plan: Any, swept_at: dt.datetime) -> None:
+def _apply_sweep_or_fail(plan: SweepPlan, swept_at: dt.datetime) -> None:
     """Append one planned sweep, turning every store failure into its CLI code.
 
     Split out of ``sync_command`` so three exception arms one level deep stop
