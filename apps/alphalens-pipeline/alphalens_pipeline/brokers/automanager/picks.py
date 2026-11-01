@@ -58,6 +58,15 @@ motivating difference is an immediate tier's own ``tranche == "now"`` line,
 which retirement skips by design (#1247) and existence counts; using the
 retirement fold for the state printed PENDING over filled orders on 2026-10-30.
 
+#1832 narrows that skip by one shape: a pick whose WHOLE entry ladder is the
+now tranche has no pullback half for the skip to protect, so its placed now
+record retires it. A submission record carries no ladder, so the caller holding
+the decoded queue — the drain — names those keys through
+``submitted_pick_keys(..., immediate_only_keys=...)``; every read-only caller
+omits the argument and gets the pre-#1832 answer. Without this nothing retired
+such a pick, and the validity-window check wrote ``expired`` with the reason
+"unplaced at window end" over an order that was placed and filled.
+
 The two are NOT ordered. They filter on different predicates — retirement on
 ``tranche``, existence on ``tranche_meta.outcome`` — so neither set contains the
 other in general. Today no writer emits a record that is retired but not at the
@@ -69,7 +78,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -538,6 +547,56 @@ _NO_ORDER_OUTCOMES: frozenset[str] = frozenset({"refused_cap"})
 _TRANCHE_KEY = "tranche"
 _TRANCHE_NOW = "now"
 
+IMMEDIATE_ENTRY_MODE = "immediate"
+PULLBACK_ENTRY_MODE = "pullback"
+# The one `tranche_meta.outcome` that proves the now half's bracket reached the
+# broker AND that the placement path is done with it. `attempt` is written
+# BEFORE the POST, so its outcome is unknown; the refusal and failure outcomes
+# mean the tranche is finished but nothing was bought.
+NOW_OUTCOME_PLACED = "placed"
+
+
+def is_now_only_ladder(intent: Any) -> bool:
+    """Is this document's WHOLE entry ladder the now tranche (#1832)?
+
+    True for exactly one shape: a single entry rung, declared
+    ``entry_mode: "immediate"``. Such a pick has no pullback half, so once its
+    now record reports :data:`NOW_OUTCOME_PLACED` the drain owes it nothing and
+    :func:`submitted_pick_keys` may retire it — without that, nothing ever did,
+    and the validity-window check wrote ``expired`` / "unplaced at window end"
+    over an order that was placed and filled (ten SIM keys, measured
+    2026-10-30; three LIVE picks on 2026-10-31).
+
+    Deliberately NARROWER than "every rung is immediate". The drain places
+    ``now_tiers[0]`` only (``control_loop._route_now_tranche``), so a ladder
+    with TWO immediate rungs still owes the second one; calling that ladder
+    finished would starve that rung in silence. The arming door refuses that
+    shape already (``trade_intent.validate`` violation ``immediate_tier_count``),
+    so for every document the door accepted the two readings coincide — this
+    spelling just does not depend on the door for its safety.
+
+    ``getattr`` throughout: a structural test double or a pre-#1247 payload
+    carries no ``entry_mode``, and the drain must never raise here.
+    """
+    spec = getattr(intent, "spec", None)
+    tiers = tuple(getattr(spec, "entry_tiers", ()) or ())
+    if len(tiers) != 1:
+        return False
+    return getattr(tiers[0], "entry_mode", PULLBACK_ENTRY_MODE) == IMMEDIATE_ENTRY_MODE
+
+
+def _now_tranche_is_placed(record: Mapping[str, Any]) -> bool:
+    """Does this now-tranche record say its bracket is AT the broker?
+
+    Only the literal ``placed`` outcome counts, which is the opposite polarity
+    from :func:`_records_an_order`: that one asks "may an order exist" and so
+    answers generously, while this one asks "is the placement path FINISHED
+    with this pick" and must answer only on evidence. An unknown outcome, and
+    the write-ahead ``attempt``, both leave the pick in the queue."""
+    meta = record.get("tranche_meta")
+    outcome = meta.get("outcome") if isinstance(meta, Mapping) else None
+    return outcome == NOW_OUTCOME_PLACED
+
 
 def _is_now_tranche(record: Mapping[str, Any]) -> bool:
     """Is this submission record an IMMEDIATE tier's own line (#1247)?
@@ -603,7 +662,11 @@ def keys_with_any_submission(records: Iterable[Mapping[str, Any]]) -> set[tuple[
     }
 
 
-def submitted_pick_keys(records: Iterable[Mapping[str, Any]]) -> set[tuple[str, str]]:
+def submitted_pick_keys(
+    records: Iterable[Mapping[str, Any]],
+    *,
+    immediate_only_keys: Collection[tuple[str, str]] = frozenset(),
+) -> set[tuple[str, str]]:
     """The (ticker, identity token) pairs whose pick the drain considers RETIRED.
 
     Design section Data-flow step 4: the drain places only picks NOT yet
@@ -616,12 +679,36 @@ def submitted_pick_keys(records: Iterable[Mapping[str, Any]]) -> set[tuple[str, 
     the pick — the pullback half's record does. The now half's own idempotency
     is the armed_ts scan in the drain. Anyone asking whether an order EXISTS for
     a key wants :func:`keys_with_any_submission` instead.
+
+    #1832 amends that skip for ONE shape. ``immediate_only_keys`` are the keys
+    whose document is nothing but a now tranche (:func:`is_now_only_ladder`):
+    for those there is no pullback half for the skip to protect, so a now
+    record that reports :data:`NOW_OUTCOME_PLACED` DOES retire the pick. The
+    skip stands untouched for every key outside that collection, which is every
+    MIXED pick — the shape #1247 was written about.
+
+    The collection is a PARAMETER because a submission record carries no ladder
+    shape: ``build_submission_record`` writes the brackets, the sizing stamp and
+    the tranche markers, never the rungs. Only a caller holding the decoded
+    queue can answer it, so the DRAIN passes it
+    (``control_loop._run_placement_drain``) and every read-only caller leaves it
+    out and gets the pre-#1832 answer. Widening it can only REMOVE a placement
+    opportunity, never add one, so it cannot cause a double submission.
     """
-    return {
-        key
-        for record in records
-        if not _is_now_tranche(record) and (key := _submission_join_key(record)) is not None
-    }
+    submitted: set[tuple[str, str]] = set()
+    for record in records:
+        key = _submission_join_key(record)
+        if key is None:
+            continue
+        if _is_now_tranche(record) and not (
+            key in immediate_only_keys and _now_tranche_is_placed(record)
+        ):
+            # #1247: a now record does not retire a pick that still owes its
+            # pullback half — and #1832's exception needs BOTH halves of its
+            # evidence, the all-immediate ladder AND the placed outcome.
+            continue
+        submitted.add(key)
+    return submitted
 
 
 def iter_picks(*, path: Path | None = None) -> Iterator[TradeIntent]:
@@ -769,6 +856,9 @@ def iter_legacy_size_pct_picks(*, path: Path | None = None) -> Iterator[PickReco
 
 __all__ = [
     "FIRST_GENERATION",
+    "IMMEDIATE_ENTRY_MODE",
+    "NOW_OUTCOME_PLACED",
+    "PULLBACK_ENTRY_MODE",
     "STATUS_ARMED",
     "STATUS_DISARMED",
     "STATUS_EXPIRED",
@@ -778,6 +868,7 @@ __all__ = [
     "arm_pick",
     "generation_of",
     "identity_token",
+    "is_now_only_ladder",
     "iter_decodable_picks",
     "iter_legacy_size_pct_picks",
     "iter_picks",

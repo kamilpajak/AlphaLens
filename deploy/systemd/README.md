@@ -2242,15 +2242,27 @@ one clearing line closes the wait. It is bounded by the
 pick's validity window — `order_ttl_days` sessions of its venue counted from
 `trade_date`, the same window a placed entry rests in — and a pick still
 unplaced at its end gets one `expired` line in `picks.jsonl` and one page
-(`pick-expired:<pick key>`). A pick placed late rests only for what is left of
+(`pick-expired:<pick key>`) asking for a new document. Since #1832 that page
+has a second wording, under the same key, for a window that ended with an
+order for the pick already in `submissions.jsonl`: the line's `reason` reads
+`window ended with an order at the broker` instead of `unplaced at window end`,
+and the page says to read the position and the resting orders rather than to
+arm again — a fresh document would buy the same entry a second time, and the
+arming door does not refuse it. A pick whose WHOLE entry ladder is one
+immediate tier no longer reaches that check at all once its order is placed:
+the drain retires it (#1832), where before nothing did and the daemon wrote
+`unplaced at window end` over ten filled SIM orders.
+A pick placed late rests only for what is left of
 its window. `broker picks` shows `WAITING` / `EXPIRED` (`alphalens.broker.picks/v3`)
 and `broker status` lists `waiting_picks` with the gate, its message as of when,
 and the window end. Two caveats on that row, both from the two-fold state: a
 MIXED pick whose immediate tier already reached the broker reads `PLACED`
 rather than `WAITING`, so prefer `broker status` when the question is "what is
 capital holding"; and `overdue` on a `PLACED` row does NOT mean the drain is
-stopped — an immediate-only pick is never retired, so it carries `overdue`
-for life with a healthy daemon. With
+stopped — the view bounds those two fields on the narrow fold, which an
+immediate-only pick's own record never satisfies, so such a row carries
+`overdue` for life with a healthy daemon that has in fact finished with it
+(#1832). With
 no count limit, "arm all of them" therefore places the picks that fit, in armed
 order, and the rest wait for capital until their windows end. To stop a waiting
 pick, `alphalens broker disarm` it.

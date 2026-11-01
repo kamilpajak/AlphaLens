@@ -23,7 +23,10 @@ This module owns what happens around the wait, so ``control_loop`` only decides:
 * :func:`note_hold` — any other reason the drain left a pick unplaced this tick
   (the day-1 gate, a safety rail). Remembered only to explain an expiry.
 * :func:`expire` — the window ended with the pick unplaced: one terminal
-  ``expired`` line in ``picks.jsonl`` and one alert.
+  ``expired`` line in ``picks.jsonl`` and one alert. Both the reason and the
+  alert branch on whether an order for the key already reached the broker
+  (#1832): with one there the pick was never "unplaced", and telling the
+  operator to arm a fresh document would buy the same position a second time.
 
 The in-process sets reset on restart by design: they are observability only,
 and the alert de-duplication that must survive a restart reads the journal.
@@ -61,6 +64,28 @@ WAIT_LINE_MIN_INTERVAL = dt.timedelta(minutes=30)
 MANY_WAITING = 3
 
 UNPLACED_AT_WINDOW_END = "unplaced at window end"
+# The journal reason when the window ended and the submissions journal DOES
+# hold an order for the key (#1832). "Unplaced" is then simply false, and it is
+# published: `broker trades` emits it as ``pick_status_reason`` and
+# `broker status` prints it as the last expiry.
+EXPIRED_WITH_ORDER_AT_BROKER = "window ended with an order at the broker"
+
+# The two heads and the two tails of the expiry alert, named because they are
+# NOT interchangeable prose. `alphalens broker arm` does not refuse a second
+# document for an expired key — intent_door._refuse_other_armed_date counts a
+# record as a blocker only while its status is `armed` — so the re-arm phrase,
+# sent about a pick that already has an order, is an invitation to buy an open
+# position a second time. That is the whole money-path hazard of #1832. The
+# heads are constants for the same reason as the tails: the head is the first
+# thing an operator reads, and the word "unplaced" over a filled order is the
+# sentence this issue exists to delete.
+UNPLACED_HEAD = "expired unplaced"
+ORDER_AT_BROKER_HEAD = "expired with an order at the broker"
+RE_ARM_PHRASE = "arm a new document if the signal still stands"
+ORDER_AT_BROKER_PHRASE = (
+    "an order for it ALREADY reached the broker — check the position and the resting "
+    "orders before arming a new document, or the second one buys it again"
+)
 
 _wait_logged: set[str] = set()
 _hold_reasons: dict[str, str] = {}
@@ -259,8 +284,37 @@ def expire(
     pick_key: str,
     window: PickWindow,
     alert_throttled: Callable[[str, str], bool] | None,
+    # REQUIRED, no default. The two branches differ by whether the operator is
+    # told to arm a replacement, and the dangerous answer is the cheap one to get
+    # by accident. A caller that cannot establish whether an order rests at the
+    # broker has to say which way it is guessing, in writing, at the call site.
+    at_broker: bool,
 ) -> None:
     """Retire an armed pick still unplaced at the end of its window.
+
+    ``at_broker`` is the caller's answer to "does the submissions journal hold
+    an order for this key?" (#1832). It selects the alert and the journal
+    reason, because the two cases ask the operator for OPPOSITE things: with
+    nothing placed a fresh document is the path back, while with an order at
+    the broker a fresh document buys the same position twice. Defaults to
+    False, which is the pre-#1832 message — a caller that cannot answer must
+    say so explicitly rather than get the dangerous branch by accident.
+
+    Two shapes still reach this writer with something at the broker, and both
+    get the terminal line: a MIXED pick whose now half was placed and whose
+    pullback half never was (correctly not retired, #1247), and a pick whose
+    only record is the write-ahead ``attempt``. For those the branched message
+    is the ONLY guard — the arming door does not refuse a second document once
+    the status stops being ``armed``, so an operator who re-arms on a longer
+    ``order_ttl_days`` buys the now half again. Branding the page does not
+    close that door; refusing the second document is the door's own decision.
+
+    ``at_broker`` is generous by construction, because the caller asks
+    ``picks.keys_with_any_submission`` and that fold counts every outcome but
+    ``refused_cap``. A venue ``refused_reject`` therefore also gets the
+    at-broker wording, although nothing rests. That is wrong in the one
+    direction that cannot cost money, and ``refused_cap`` — the single outcome
+    that PROVES nothing was submitted — keeps the plain message.
 
     The ``expired`` append is fallible I/O and must never crash the drain: on
     ``OSError`` the pick stays armed and expires on the next tick, and the
@@ -268,12 +322,15 @@ def expire(
     ticker = str(intent.instrument.ticker).upper()
     generation = picks._pick_generation(intent)
     token = picks.identity_token(str(intent.meta.trade_date), generation)
-    reason = _hold_reasons.get(pick_key) or UNPLACED_AT_WINDOW_END
+    fallback = EXPIRED_WITH_ORDER_AT_BROKER if at_broker else UNPLACED_AT_WINDOW_END
+    # A recorded hold still wins: it names what actually kept the pick from
+    # finishing (no capital, the day-1 gate, a rail), which is more specific
+    # than either fallback. Only the default is branched.
+    reason = _hold_reasons.get(pick_key) or fallback
     window_end = window.window_end.isoformat(timespec="seconds")
-    message = (
-        f"{ticker} @ {token}: expired unplaced — its window ended {window_end} ({reason}); "
-        "arm a new document if the signal still stands"
-    )
+    head = ORDER_AT_BROKER_HEAD if at_broker else UNPLACED_HEAD
+    tail = ORDER_AT_BROKER_PHRASE if at_broker else RE_ARM_PHRASE
+    message = f"{ticker} @ {token}: {head} — its window ended {window_end} ({reason}); {tail}"
     logger.warning("place_pick %s: %s", ticker, message)
     if alert_throttled is not None:
         alert_throttled(message, f"pick-expired:{pick_key}")
@@ -333,8 +390,13 @@ class TickAdmissions:
 
 
 __all__ = [
+    "EXPIRED_WITH_ORDER_AT_BROKER",
     "MANY_WAITING",
+    "ORDER_AT_BROKER_HEAD",
+    "ORDER_AT_BROKER_PHRASE",
+    "RE_ARM_PHRASE",
     "UNPLACED_AT_WINDOW_END",
+    "UNPLACED_HEAD",
     "WAIT_LINE_MIN_INTERVAL",
     "TickAdmissions",
     "begin_tick",

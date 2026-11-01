@@ -164,7 +164,15 @@ BASELINE: dict[str, int] = {
     # mean different things by the word PLACED. The room is the note recording
     # WHY, beside the v2 note it mirrors — a bare version bump with no reason
     # written next to it is the shape that makes the next one a guess.
-    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3313,
+    # Raised by 6 for #1832, measured with `wc -l` on the merged file (3319).
+    # The drain now retires a placed immediate-only pick, so the published help
+    # could no longer explain `window_end` and `overdue` by "that pick is never
+    # retired" -- that sentence became false on the drain's side the day this
+    # landed, while the fields stayed, because the view keeps calling the narrow
+    # fold with no `immediate_only_keys`. The room says which of the two answers
+    # the view gives and that an overdue PLACED row may now be a pick the drain
+    # has finished with.
+    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3319,
     # Raised by 8: the score stage now also stamps the three raw broad-index
     # 5-session returns beside the market-state label. The room is 1 line of
     # lazy call and 7 of comment saying why the family is separate from the
@@ -321,7 +329,26 @@ BASELINE: dict[str, int] = {
     # 520.92, above its own 518.42 limit, which a resting buy limit cannot do),
     # and a line saying the DRY-RUN wording belongs to the pure engine in
     # `entry_trail_watcher.py` so it is not reintroduced here.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8136,
+    # Raised by 49 for #1832, measured with `wc -l` on the merged file (8185),
+    # not counted from the diff. Two things bought the room. The drain now hands
+    # the retirement fold the keys whose entry ladder is nothing but a now
+    # tranche, so a placed all-immediate pick leaves the queue instead of being
+    # written `expired` / "unplaced at window end" over a filled order (ten SIM
+    # keys, three LIVE picks). Most of those lines are the comment saying why
+    # the LEGACY refusal above keeps the unwidened set. The rest is
+    # `_an_order_exists_for`, which reads submissions.jsonl inside the expiry
+    # branch only so the alert can tell "nothing was placed" from "an order is
+    # already at the broker" — the second message must not invite a re-arm,
+    # because the arming door does not refuse one.
+    # Plus 8 after the adversarial review: the tick now takes `list(...)` of its
+    # own journal snapshot instead of the injected callable's word for it. This
+    # tick folds that snapshot THREE times and the placement gate is no longer
+    # the first of them, so a one-shot iterator left the LAST fold empty and
+    # every already-retired pick was placed AGAIN — reproduced against the real
+    # drain, safe on the base commit, unsafe on the first version of this one.
+    # The room is the comment saying why, because the next reader will otherwise
+    # see a redundant `list()` over something already annotated `-> list`.
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8193,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1383,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3302,
