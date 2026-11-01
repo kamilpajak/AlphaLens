@@ -1371,7 +1371,7 @@ def _default_live_exits_feed_factory(
         SaxoLivePriceFeed,
     )
 
-    global _FEED_DARK_WARNING  # noqa: PLW0603 — process-wide throttle, see above
+    global _FEED_DARK_WARNING  # noqa: PLW0603 — process-wide throttle (see above)
     if _FEED_DARK_WARNING is None:
         _FEED_DARK_WARNING = DarkSourceWarning()
     stream = quote_source._quote_source()
@@ -6860,7 +6860,6 @@ def _place_pick(
     # money gates after sizing are what enforce it. Every safety.check
     # refusal is transient and keeps the pick armed.
     decision = safety.check(
-        intent,
         safety.JournalView(
             realized_r_today=_realized_r_today(open_verdicts, dt.date.today().isoformat())
         ),
