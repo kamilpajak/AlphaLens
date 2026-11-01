@@ -1371,7 +1371,7 @@ def _default_live_exits_feed_factory(
         SaxoLivePriceFeed,
     )
 
-    global _FEED_DARK_WARNING  # noqa: PLW0603 — process-wide throttle, see above
+    global _FEED_DARK_WARNING  # noqa: PLW0603 — process-wide throttle (see above)
     if _FEED_DARK_WARNING is None:
         _FEED_DARK_WARNING = DarkSourceWarning()
     stream = quote_source._quote_source()
