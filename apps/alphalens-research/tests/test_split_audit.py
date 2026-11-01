@@ -80,6 +80,47 @@ class TestTheLevelRatio(unittest.TestCase):
             sa.level_ratios(store_closes=_store(s, [1.0, 2.0, 3.0]), reference=None), {}
         )
 
+    def test_a_reference_index_that_is_not_dates_yields_nothing(self):
+        """A vendor can serve a frame whose index never parsed as timestamps. That is
+        unreadable, not an artefact, so the whole span goes unanswered rather than
+        half-compared against whatever did parse."""
+        s = _sessions(3)
+        unparseable = pd.Series([10.0, 11.0, 12.0], index=["not", "a", "date"], dtype=float)
+        self.assertEqual(
+            sa.level_ratios(store_closes=_store(s, [10.0, 11.0, 12.0]), reference=unparseable), {}
+        )
+
+    def test_a_non_numeric_reference_close_skips_only_its_own_session(self):
+        """One bad value must not cost the sessions around it."""
+        s = _sessions(3)
+        reference = pd.Series([10.0, "n/a", 12.0], index=pd.to_datetime(s), dtype=object)
+        ratios = sa.level_ratios(store_closes=_store(s, [10.0, 11.0, 12.0]), reference=reference)
+        self.assertEqual(sorted(ratios), [s[0], s[2]])
+
+    def test_a_non_numeric_store_close_skips_only_its_own_session(self):
+        """The same rule on the store side, which is read through the same filter."""
+        s = _sessions(3)
+        store = {s[0]: 10.0, s[1]: "n/a", s[2]: 12.0}
+        ratios = sa.level_ratios(store_closes=store, reference=_reference(s, [10.0, 11.0, 12.0]))
+        self.assertEqual(sorted(ratios), [s[0], s[2]])
+
+    def test_a_nan_or_infinite_close_on_either_side_contributes_no_ratio(self):
+        """Both non-finite values, because they are rejected by DIFFERENT halves of
+        the filter. ``nan > 0`` is already False, so the comparison alone stops a NaN
+        and a test using only NaN cannot see whether the finiteness check is there at
+        all — measured: removing ``math.isfinite`` left such a test green. ``inf > 0``
+        is True, so positive infinity is the value only the finiteness check rejects,
+        and an infinite ratio is exactly the artefact verdict this must never produce.
+        """
+        s = _sessions(4)
+        self.assertEqual(
+            sa.level_ratios(
+                store_closes=_store(s, [float("nan"), 11.0, float("inf"), 13.0]),
+                reference=_reference(s, [10.0, float("nan"), 12.0, float("inf")]),
+            ),
+            {},
+        )
+
 
 class TestAPersistentShiftIsAnArtefact(unittest.TestCase):
     """The MQ shape: the store holds an older adjustment epoch before the break."""
