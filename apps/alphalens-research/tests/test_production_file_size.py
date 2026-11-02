@@ -384,7 +384,14 @@ BASELINE: dict[str, int] = {
     # literal and 137 build the root with `Path.home()`, sharing no constant, so a
     # repo-wide one is its own change and not a rider on this. A named constant cannot
     # be introduced for free, so this entry moves rather than the fix being dropped.
-    "apps/alphalens-pipeline/alphalens_pipeline/feedback/selection_label.py": 1357,
+    #
+    # +37 more for PR #1844, taking Sonar python:S3776 off the file's last two
+    # functions. The room goes to two helpers and their docstrings, not to new logic:
+    # `_tagged_tickers` (the BRK.B fold and the isinstance rationale move onto it) and
+    # `_read_session_rows` (which states why the file read is a free function rather
+    # than a second method — it must not be able to reach `_bars` or `_settled`).
+    # Counted with `wc -l` on the merged file, not from the diff.
+    "apps/alphalens-pipeline/alphalens_pipeline/feedback/selection_label.py": 1394,
     "apps/alphalens-pipeline/alphalens_pipeline/thematic/mapping/channel_assessor.py": 1267,
     "apps/alphalens-pipeline/alphalens_pipeline/thematic/mapping/orchestrator.py": 1626,
     "apps/alphalens-research/alphalens_research/eval/faithfulness.py": 1034,

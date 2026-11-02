@@ -590,6 +590,34 @@ def thematic_population_source(briefs_dir: Path, shadow_dir: Path) -> Population
     )
 
 
+#: Tag containers a feed row may carry. An explicit type check, not a try/except: a
+#: NaN raises and a LIST is fine, but a bare string does NEITHER - iterating "AAPL"
+#: yields 'A','A','P','L', four junk tickers that would be stamped and stored, and
+#: catching TypeError would miss exactly that case.
+_TAG_CONTAINERS = (list, tuple, set, frozenset, np.ndarray, pd.Series)
+
+
+def _tagged_tickers(tags_column: Iterable[Any]) -> set[str]:
+    """Every distinct ticker the feed rows tagged, normalised once.
+
+    Feeds emit a class share as ``BRK.B``; SEC, our universe and the price vendors
+    spell it ``BRK-B``, and ``catalyst_resolver._normalize_symbol`` already folds the
+    separator for the same reason. Without the fold the tag is stored under a spelling
+    nothing else uses: measured on the whole-history run, 87 of 158 ``split_unchecked``
+    rows were ``BRK.B``, and the retry window cannot resolve them because the cause is
+    the spelling, not a late-arriving price.
+    """
+    tickers: set[str] = set()
+    for tags in tags_column:
+        if not isinstance(tags, _TAG_CONTAINERS):
+            continue
+        for tag in tags:
+            symbol = str(tag).strip().upper().replace(".", "-")
+            if symbol:
+                tickers.add(symbol)
+    return tickers
+
+
 def news_population_source(news_dir: Path = DEFAULT_NEWS_DIR) -> PopulationSource:
     """One row per (date, ticker) the feeds tagged, however many articles tagged it.
 
@@ -623,25 +651,7 @@ def news_population_source(news_dir: Path = DEFAULT_NEWS_DIR) -> PopulationSourc
         if path is None:
             return _empty_population()
         frame = pd.read_parquet(path, columns=["tickers"])
-        tickers: set[str] = set()
-        for tags in frame["tickers"]:
-            # An explicit type check, not a try/except. A NaN raises and a LIST is fine,
-            # but a bare string does NEITHER: iterating "AAPL" yields 'A','A','P','L',
-            # four junk tickers that would be stamped and stored. Catching TypeError
-            # would miss exactly that case.
-            if not isinstance(tags, (list, tuple, set, frozenset, np.ndarray, pd.Series)):
-                continue
-            for tag in tags:
-                # Feeds emit a class share as `BRK.B`; SEC, our universe and the price
-                # vendors spell it `BRK-B`, and `catalyst_resolver._normalize_symbol`
-                # already folds the separator for the same reason. Without the fold the
-                # tag is stored under a spelling nothing else uses: measured on the
-                # whole-history run, 87 of 158 `split_unchecked` rows were `BRK.B`, and
-                # the retry window cannot resolve them because the cause is the
-                # spelling, not a late-arriving price.
-                symbol = str(tag).strip().upper().replace(".", "-")
-                if symbol:
-                    tickers.add(symbol)
+        tickers = _tagged_tickers(frame["tickers"])
         rows = [
             {
                 "ticker": ticker,
@@ -748,6 +758,38 @@ class SelectionLabelReport:
     status_counts_h20: dict[str, int] = field(default_factory=dict)
 
 
+def _read_session_rows(
+    path: Path, keep: set[str] | None
+) -> tuple[dict[str, tuple[float | None, float | None]], set[str]] | None:
+    """The ``(open, close)`` of every ticker ``keep`` admits in one session file, and
+    EVERY symbol the file held, or ``None`` when the file cannot be read.
+
+    ``keep`` of ``None`` keeps every row. The second element is what a whole-file read
+    SETTLES: with no universe every ticker in the file is answered and need not be
+    re-read on a later date.
+
+    A free function rather than a method, and that is the point of the split: this
+    block touches no attribute of the reader. It needs a path and a filter and returns
+    plain data, so the caching stays in one place - ``_session`` - and the file read
+    cannot reach ``_bars`` or ``_settled`` even by accident.
+    """
+    try:
+        # No `filters=`: see `_SessionReader`'s docstring. A whole-file read of a
+        # one-row-group file is 2.7x cheaper than the same read with a predicate.
+        df = pd.read_parquet(path, columns=["T", "o", "c"])
+    except (OSError, ValueError) as exc:
+        logger.warning("selection-label: unreadable session file %s (%s)", path, exc)
+        return None
+    bars: dict[str, tuple[float | None, float | None]] = {}
+    seen: set[str] = set()
+    for t, o, c in zip(df["T"], df["o"], df["c"], strict=True):
+        symbol = str(t).upper()
+        seen.add(symbol)
+        if keep is None or symbol in keep:
+            bars[symbol] = (o, c)
+    return bars, seen
+
+
 class _SessionReader:
     """Reads each session file ONCE, in full, keeping the tickers the run expects.
 
@@ -797,23 +839,18 @@ class _SessionReader:
             if not path.exists():
                 self._bars[session] = None
                 return None
-            try:
-                # No `filters=`: see the class docstring. A whole-file read of a
-                # one-row-group file is 2.7x cheaper than the same read with a predicate.
-                df = pd.read_parquet(path, columns=["T", "o", "c"])
-            except (OSError, ValueError) as exc:
-                logger.warning("selection-label: unreadable session file %s (%s)", path, exc)
+            keep = None if self._universe is None else self._universe | missing
+            read = _read_session_rows(path, keep)
+            if read is None:
                 self._bars[session] = None
                 return None
-            keep = None if self._universe is None else self._universe | missing
+            rows, seen = read
             bars = self._bars.setdefault(session, {})
+            # Not decoration: `_bars` is typed `dict[date, dict | None]`, so without
+            # this pyright reports `update` as unknown on None. An assert costs no
+            # cognitive complexity.
             assert bars is not None
-            seen: set[str] = set()
-            for t, o, c in zip(df["T"], df["o"], df["c"], strict=True):
-                symbol = str(t).upper()
-                seen.add(symbol)
-                if keep is None or symbol in keep:
-                    bars[symbol] = (o, c)
+            bars.update(rows)
             # A ticker is settled whether or not the file held it, so a name absent from
             # the store is answered once rather than re-read on every date. With a
             # universe that is the universe plus whatever else was asked for; with none,
