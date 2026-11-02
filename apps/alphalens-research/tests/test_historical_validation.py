@@ -265,5 +265,99 @@ class TestPicksFromBacktestReport(unittest.TestCase):
         self.assertAlmostEqual(picks[1].forward_return, -0.01)
 
 
+class TestDecisionMatrixGoldenText(unittest.TestCase):
+    """The exact decision block, per verdict arm.
+
+    ``TestDecisionMatrix`` above asserts only that the verdict WORD appears, so it
+    cannot see the lines around it: every line of the block can be edited, dropped
+    or re-ordered with those tests green. These assertions pin the text, which is
+    what makes a formatting refactor of this function safe.
+    """
+
+    @staticmethod
+    def _result(delta: float, accept_hit: float, reject_hit: float):
+        from alphalens_research.backtest.historical_validation import ValidationResult
+
+        return ValidationResult(
+            n_total=100,
+            n_accept=40,
+            n_reject=60,
+            n_uncertain=0,
+            accept_rate=0.4,
+            accept_mean_return=0.015,
+            reject_mean_return=0.002,
+            delta_accept_minus_reject=delta,
+            accept_hit_rate=accept_hit,
+            reject_hit_rate=reject_hit,
+            accept_sharpe_proxy=1.5,
+            reject_sharpe_proxy=0.2,
+            total_llm_cost_usd=15.0,
+            total_llm_latency_sec=100.0,
+        )
+
+    def _decision_block(self, delta: float, accept_hit: float, reject_hit: float) -> str:
+        """Everything after the ``=== Decision ===`` heading.
+
+        Scoped to the block rather than the whole report so the assertion does not
+        also pin the summary table, whose numbers come from elsewhere.
+        """
+        from alphalens_research.backtest.historical_validation import format_decision_matrix
+
+        text = format_decision_matrix(self._result(delta, accept_hit, reject_hit))
+        self.assertIn("=== Decision ===", text)
+        return text.split("=== Decision ===", 1)[1]
+
+    def test_deploy_arm(self):
+        self.assertEqual(
+            self._decision_block(0.013, 0.65, 0.45),
+            "\n**DEPLOY** \u2014 LLM reject-rate correlates with underperformance"
+            "\n  (delta +1.30% AND hit-rate delta +20.0 p.p.)"
+            "\n  \u2192 Integrating the 3-tier adaptive architecture is worth the cost.",
+        )
+
+    def test_iterate_arm(self):
+        self.assertEqual(
+            self._decision_block(0.003, 0.5, 0.5),
+            "\n**ITERATE** \u2014 marginal signal, needs a larger sample or a better prompt"
+            "\n  (delta +0.30%, hit-rate delta +0.0 p.p.)"
+            "\n  \u2192 Extend the sample to 90+ days and test different scorer prompts.",
+        )
+
+    def test_skip_arm(self):
+        self.assertEqual(
+            self._decision_block(0.0, 0.5, 0.5),
+            "\n**SKIP** \u2014 LLM does not add signal value over the rule-based scorer"
+            "\n  (delta +0.00%, hit-rate delta +0.0 p.p.)"
+            "\n  \u2192 Status quo (rule-based screener + Layer 3 post-analysis) is optimal"
+            "\n    for a solo retail setup. Do not integrate a pre-screening filter.",
+        )
+
+    def test_the_arms_are_selected_at_their_documented_boundaries(self):
+        """DEPLOY needs delta > 0.005 AND hit delta > 0.05; ITERATE needs either
+        delta > 0.002 OR hit delta > 0.02. Each threshold is checked on both sides,
+        because the comparisons are strict and exactly AT one the arm must not fire.
+
+        The hit-rate cases pass the reject rate as 0.0 so the subtraction inside
+        ``format_decision_matrix`` is EXACT. A pair like 0.55 and 0.50 looks like a
+        0.05 difference and is not: it evaluates to 0.050000000000000044, which is
+        strictly greater than the threshold and selects the arm above. Writing the
+        boundary with a pair that does not subtract exactly tests the neighbouring
+        arm while appearing to test this one.
+        """
+        # DEPLOY: both terms strictly over.
+        self.assertIn("**DEPLOY**", self._decision_block(0.0051, 0.051, 0.0))
+        # delta exactly at 0.005 fails DEPLOY's first term, and 0.005 > 0.002 so the
+        # second arm takes it even though the hit delta is huge.
+        self.assertIn("**ITERATE**", self._decision_block(0.005, 0.20, 0.0))
+        # delta over 0.005 but the hit delta exactly at 0.05 fails DEPLOY's AND.
+        self.assertIn("**ITERATE**", self._decision_block(0.0051, 0.05, 0.0))
+        # ITERATE's own terms, one at a time.
+        self.assertIn("**ITERATE**", self._decision_block(0.0021, 0.0, 0.0))
+        self.assertIn("**ITERATE**", self._decision_block(0.0, 0.021, 0.0))
+        # SKIP: both ITERATE terms exactly at their thresholds, so neither fires.
+        self.assertIn("**SKIP**", self._decision_block(0.002, 0.02, 0.0))
+        self.assertIn("**SKIP**", self._decision_block(-0.01, 0.0, 0.10))
+
+
 if __name__ == "__main__":
     unittest.main()

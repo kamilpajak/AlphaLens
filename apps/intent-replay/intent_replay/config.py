@@ -654,13 +654,17 @@ def _costs(reader: _Reader, node: Any, path: str, *, fx: Fx | None) -> Costs | N
         if "commission_rate" in node
         else None
     )
+    # Hoisted out of the `minimum` expression rather than nested in it, and
+    # deliberately NOT into an `if "min_commission" in node:` block: an unconditional
+    # assignment is one always-executed line, where a branch would be covered only on
+    # the path that takes it.
+    # The cost of hoisting is that `fx.instrument_currency` is now read once on every
+    # call, where before it was read zero times when `min_commission` was absent. That
+    # read is free and unobservable: `Fx` is a frozen slots dataclass (`fx.py`) and
+    # `instrument_currency` is a plain field, not a property, so it runs no code.
+    minimum_unit = None if fx is None else fx.instrument_currency
     minimum = (
-        _quantity(
-            reader,
-            node["min_commission"],
-            _path(path, "min_commission"),
-            None if fx is None else fx.instrument_currency,
-        )
+        _quantity(reader, node["min_commission"], _path(path, "min_commission"), minimum_unit)
         if "min_commission" in node
         else None
     )
