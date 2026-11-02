@@ -1281,8 +1281,11 @@ def _cross_check_executions(
 ) -> None:
     """Three independent cross-checks of one fill against the trades report.
 
-    The order is preserved and asserted on: the tests read a warnings LIST, so
-    quantity, then price, then time.
+    The order is quantity, then price, then time, and it is load-bearing because
+    all three emit the SAME warning code - only ``detail`` tells them apart, so a
+    reader of the warnings list reads them positionally. Pinned by
+    ``test_broker_trades_rules.ExtractedContracts`` and by nothing else: a
+    code-membership assertion cannot see a reordering.
     """
     total = sum(abs(e.amount or 0.0) for e in executions)
     _check_execution_total(fill, pick, total)
@@ -1907,8 +1910,10 @@ def _oco_ownership(
     """The pick an OCO leg belongs to, or None when no pick claims its request.
 
     The ``next(...)`` generator is kept verbatim rather than unrolled into a loop
-    with a trailing ``return None``: the unrolled form adds a line that only runs
-    in the no-match case, which nothing exercises.
+    with a trailing ``return None``. Not for coverage - the no-match case has its
+    own test - but because moving a comprehension out while also rewriting it
+    makes the move no longer a move, and this one carries the whole "which pick
+    claims this request" rule.
     """
     request = oco.group("request")
     owner = bracket_requests.get(request) or next(
@@ -3146,8 +3151,10 @@ def _check_take_profit_levels(pick: _Pick, venue: _Venue | None) -> None:
 def _exit_exclusions(pick: _Pick) -> set[str]:
     """The exclusions this pick's EXITS carry, on their own.
 
-    Why each one excludes a record is on :func:`_replay_exclusions`, which owns the
-    whole answer; this only finds the exit-shaped half of it.
+    This finds the exit-shaped half of the answer; :func:`_replay_exclusions` owns
+    the whole of it. That function's docstring argues the two it cares about most -
+    the manual close and the unknown exit - and not the other two, which are named
+    by their constants.
     """
     found: set[str] = set()
     for exit_ in pick.exits:
