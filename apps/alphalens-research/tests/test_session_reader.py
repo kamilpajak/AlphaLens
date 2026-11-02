@@ -137,13 +137,54 @@ class TestTheUniverseIsAHintAndNeverAContract(_ReaderCase):
         self.assertEqual(after, 2, "the ticker outside the universe needs its own read")
         self.assertEqual(len(counter), 2, "and only one; the second ask is cached")
 
+    def test_a_universe_keeps_only_what_it_admits(self):
+        """The universe BOUNDS the cache, and that bound is the whole reason to pass
+        one: the class docstring prices a 270-session window at about 600 MB keeping
+        every ticker against about 140 MB keeping the run's 3042. Nothing tested it —
+        every other assertion here indexes one ticker, so dropping the filter left the
+        suite green while the cache grew to the whole file.
+
+        `S1` holds AAA, BBB and CCC; a universe of AAA asking for AAA must answer AAA
+        and nothing else.
+        """
+        book = sl._SessionReader(self.root, universe={"AAA"}).book([S1], {"AAA"})
+        self.assertEqual(set(book[S1] or {}), {"AAA"})
+
+    def test_a_ticker_asked_for_outside_the_universe_joins_what_is_kept(self):
+        """The bound is `universe | missing`, not `universe` alone — the asked-for
+        ticker has to be kept or it could not be answered, which is the hint-not-a-
+        contract rule one test below."""
+        book = sl._SessionReader(self.root, universe={"AAA"}).book([S1], {"AAA", "CCC"})
+        self.assertEqual(set(book[S1] or {}), {"AAA", "CCC"})
+
     def test_no_universe_keeps_every_ticker_in_the_file(self):
+        """Counting the reads is not enough: a reader that kept NOTHING would also
+        open the file once. Measured - inverting the filter so a no-universe read
+        keeps nothing left all 14427 tests green, because this test only counted
+        opens and never looked at what came back."""
         counter = self.spy()
         reader = sl._SessionReader(self.root)
-        reader.book([S1], {"AAA"})
-        reader.book([S1], {"BBB"})
-        reader.book([S1], {"CCC"})
+        self.assertEqual(set(reader.book([S1], {"AAA"})[S1] or {}), {"AAA", "BBB", "CCC"})
+        self.assertEqual(set(reader.book([S1], {"BBB"})[S1] or {}), {"AAA", "BBB", "CCC"})
+        self.assertEqual(reader.book([S1], {"CCC"})[S1]["CCC"], (5.0, 6.0))
         self.assertEqual(len(counter), 1, "with no universe one read must settle the file")
+
+    def test_a_second_read_does_not_evict_the_first_ask(self):
+        """The one behaviour change in the extraction: `_read_session_rows` returns
+        a FRESH dict, so `_session` must MERGE it into the cache rather than replace
+        it. Measured - replacing `bars.update(rows)` with an assignment left 485
+        tests green while silently losing an already-answered bar.
+
+        `CCC` is outside the universe, so it is kept only because the first ask
+        named it. The second ask re-reads the file for `BBB`; if that read replaced
+        the cache instead of merging, `CCC` would be gone - and silently, because
+        the first read already marked it settled, so the third ask is served from
+        cache and reads as `no_open`, which never retries.
+        """
+        reader = sl._SessionReader(self.root, universe={"AAA"})
+        reader.book([S1], {"CCC"})
+        reader.book([S1], {"BBB"})
+        self.assertEqual(reader.book([S1], {"CCC"})[S1]["CCC"], (5.0, 6.0))
 
 
 class TestAFileItCannotRead(_ReaderCase):
