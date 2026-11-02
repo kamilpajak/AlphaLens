@@ -456,6 +456,37 @@ def stop_move_of(line: Mapping[str, Any]) -> _StopMove:
     return _StopMove(kind, _positive_float_or_none(line.get(_STOP_MOVE_LEVEL_KEY[kind])))
 
 
+def _stop_move_window_ts(
+    line: Mapping[str, Any],
+    since_by_uic: Mapping[int, float],
+    until_by_uic: Mapping[int, float],
+) -> tuple[int, float] | None:
+    """The ``(uic, ts)`` of one stop-move line inside its uic's window, else ``None``.
+
+    ``None`` for every reason :func:`select_stop_move_lines` skips a line: a kind
+    that is not a stop-move marker, a level that is not a finite positive number,
+    no uic or a uic nobody asked about, a ``ts`` that is not a finite number, and a
+    ``ts`` outside ``[since, until]`` (``until`` open when the uic has none).
+
+    Split out of the loop body so the selector reads as "newest line per uic" and
+    the skip rules read as one predicate. The order of the checks is load-bearing
+    and unchanged: nothing reads ``since_by_uic[uic]`` before the uic is known to
+    be in it.
+    """
+    level_key = _STOP_MOVE_LEVEL_KEY.get(str(line.get("kind")))
+    if level_key is None or _positive_float_or_none(line.get(level_key)) is None:
+        return None
+    uic = _coerce(line, "uic", int)
+    if uic is None or uic not in since_by_uic:
+        return None
+    ts = _coerce(line, "ts", float)
+    if ts is None or not math.isfinite(ts) or ts < since_by_uic[uic]:
+        return None
+    if uic in until_by_uic and ts > until_by_uic[uic]:
+        return None
+    return uic, ts
+
+
 def select_stop_move_lines(
     lines: Iterable[Mapping[str, Any]],
     since_by_uic: Mapping[int, float],
@@ -477,17 +508,10 @@ def select_stop_move_lines(
     until = until_by_uic or {}
     newest: dict[int, tuple[float, Mapping[str, Any]]] = {}
     for line in lines:
-        level_key = _STOP_MOVE_LEVEL_KEY.get(str(line.get("kind")))
-        if level_key is None or _positive_float_or_none(line.get(level_key)) is None:
+        found = _stop_move_window_ts(line, since_by_uic, until)
+        if found is None:
             continue
-        uic = _coerce(line, "uic", int)
-        if uic is None or uic not in since_by_uic:
-            continue
-        ts = _coerce(line, "ts", float)
-        if ts is None or not math.isfinite(ts) or ts < since_by_uic[uic]:
-            continue
-        if uic in until and ts > until[uic]:
-            continue
+        uic, ts = found
         kept = newest.get(uic)
         if kept is None or ts >= kept[0]:
             newest[uic] = (ts, line)

@@ -60,6 +60,13 @@ class TestSelectStopMoveLines(unittest.TestCase):
             _trailed("junk", 106.0),
             _trailed(None, 106.0),
             _trailed(float("nan"), 106.0),
+            # Infinity, not just NaN. The level filter is finiteness AND positivity,
+            # and `nan > 0` is already False, so a NaN says nothing about whether the
+            # finiteness half exists. `inf > 0` is True, so infinity is the only value
+            # that half alone rejects - and an infinite stop level would be published
+            # as the move that protected the position.
+            _trailed(float("inf"), 106.0),
+            _reanchored(float("inf"), 106.0),
             _reanchored(-1.0, 106.0),
             {"kind": "reanchored", "uic": _UIC, "avg_price": 10.0, "ts": 106.0},
         ):

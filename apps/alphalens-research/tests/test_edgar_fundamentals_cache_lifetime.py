@@ -170,6 +170,35 @@ class CompanyfactsCacheLifetimeTest(unittest.TestCase):
         os.utime(path, (stamp, stamp))
         return path
 
+    # --- what the classification must NOT do ------------------------------
+
+    def test_a_ticker_with_no_cik_is_skipped_rather_than_fetched(self) -> None:
+        """An unresolved ticker must leave the classification entirely. Measured:
+        with nothing asserting this, dropping the ``continue`` survived all 14380
+        tests and the mutant then asked SEC for companyfacts of CIK ``None``."""
+        self._write(CIK_A, TODAY - dt.timedelta(days=400))
+        self._store().preload(["ZZZ"], today=TODAY)
+        self.client.fetch_company_facts.assert_not_called()
+
+    def test_an_unresolved_ticker_does_not_stop_the_others(self) -> None:
+        """The skip is per ticker, not per call."""
+        self._write(CIK_A, TODAY - dt.timedelta(days=400))
+        self._store().preload(["ZZZ", "AAA"], today=TODAY)
+        self.client.fetch_company_facts.assert_called_once_with(CIK_A)
+
+    def test_refresh_stale_false_fetches_the_missing_but_not_the_stale(self) -> None:
+        """``refresh_stale=False`` is what the internal single-ticker lookups pass,
+        so that a per-ticker read cannot trigger a refresh sweep of its own. Measured:
+        this flag had no coverage anywhere in the repo, and a helper that ignored its
+        own keyword and always refreshed survived the whole suite.
+
+        ``BBB`` has no file at all, so it is MISSING and always fetched; ``AAA``
+        holds a table 400 days old, so it is STALE and must not be.
+        """
+        self._write(CIK_A, TODAY - dt.timedelta(days=400))
+        self._store().preload(["AAA", "BBB"], refresh_stale=False, today=TODAY)
+        self.client.fetch_company_facts.assert_called_once_with(CIK_B)
+
     # --- the rule ---------------------------------------------------------
 
     def test_a_cache_whose_newest_period_is_recent_is_not_refetched(self) -> None:

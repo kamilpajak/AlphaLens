@@ -46,6 +46,7 @@ import math
 import statistics
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from typing import Any
 
 import pandas as pd
 
@@ -97,6 +98,20 @@ class SpanAudit:
 UNANSWERED = SpanAudit(answered=False, breaks=frozenset(), unchecked=frozenset())
 
 
+def _positive_close(value: Any) -> float | None:
+    """``value`` as a finite positive float, else ``None``.
+
+    Both sides of the ratio are filtered the same way, and that is the point: either
+    vendor can serve a string, a NaN or a non-positive placeholder close, and none of
+    those can enter a ratio.
+    """
+    try:
+        price = float(value)
+    except (TypeError, ValueError):
+        return None
+    return price if math.isfinite(price) and price > 0 else None
+
+
 def level_ratios(
     *, store_closes: Mapping[dt.date, float], reference: pd.Series | None
 ) -> dict[dt.date, float]:
@@ -115,22 +130,20 @@ def level_ratios(
         return {}
     by_date: dict[dt.date, float] = {}
     for stamp, value in zip(index, reference.to_numpy(), strict=True):
-        try:
-            price = float(value)
-        except (TypeError, ValueError):
-            continue
-        if math.isfinite(price) and price > 0:
+        price = _positive_close(value)
+        if price is not None:
             by_date[stamp.date()] = price
     out: dict[dt.date, float] = {}
     for session, close in store_closes.items():
         ref = by_date.get(session)
+        # The reference lookup stays AHEAD of coercing the store close, and is not
+        # folded into one condition. Folding saves one point of complexity and costs
+        # strict equivalence: it would call `float(close)` for sessions the reference
+        # does not price, where this never touches that value at all.
         if ref is None:
             continue
-        try:
-            stored = float(close)
-        except (TypeError, ValueError):
-            continue
-        if math.isfinite(stored) and stored > 0:
+        stored = _positive_close(close)
+        if stored is not None:
             out[session] = stored / ref
     return out
 
