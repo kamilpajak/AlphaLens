@@ -11,7 +11,12 @@ from __future__ import annotations
 import datetime as dt
 import json
 import shutil
+import unittest
 from typing import Any
+
+from alphalens_pipeline.brokers.automanager import trades
+from alphalens_pipeline.brokers.automanager.picks import _submission_join_key
+from alphalens_pipeline.brokers.fill_history import Execution, OrderActivity
 
 from tests.brokers.automanager.test_broker_trades import (
     LULU_G2,
@@ -978,3 +983,367 @@ class TakeProfitAgainstThePlanLevel(_TradesCase):
                         for e in exit_["reason_evidence"]
                     )
                 )
+
+
+def _activity(**over: Any) -> OrderActivity:
+    """One audit row, with every field defaulted so a test states only what it means."""
+    fields: dict[str, Any] = {
+        "order_id": "o1",
+        "external_reference": None,
+        "uic": 111,
+        "buy_sell": "Sell",
+        "order_type": "Limit",
+        "status": "Placed",
+        "sub_status": None,
+        "price": None,
+        "activity_time": dt.datetime(2026, 9, 4, 14, 0, tzinfo=dt.UTC),
+        "amount": None,
+        "filled_amount": None,
+        "execution_price": None,
+        "average_price": None,
+        "position_id": None,
+        "related_position_id": None,
+        "log_id": None,
+    }
+    fields.update(over)
+    return OrderActivity(**fields)
+
+
+class ExtractedGuards(unittest.TestCase):
+    """The guard arms of the helpers the complexity split created.
+
+    Each is a fallback the whole-record tests never reach, because those build
+    records where the happy path holds. A guard moving into a new helper arrives
+    with its old call site's coverage and nothing asserting its own answer, so it
+    is pinned here directly - which is what extracting it to module level makes
+    possible.
+    """
+
+    def test_a_tier_with_no_watch_line_takes_its_index_from_the_crid(self):
+        """`_tier_index_for`'s fallback: the crid's trailing digits, and 0 when it
+        carries none."""
+        self.assertEqual(trades._tier_index_for(None, "AMBA-20260904-e2", "AMBA-20260904-e"), 2)
+        self.assertEqual(trades._tier_index_for({}, "AMBA-20260904-e2", "AMBA-20260904-e"), 2)
+        self.assertEqual(trades._tier_index_for(None, "unrelated", "AMBA-20260904-e"), 0)
+
+    def test_a_watch_line_that_states_an_index_wins_over_the_crid(self):
+        """The control: without it the test above would pass on a helper that always
+        read the crid."""
+        self.assertEqual(
+            trades._tier_index_for({"tier_index": 7}, "AMBA-20260904-e2", "AMBA-20260904-e"), 7
+        )
+
+    def test_an_oco_leg_no_pick_claims_resolves_to_nobody(self):
+        """`_oco_ownership` answers None rather than guessing, which is what lets the
+        caller fall through to the next reference rule instead of mis-attributing."""
+        oco = trades._OCO_LEG_RE.match("NOBODY-20260101-e1-stop")
+        assert oco is not None
+        self.assertIsNone(trades._oco_ownership(oco, picks_on_uic=[], bracket_requests={}))
+
+    def test_the_rejected_attempt_predicate_refuses_what_is_not_one(self):
+        """`_is_prior_rejected_attempt` decides which rejected orders count as
+        evidence of an earlier attempt at the same order. Each `False` below is a
+        separate reason, and the final `True` is the control."""
+        rejected = {"status": "Placed", "sub_status": "Rejected"}
+        order = trades._Order("o1", [_activity(order_id="o1", **rejected)])
+        same = trades._Order("o1", [_activity(order_id="o1", **rejected)])
+        other_uic = trades._Order("o2", [_activity(order_id="o2", uic=222, **rejected)])
+        has_ref = trades._Order(
+            "o3", [_activity(order_id="o3", external_reference="ref", **rejected)]
+        )
+        not_rejected = trades._Order("o4", [_activity(order_id="o4", status="Placed")])
+        genuine = trades._Order("o5", [_activity(order_id="o5", **rejected)])
+
+        def prior(other: Any) -> bool:
+            return trades._is_prior_rejected_attempt(other, order, None, None)
+
+        self.assertFalse(prior(same), "an order is not its own earlier attempt")
+        self.assertFalse(prior(other_uic), "a different instrument is not evidence")
+        self.assertFalse(prior(has_ref), "an order carrying its own reference is claimed")
+        self.assertFalse(prior(not_rejected), "an order that was not rejected is not an attempt")
+        self.assertTrue(prior(genuine))
+
+    def test_a_rejected_attempt_outside_the_window_does_not_count(self):
+        """The two time bounds, which the four identity guards do not reach, tested
+        AT the bound and on both sides of it.
+
+        The window is inclusive at both ends - `when > fill_time` excludes and
+        `when >= since` includes - so a case that is merely well inside or well
+        outside cannot tell a strict comparison from a loose one. An earlier
+        version of this test used only such cases, and flipping either comparison's
+        strictness left it green.
+        """
+        rejected = {"status": "Placed", "sub_status": "Rejected"}
+        at = dt.datetime(2026, 9, 4, 14, 0, tzinfo=dt.UTC)
+        just_before = at - dt.timedelta(microseconds=1)
+        just_after = at + dt.timedelta(microseconds=1)
+        order = trades._Order("o1", [_activity(order_id="o1", **rejected)])
+
+        def prior_at(when: dt.datetime, *, fill_time=None, since=None) -> bool:
+            other = trades._Order("o2", [_activity(order_id="o2", activity_time=when, **rejected)])
+            return trades._is_prior_rejected_attempt(other, order, fill_time, since)
+
+        # The fill-time bound: AT it the attempt still counts, one microsecond past
+        # it does not.
+        self.assertTrue(prior_at(at, fill_time=at), "an attempt AT the fill time counts")
+        self.assertFalse(prior_at(just_after, fill_time=at), "one past the fill time does not")
+        self.assertTrue(prior_at(just_before, fill_time=at))
+
+        # The `since` bound: AT it the attempt counts, one microsecond before does
+        # not.
+        self.assertTrue(prior_at(at, since=at), "an attempt AT the window open counts")
+        self.assertFalse(prior_at(just_before, since=at), "one before the window does not")
+        self.assertTrue(prior_at(just_after, since=at))
+
+        no_time = trades._Order("o3", [_activity(order_id="o3", activity_time=None, **rejected)])
+        self.assertFalse(
+            trades._is_prior_rejected_attempt(no_time, order, None, None),
+            "an undated attempt cannot be placed in the window",
+        )
+
+
+_T0 = dt.datetime(2026, 9, 4, 14, 0, tzinfo=dt.UTC)
+_TP_PLAN = {"intent": {"spec": {"side": "long", "tp_tranches": [{"price": 65.25}]}}}
+
+
+def _bare_pick(**over: Any) -> Any:
+    """A pick with only the eight facts it cannot be built without."""
+    fields: dict[str, Any] = {
+        "ticker": "AMBA",
+        "trade_date": "2026-09-04",
+        "generation": 1,
+        "key": "AMBA:2026-09-04",
+        "token": "tok",
+        "status": "placed",
+        "status_record": {},
+        "plan_line": None,
+    }
+    fields.update(over)
+    return trades._Pick(**fields)
+
+
+def _bare_fill(**over: Any) -> Any:
+    fields: dict[str, Any] = {
+        "order_id": "O1",
+        "external_reference": None,
+        "uic": 111,
+        "venue_time": trades._null(trades.NULL_NOT_JOURNALED, None, trades.SOURCE_DERIVED),
+        "price": trades._num(10.0, None, trades.SOURCE_AUDIT),
+        "qty": trades._num(100.0, "shares", trades.SOURCE_AUDIT),
+    }
+    fields.update(over)
+    return trades._Fill(**fields)
+
+
+def _execution(trade_id: str, amount: float, price: float, when: dt.datetime | None) -> Execution:
+    return Execution(
+        trade_id=trade_id,
+        order_id="O1",
+        execution_time=when,
+        price=price,
+        amount=amount,
+        to_open_or_close=None,
+        trade_date=None,
+        booked_amount_account_currency=None,
+        account_currency=None,
+    )
+
+
+def _tp_exit(*, price: float, label: str = "TP1") -> Any:
+    """One take-profit exit at ``price``, with no evidence yet."""
+    return trades._Exit(
+        fill=_bare_fill(price=trades._num(price, None, trades.SOURCE_AUDIT)),
+        reason=trades.REASON_TAKE_PROFIT,
+        reason_null_reason=None,
+        evidence=[],
+        stop_level_at_fill=trades._null(trades.NULL_NOT_JOURNALED, None, trades.SOURCE_DERIVED),
+        tp_label=label,
+        attributed_qty=trades._num(10.0, "shares", trades.SOURCE_DERIVED),
+        attribution=None,
+    )
+
+
+def _blank_tier() -> Any:
+    """A tier with nothing stamped on it yet, so a helper's writes are visible."""
+    nothing = trades._null(trades.NULL_NOT_JOURNALED, None, trades.SOURCE_DERIVED)
+    return trades._Tier(
+        tier_index=0,
+        path=trades.PATH_TRAIL_WATCH,
+        crid="AMBA-20260904-e1",
+        planned_limit=nothing,
+        planned_qty=nothing,
+        window_end=nothing,
+        touched_at=nothing,
+        touch_price=nothing,
+        trigger_order_id=None,
+        armed_at=nothing,
+        terminal=trades.TERMINAL_OPEN,
+        terminal_at=nothing,
+        terminal_at_source=None,
+        fill=None,
+    )
+
+
+def _tick_venue(tick: float | None = 0.01) -> Any:
+    class _Broker:
+        def tick_size(self, uic: int, price: float) -> float | None:
+            return tick
+
+    return trades._Venue(
+        history=None,
+        orders={},
+        executions_by_order={},
+        bookings_by_trade={},
+        reports_null_reason=None,
+        broker=_Broker(),
+    )
+
+
+class ExtractedContracts(unittest.TestCase):
+    """The contracts the helpers' own docstrings assert, which nothing else held.
+
+    Every test here was written because a mutation of the thing it describes left
+    the whole trades suite GREEN. A docstring that states an invariant the suite
+    cannot defend is worse than no docstring: the next reader trusts it.
+    """
+
+    def test_the_three_execution_checks_warn_in_the_documented_order(self):
+        """`_cross_check_executions` calls three helpers in sequence and its
+        docstring says the order is quantity, then price, then time. All three emit
+        the SAME code, so a code-list assertion cannot tell them apart - the order
+        is only visible in `detail`. Measured: reordering the three calls, and
+        returning early from either of the first two, left 419 tests green."""
+        fill = _bare_fill(when=_T0, filled_qty=100.0)
+        executions = [_execution("T1", 50.0, 20.0, _T0 + dt.timedelta(seconds=600))]
+        trades._cross_check_executions(fill, executions, _tick_venue(), None)
+        self.assertEqual(
+            [detail for _code, detail in fill.warnings],
+            [
+                "order O1: executions sum to 50, the audit says 100",
+                "order O1: execution VWAP 20 vs AveragePrice 10",
+                "order O1: trade T1 executed 600.000 s away from the audit fill time",
+            ],
+        )
+
+    def test_an_offline_take_profit_still_gets_its_plan_level_evidence(self):
+        """The trap `_check_one_take_profit`'s docstring names. Offline there is no
+        tick, so the WARNING is skipped - but the evidence string must still be
+        appended. Hoisting `venue is None` to an early return in the caller would
+        drop it from every offline record, and measured, nothing caught that."""
+        pick = _bare_pick(plan_line=_TP_PLAN, uic=111)
+        exit_ = _tp_exit(price=59.0)
+        trades._check_one_take_profit(pick, exit_, None, trades._plan_side(pick.plan))
+        self.assertEqual(exit_.evidence, ["plan:spec.tp_tranches[0].price 65.25"])
+        self.assertEqual(pick.warnings, [], "offline there is no tick, so no warning")
+
+    def test_a_take_profit_worse_than_the_plan_warns_and_a_better_one_does_not(self):
+        """The control for the test above: without it, an implementation that never
+        warned at all would pass."""
+        worse = _bare_pick(plan_line=_TP_PLAN, uic=111)
+        exit_worse = _tp_exit(price=59.0)
+        trades._check_one_take_profit(worse, exit_worse, _tick_venue(), "long")
+        self.assertEqual([w["code"] for w in worse.warnings], [trades.W_EXIT_OFF_PLAN_LEVEL])
+
+        better = _bare_pick(plan_line=_TP_PLAN, uic=111)
+        exit_better = _tp_exit(price=65.30)
+        trades._check_one_take_profit(better, exit_better, _tick_venue(), "long")
+        self.assertEqual(better.warnings, [], "limit price improvement is not a defect")
+
+    def test_the_two_readers_take_the_venue_from_different_keys(self):
+        """`mic_key` is the only thing distinguishing the shared absorber's two
+        callers, and it is a new way to be wrong: on main the key names were
+        literals inside two separate functions, so there was nothing to get wrong
+        AT A CALL SITE.
+
+        Driven through the two READERS and not through the helper, which is where
+        the mistake lives. Measured: a first version of this test called the helper
+        directly with both keys and still let the mutation through - pointing
+        `_absorb_watch_open` at "mic" left 419 tests green while nulling
+        `exchange_mic` for every pick whose submissions carry no `mic`.
+
+        Each record carries the OTHER reader's key holding a wrong value, so a
+        caller reading the wrong one is visible rather than merely unresolved.
+        """
+        from_watch = _bare_pick()
+        trades._absorb_watch_open(from_watch, {"exchange_mic": "XNYS", "mic": "WRONG"})
+        self.assertEqual(from_watch.exchange_mic, "XNYS")
+
+        # `_attach_submissions` joins on (ticker, identity token), and the token is
+        # DERIVED from the record rather than stated, so the pick's token has to be
+        # the one `_submission_join_key` computes for this record.
+        record = {
+            "ticker": "AMBA",
+            "trade_date": "2026-09-04",
+            "generation": 1,
+            "exchange_mic": "WRONG",
+            "mic": "XNAS",
+        }
+        key = _submission_join_key(record)
+        assert key is not None
+        from_submission = _bare_pick(token=key[1])
+        trades._attach_submissions([from_submission], [record])
+        self.assertEqual(from_submission.exchange_mic, "XNAS")
+
+    def test_an_instrument_fact_already_resolved_is_not_overwritten(self):
+        """First writer wins, which is what the `or`s are for: a fact read from an
+        earlier, more authoritative line must survive a later one. Measured: turning
+        any one of the four into last-writer-wins left the suite green."""
+        pick = _bare_pick(
+            uic=111, exchange_mic="XNYS", instrument_currency="USD", sizing_currency="PLN"
+        )
+        trades._absorb_instrument_fields(
+            pick,
+            {
+                "uic": 999,
+                "mic": "XNAS",
+                "instrument_currency": "EUR",
+                "sizing_currency": "EUR",
+            },
+            mic_key="mic",
+        )
+        self.assertEqual(
+            (pick.uic, pick.exchange_mic, pick.instrument_currency, pick.sizing_currency),
+            (111, "XNYS", "USD", "PLN"),
+        )
+
+    def test_each_fx_member_reads_its_own_key(self):
+        """`_FX_MEMBER_KEYS` pairs three member names with three record keys. Giving
+        the tuple a name made it one place to get the pairing wrong, and measured,
+        swapping which key `bid` and `ask` read from left the suite green."""
+        pick = _bare_pick()
+        trades._absorb_submission_fx(pick, {"fx_rate": 1.0, "fx_rate_bid": 2.0, "fx_rate_ask": 3.0})
+        self.assertEqual(
+            {name: pick.sizing_fx[name].value for name in ("rate", "bid", "ask")},
+            {"rate": 1.0, "bid": 2.0, "ask": 3.0},
+        )
+
+    def test_an_fx_member_already_resolved_is_not_overwritten(self):
+        pick = _bare_pick()
+        trades._absorb_submission_fx(pick, {"fx_rate": 1.0})
+        trades._absorb_submission_fx(pick, {"fx_rate": 9.0})
+        self.assertEqual(pick.sizing_fx["rate"].value, 1.0)
+
+    def test_every_audit_status_maps_to_its_own_terminal_word(self):
+        """`_TERMINAL_BY_AUDIT_STATUS` replaced two inline tables with one shared
+        one, which means one wrong value now mislabels BOTH tier paths. Measured:
+        three of its four entries could be edited undetected."""
+        self.assertEqual(
+            dict(trades._TERMINAL_BY_AUDIT_STATUS),
+            {
+                trades._STATUS_FINAL_FILL: trades.TERMINAL_FILLED,
+                trades._STATUS_FILL: trades.TERMINAL_FILLED,
+                trades._STATUS_CANCELLED: trades.TERMINAL_CANCELLED,
+                trades._STATUS_EXPIRED: trades.TERMINAL_EXPIRED,
+            },
+        )
+
+    def test_stamping_a_terminal_sets_its_source_as_well_as_its_word(self):
+        """`terminal_at_source` is a REQUIRED member of the published v1 schema and
+        this helper is its only writer on the audit path. Measured: deleting the
+        assignment went undetected."""
+        tier = _blank_tier()
+        row = _activity(status=trades._STATUS_CANCELLED, activity_time=_T0)
+        trades._apply_audit_terminal(tier, row, "order:O1")
+        self.assertEqual(tier.terminal, trades.TERMINAL_CANCELLED)
+        self.assertEqual(tier.terminal_at.value, _T0)
+        self.assertEqual(tier.terminal_at_source, trades.SOURCE_AUDIT)
