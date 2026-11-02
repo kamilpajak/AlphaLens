@@ -137,6 +137,26 @@ class TestTheUniverseIsAHintAndNeverAContract(_ReaderCase):
         self.assertEqual(after, 2, "the ticker outside the universe needs its own read")
         self.assertEqual(len(counter), 2, "and only one; the second ask is cached")
 
+    def test_a_universe_keeps_only_what_it_admits(self):
+        """The universe BOUNDS the cache, and that bound is the whole reason to pass
+        one: the class docstring prices a 270-session window at about 600 MB keeping
+        every ticker against about 140 MB keeping the run's 3042. Nothing tested it —
+        every other assertion here indexes one ticker, so dropping the filter left the
+        suite green while the cache grew to the whole file.
+
+        `S1` holds AAA, BBB and CCC; a universe of AAA asking for AAA must answer AAA
+        and nothing else.
+        """
+        book = sl._SessionReader(self.root, universe={"AAA"}).book([S1], {"AAA"})
+        self.assertEqual(set(book[S1] or {}), {"AAA"})
+
+    def test_a_ticker_asked_for_outside_the_universe_joins_what_is_kept(self):
+        """The bound is `universe | missing`, not `universe` alone — the asked-for
+        ticker has to be kept or it could not be answered, which is the hint-not-a-
+        contract rule one test below."""
+        book = sl._SessionReader(self.root, universe={"AAA"}).book([S1], {"AAA", "CCC"})
+        self.assertEqual(set(book[S1] or {}), {"AAA", "CCC"})
+
     def test_no_universe_keeps_every_ticker_in_the_file(self):
         counter = self.spy()
         reader = sl._SessionReader(self.root)
