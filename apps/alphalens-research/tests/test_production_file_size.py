@@ -385,7 +385,7 @@ BASELINE: dict[str, int] = {
     # repo-wide one is its own change and not a rider on this. A named constant cannot
     # be introduced for free, so this entry moves rather than the fix being dropped.
     #
-    # +37 more for PR #1843, taking Sonar python:S3776 off the file's last two
+    # +37 more for PR #1844, taking Sonar python:S3776 off the file's last two
     # functions. The room goes to two helpers and their docstrings, not to new logic:
     # `_tagged_tickers` (the BRK.B fold and the isinstance rationale move onto it) and
     # `_read_session_rows` (which states why the file read is a free function rather
