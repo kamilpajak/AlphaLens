@@ -1219,11 +1219,8 @@ def _null_report_facts(fill: _Fill, fee_reason: str, fx_reason: str) -> None:
     fill.booking_sums["booked_amount_acct"] = (None, None, fee_reason)
 
 
-def _cross_check_executions(
-    fill: _Fill, executions: Sequence[Execution], venue: _Venue, pick: _Pick | None
-) -> None:
-    total = sum(abs(e.amount or 0.0) for e in executions)
-    price = fill.price.value
+def _check_execution_total(fill: _Fill, pick: _Pick | None, total: float) -> None:
+    """The executions' quantities must add up to the audit's filled quantity."""
     if fill.filled_qty is not None and abs(total - fill.filled_qty) > _QTY_EPS:
         _fill_warn(
             fill,
@@ -1231,6 +1228,22 @@ def _cross_check_executions(
             W_AUDIT_REPORT_DISAGREE,
             f"order {fill.order_id}: executions sum to {total:g}, the audit says {fill.filled_qty:g}",
         )
+
+
+def _check_execution_vwap(
+    fill: _Fill,
+    pick: _Pick | None,
+    executions: Sequence[Execution],
+    venue: _Venue,
+    total: float,
+) -> None:
+    """The executions' volume-weighted price must agree with the audit's average.
+
+    The two guards stay POSITIVE rather than becoming early returns: ``total`` is a
+    divisor, so the condition is what makes the division safe and reads as its
+    precondition rather than as an exit.
+    """
+    price = fill.price.value
     if total > 0 and price is not None:
         vwap = sum(abs(e.amount or 0.0) * (e.price or 0.0) for e in executions) / total
         tick = venue.tick(fill.uic, price)
@@ -1241,19 +1254,40 @@ def _cross_check_executions(
                 W_AUDIT_REPORT_DISAGREE,
                 f"order {fill.order_id}: execution VWAP {vwap:.6g} vs AveragePrice {price:g}",
             )
-    if fill.when is not None:
-        for execution in executions:
-            if execution.execution_time is None:
-                continue
-            gap = abs((execution.execution_time - fill.when).total_seconds())
-            if gap > _CROSS_SOURCE_TIME_TOLERANCE_S:
-                _fill_warn(
-                    fill,
-                    pick,
-                    W_AUDIT_REPORT_DISAGREE,
-                    f"order {fill.order_id}: trade {execution.trade_id} executed {gap:.3f} s "
-                    "away from the audit fill time",
-                )
+
+
+def _check_execution_times(
+    fill: _Fill, pick: _Pick | None, executions: Sequence[Execution]
+) -> None:
+    """Every execution must have happened near the audit's fill time."""
+    if fill.when is None:
+        return
+    for execution in executions:
+        if execution.execution_time is None:
+            continue
+        gap = abs((execution.execution_time - fill.when).total_seconds())
+        if gap > _CROSS_SOURCE_TIME_TOLERANCE_S:
+            _fill_warn(
+                fill,
+                pick,
+                W_AUDIT_REPORT_DISAGREE,
+                f"order {fill.order_id}: trade {execution.trade_id} executed {gap:.3f} s "
+                "away from the audit fill time",
+            )
+
+
+def _cross_check_executions(
+    fill: _Fill, executions: Sequence[Execution], venue: _Venue, pick: _Pick | None
+) -> None:
+    """Three independent cross-checks of one fill against the trades report.
+
+    The order is preserved and asserted on: the tests read a warnings LIST, so
+    quantity, then price, then time.
+    """
+    total = sum(abs(e.amount or 0.0) for e in executions)
+    _check_execution_total(fill, pick, total)
+    _check_execution_vwap(fill, pick, executions, venue, total)
+    _check_execution_times(fill, pick, executions)
 
 
 # --- Entry tiers (§4.3) -------------------------------------------------------
@@ -1284,13 +1318,26 @@ def _entry_trail_lines_for(
     return by_crid
 
 
-def _absorb_watch_open(pick: _Pick, watch: Mapping[str, Any]) -> None:
-    pick.uic = pick.uic or _int_or_none(watch.get("uic"))
-    pick.exchange_mic = pick.exchange_mic or _str_or_none(watch.get("exchange_mic"))
+def _absorb_instrument_fields(pick: _Pick, record: Mapping[str, Any], *, mic_key: str) -> None:
+    """Fill the four instrument facts a pick still lacks, from one journal record.
+
+    First writer wins, hence the ``or``: a fact already resolved from an earlier,
+    more authoritative line must not be overwritten by a later one.
+
+    Shared by the entry-watch and the submissions readers, which carried the same
+    four lines and differed only in what they call the venue - ``exchange_mic`` in
+    the watch line, ``mic`` in the submission - hence the keyword.
+    """
+    pick.uic = pick.uic or _int_or_none(record.get("uic"))
+    pick.exchange_mic = pick.exchange_mic or _str_or_none(record.get(mic_key))
     pick.instrument_currency = pick.instrument_currency or _str_or_none(
-        watch.get("instrument_currency")
+        record.get("instrument_currency")
     )
-    pick.sizing_currency = pick.sizing_currency or _str_or_none(watch.get("sizing_currency"))
+    pick.sizing_currency = pick.sizing_currency or _str_or_none(record.get("sizing_currency"))
+
+
+def _absorb_watch_open(pick: _Pick, watch: Mapping[str, Any]) -> None:
+    _absorb_instrument_fields(pick, watch, mic_key="exchange_mic")
     if "rate" not in pick.sizing_fx and _finite(watch.get("fx_rate")) is not None:
         pick.sizing_fx["rate"] = _num(
             _finite(watch.get("fx_rate")), None, SOURCE_ENTRY_WATCH, "line:entry_trails:watch_open"
@@ -1308,6 +1355,71 @@ def _int_or_none(value: Any) -> int | None:
 
 def _str_or_none(value: Any) -> str | None:
     return None if value in (None, "") else str(value)
+
+
+def _tier_index_for(watch: Mapping[str, Any] | None, crid: str, prefix: str) -> int:
+    """The tier's index: the watch line's if it states one, else read off the crid."""
+    index = _int_or_none(watch.get("tier_index")) if watch is not None else None
+    if index is not None:
+        return index
+    return _tier_index_from_crid(crid, prefix) or 0
+
+
+def _warn_uncertain_fold(
+    pick: _Pick, crid: str, duplicated_crids: set[str], *, offline: bool
+) -> None:
+    """Offline, a repeated line means the fold order cannot be trusted."""
+    if offline and crid in duplicated_crids:
+        pick.warn(
+            W_FOLD_ORDER_UNCERTAIN,
+            f"{crid}: a line is repeated in one journal file, so history dedup "
+            "may have collapsed a re-arm and the offline fold order is uncertain",
+        )
+
+
+def _journal_tier(
+    pick: _Pick,
+    crid: str,
+    watch: Mapping[str, Any] | None,
+    touched: list[Mapping[str, Any]],
+    tier_index: int,
+) -> _Tier:
+    """One tier as the KEEPER's journals describe it, before the venue is consulted.
+
+    ``watch`` and ``touched`` are each branched ONCE, into a local, rather than
+    defaulted inline at every use. That is where this function's complexity went:
+    the caller spelled ``(watch or {})`` four times and ``touched[-1] ... if touched``
+    twice. It is also the S2259 shape to avoid - an ``or``-default mixed with later
+    ``is None`` tests on the same name - so the branch is explicit and happens once.
+    """
+    fields: Mapping[str, Any] = watch if watch is not None else {}
+    last_touch: Mapping[str, Any] = touched[-1] if touched else {}
+    currency = pick.instrument_currency
+    line_ref = "line:entry_trails:watch_open"
+    touch_ref = "line:entry_trails:touched"
+    return _Tier(
+        tier_index=tier_index,
+        path=PATH_TRAIL_WATCH,
+        crid=crid,
+        planned_limit=_num(
+            _as_float(fields.get("limit")), _price_unit(currency), SOURCE_ENTRY_WATCH, line_ref
+        ),
+        planned_qty=_num(_as_float(fields.get("qty")), _UNIT_SHARES, SOURCE_ENTRY_WATCH, line_ref),
+        window_end=_time(parse_utc(fields.get("window_end")), SOURCE_ENTRY_WATCH, line_ref),
+        touched_at=_time(parse_utc(last_touch.get("touch_ts")), SOURCE_ENTRY_WATCH, touch_ref),
+        touch_price=_num(
+            _finite(last_touch.get("touch_price")),
+            _price_unit(currency),
+            SOURCE_ENTRY_WATCH,
+            touch_ref,
+        ),
+        trigger_order_id=None,
+        armed_at=_null(NULL_OFFLINE, None, SOURCE_AUDIT),
+        terminal=TERMINAL_OPEN,
+        terminal_at=_null(NULL_NOT_JOURNALED, None, SOURCE_ENTRY_WATCH),
+        terminal_at_source=None,
+        fill=None,
+    )
 
 
 def _build_trail_tiers(
@@ -1328,52 +1440,11 @@ def _build_trail_tiers(
         watch = state.watch_open if state is not None else None
         if watch is not None:
             _absorb_watch_open(pick, watch)
-        tier_index = _int_or_none((watch or {}).get("tier_index"))
-        if tier_index is None:
-            tier_index = _tier_index_from_crid(crid, pick.crid_prefix) or 0
         fired = [r for r in lines if r.get("kind") == "fired"]
         touched = [r for r in lines if r.get("kind") == "touched"]
-        if offline and crid in duplicated_crids:
-            pick.warn(
-                W_FOLD_ORDER_UNCERTAIN,
-                f"{crid}: a line is repeated in one journal file, so history dedup "
-                "may have collapsed a re-arm and the offline fold order is uncertain",
-            )
-        currency = pick.instrument_currency
-        line_ref = "line:entry_trails:watch_open"
-        tier = _Tier(
-            tier_index=tier_index,
-            path=PATH_TRAIL_WATCH,
-            crid=crid,
-            planned_limit=_num(
-                _as_float((watch or {}).get("limit")),
-                _price_unit(currency),
-                SOURCE_ENTRY_WATCH,
-                line_ref,
-            ),
-            planned_qty=_num(
-                _as_float((watch or {}).get("qty")), _UNIT_SHARES, SOURCE_ENTRY_WATCH, line_ref
-            ),
-            window_end=_time(
-                parse_utc((watch or {}).get("window_end")), SOURCE_ENTRY_WATCH, line_ref
-            ),
-            touched_at=_time(
-                parse_utc(touched[-1].get("touch_ts")) if touched else None,
-                SOURCE_ENTRY_WATCH,
-                "line:entry_trails:touched",
-            ),
-            touch_price=_num(
-                _finite(touched[-1].get("touch_price")) if touched else None,
-                _price_unit(currency),
-                SOURCE_ENTRY_WATCH,
-                "line:entry_trails:touched",
-            ),
-            trigger_order_id=None,
-            armed_at=_null(NULL_OFFLINE, None, SOURCE_AUDIT),
-            terminal=TERMINAL_OPEN,
-            terminal_at=_null(NULL_NOT_JOURNALED, None, SOURCE_ENTRY_WATCH),
-            terminal_at_source=None,
-            fill=None,
+        _warn_uncertain_fold(pick, crid, duplicated_crids, offline=offline)
+        tier = _journal_tier(
+            pick, crid, watch, touched, _tier_index_for(watch, crid, pick.crid_prefix)
         )
         journal_order_ids = [str(r["order_id"]) for r in fired if r.get("order_id")]
         if state is not None and state.armed_order_id:
@@ -1441,6 +1512,32 @@ def _offline_tier(
     tier.fill = fill
 
 
+#: The terminal word each audit status means. ONE table for both tier paths, which
+#: spelled it inline and differently: the bracket path omitted ``Fill``. That key is
+#: reachable only through ``_broker_tier``'s partial-fill fallback, because
+#: ``_Order.terminal_row`` returns only ``FinalFill`` / ``Cancelled`` / ``Expired``, so
+#: merging the two changes no outcome - and it removes the KeyError the bracket path
+#: would raise the day a partial fallback is added there too.
+_TERMINAL_BY_AUDIT_STATUS: Mapping[str, str] = {
+    _STATUS_FINAL_FILL: TERMINAL_FILLED,
+    _STATUS_FILL: TERMINAL_FILLED,
+    _STATUS_CANCELLED: TERMINAL_CANCELLED,
+    _STATUS_EXPIRED: TERMINAL_EXPIRED,
+}
+
+
+def _apply_audit_terminal(tier: _Tier, terminal_row: OrderActivity, order_ref: str) -> None:
+    """Stamp one tier's terminal state from the audit row that ended it.
+
+    Only the three assignments both tier paths share. Whether a missing row means
+    ``TERMINAL_OPEN`` and whether a partial fill may stand in for one are decisions
+    the two paths make DIFFERENTLY, so they stay at their call sites.
+    """
+    tier.terminal = _TERMINAL_BY_AUDIT_STATUS[terminal_row.status]
+    tier.terminal_at = _time(terminal_row.activity_time, SOURCE_AUDIT, order_ref)
+    tier.terminal_at_source = SOURCE_AUDIT
+
+
 def _broker_tier(
     pick: _Pick,
     tier: _Tier,
@@ -1498,14 +1595,7 @@ def _broker_tier(
     if terminal_row is None:
         tier.terminal = TERMINAL_OPEN
     else:
-        tier.terminal = {
-            _STATUS_FINAL_FILL: TERMINAL_FILLED,
-            _STATUS_FILL: TERMINAL_FILLED,
-            _STATUS_CANCELLED: TERMINAL_CANCELLED,
-            _STATUS_EXPIRED: TERMINAL_EXPIRED,
-        }[terminal_row.status]
-        tier.terminal_at = _time(terminal_row.activity_time, SOURCE_AUDIT, order_ref)
-        tier.terminal_at_source = SOURCE_AUDIT
+        _apply_audit_terminal(tier, terminal_row, order_ref)
     fill = _venue_fill(trigger, venue, pick, currency=pick.instrument_currency)
     if fill is None:
         return
@@ -1601,15 +1691,7 @@ def _build_bracket_tiers(pick: _Pick, venue: _Venue | None) -> None:
                         )
                     terminal_row = order.terminal_row()
                     if terminal_row is not None:
-                        tier.terminal = {
-                            _STATUS_FINAL_FILL: TERMINAL_FILLED,
-                            _STATUS_CANCELLED: TERMINAL_CANCELLED,
-                            _STATUS_EXPIRED: TERMINAL_EXPIRED,
-                        }[terminal_row.status]
-                        tier.terminal_at = _time(
-                            terminal_row.activity_time, SOURCE_AUDIT, f"order:{order_id}"
-                        )
-                        tier.terminal_at_source = SOURCE_AUDIT
+                        _apply_audit_terminal(tier, terminal_row, f"order:{order_id}")
                     tier.fill = _venue_fill(order, venue, pick, currency=pick.instrument_currency)
                     if tier.fill is not None:
                         pick.uic = pick.uic or tier.fill.uic
@@ -1670,6 +1752,33 @@ def _audit_found_tiers(pick: _Pick, venue: _Venue) -> None:
 # --- Pick context from submissions and stops ----------------------------------
 
 
+#: The three fx members a submission line can carry, and the key each is read from.
+_FX_MEMBER_KEYS = (("rate", "fx_rate"), ("bid", "fx_rate_bid"), ("ask", "fx_rate_ask"))
+
+
+def _absorb_submission_fx(pick: _Pick, record: Mapping[str, Any]) -> None:
+    """Fill the fx members a pick still lacks, from one submission record.
+
+    First writer wins here too, so a rate already read from a more authoritative
+    line stays. ``asof`` and ``source`` are separate because they are not rates:
+    one is a timestamp and one is a string.
+    """
+    ref = "line:submissions:fx_rate"
+    for name, key_name in _FX_MEMBER_KEYS:
+        if name not in pick.sizing_fx and _finite(record.get(key_name)) is not None:
+            pick.sizing_fx[name] = _num(
+                _finite(record.get(key_name)), None, SOURCE_SUBMISSIONS, ref
+            )
+    if "asof" not in pick.sizing_fx and parse_utc(record.get("fx_rate_asof")):
+        pick.sizing_fx["asof"] = _time(
+            parse_utc(record.get("fx_rate_asof")), SOURCE_SUBMISSIONS, ref
+        )
+    if "source" not in pick.sizing_fx and record.get("fx_rate_source"):
+        pick.sizing_fx["source"] = Measured(
+            str(record["fx_rate_source"]), None, SOURCE_SUBMISSIONS, ref
+        )
+
+
 def _attach_submissions(picks: Sequence[_Pick], records: Sequence[Mapping[str, Any]]) -> None:
     by_key: dict[tuple[str, str], list[_Pick]] = defaultdict(list)
     for pick in picks:
@@ -1680,32 +1789,8 @@ def _attach_submissions(picks: Sequence[_Pick], records: Sequence[Mapping[str, A
             continue
         for pick in by_key.get(key, []):
             pick.submissions.append(record)
-            pick.uic = pick.uic or _int_or_none(record.get("uic"))
-            pick.exchange_mic = pick.exchange_mic or _str_or_none(record.get("mic"))
-            pick.instrument_currency = pick.instrument_currency or _str_or_none(
-                record.get("instrument_currency")
-            )
-            pick.sizing_currency = pick.sizing_currency or _str_or_none(
-                record.get("sizing_currency")
-            )
-            ref = "line:submissions:fx_rate"
-            for name, key_name in (
-                ("rate", "fx_rate"),
-                ("bid", "fx_rate_bid"),
-                ("ask", "fx_rate_ask"),
-            ):
-                if name not in pick.sizing_fx and _finite(record.get(key_name)) is not None:
-                    pick.sizing_fx[name] = _num(
-                        _finite(record.get(key_name)), None, SOURCE_SUBMISSIONS, ref
-                    )
-            if "asof" not in pick.sizing_fx and parse_utc(record.get("fx_rate_asof")):
-                pick.sizing_fx["asof"] = _time(
-                    parse_utc(record.get("fx_rate_asof")), SOURCE_SUBMISSIONS, ref
-                )
-            if "source" not in pick.sizing_fx and record.get("fx_rate_source"):
-                pick.sizing_fx["source"] = Measured(
-                    str(record["fx_rate_source"]), None, SOURCE_SUBMISSIONS, ref
-                )
+            _absorb_instrument_fields(pick, record, mic_key="mic")
+            _absorb_submission_fx(pick, record)
 
 
 # --- Stop journal facts -------------------------------------------------------
@@ -1723,7 +1808,41 @@ class _StopFacts:
     planned_by_pick: dict[str, Mapping[str, Any]]
 
 
+def _index_stop_placed(
+    record: Mapping[str, Any],
+    placed_by_order: dict[str, Mapping[str, Any]],
+    placed_by_ref: dict[str, list[Mapping[str, Any]]],
+) -> None:
+    """File one ``stop_placed`` line under both keys it can be found by."""
+    if record.get("order_id"):
+        placed_by_order[str(record["order_id"])] = record
+    if record.get("ref"):
+        placed_by_ref[str(record["ref"])].append(record)
+
+
+def _plan_owner_key(record: Mapping[str, Any]) -> str | None:
+    """The pick a ``tranche_plan`` line hands the uic to, or None for nobody."""
+    key = record.get("pick_key")
+    return None if key is None else str(key)
+
+
+def _governing_key(governing: Mapping[int, str | None], uic: int | None) -> str | None:
+    """Who governs this uic right now, with no uic meaning nobody."""
+    return None if uic is None else governing.get(uic)
+
+
 def _read_stop_facts(records: Sequence[Mapping[str, Any]]) -> _StopFacts:
+    """Every fact the stop journal carries, in ONE pass over the records.
+
+    One pass is load-bearing and must stay one: ``governing`` is mutated by the
+    ``tranche_plan`` / ``tranche_plan_retracted`` arms and READ by the
+    ``tranche_fired`` arm, in record order, so splitting the chain into two loops
+    would change which pick a fired tranche is attributed to.
+
+    The three helpers above exist only to keep the nested work out of the chain -
+    Sonar charges a construct inside an ``elif`` body for its depth, and the chain
+    is seven arms long.
+    """
     placed_by_order: dict[str, Mapping[str, Any]] = {}
     placed_by_ref: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
     stop_fills: list[Mapping[str, Any]] = []
@@ -1735,21 +1854,17 @@ def _read_stop_facts(records: Sequence[Mapping[str, Any]]) -> _StopFacts:
         kind = record.get("kind")
         uic = _int_or_none(record.get("uic"))
         if kind == "stop_placed":
-            if record.get("order_id"):
-                placed_by_order[str(record["order_id"])] = record
-            if record.get("ref"):
-                placed_by_ref[str(record["ref"])].append(record)
+            _index_stop_placed(record, placed_by_order, placed_by_ref)
         elif kind == "stop_filled":
             stop_fills.append(record)
         elif kind in ("trailed", "reanchored") and uic is not None:
             markers[uic].append(record)
         elif kind == "tranche_plan" and uic is not None:
-            key = record.get("pick_key")
-            governing[uic] = None if key is None else str(key)
+            governing[uic] = _plan_owner_key(record)
         elif kind == "tranche_plan_retracted" and uic is not None:
             governing.pop(uic, None)
         elif kind == "tranche_fired":
-            tranche_fired.append((record, governing.get(uic) if uic is not None else None))
+            tranche_fired.append((record, _governing_key(governing, uic)))
         elif kind == "planned" and record.get("pick_key"):
             planned_by_pick.setdefault(str(record["pick_key"]), record)
     return _StopFacts(
@@ -1778,6 +1893,62 @@ def _owner_by_key(picks_by_key: Mapping[str, _Pick], key: str | None) -> _Pick |
     return None if key is None else picks_by_key.get(key)
 
 
+def _bracket_child_kind(order: _Order) -> str:
+    """Which leg of a bracket this child order is, by its placed order type."""
+    return "stop" if (order.placed_order_type or "") in _STOP_ORDER_TYPES else "tp"
+
+
+def _oco_ownership(
+    oco: re.Match[str],
+    *,
+    picks_on_uic: Sequence[_Pick],
+    bracket_requests: Mapping[str, _Pick],
+) -> _Ownership | None:
+    """The pick an OCO leg belongs to, or None when no pick claims its request.
+
+    The ``next(...)`` generator is kept verbatim rather than unrolled into a loop
+    with a trailing ``return None``: the unrolled form adds a line that only runs
+    in the no-match case, which nothing exercises.
+    """
+    request = oco.group("request")
+    owner = bracket_requests.get(request) or next(
+        (
+            p
+            for p in picks_on_uic
+            if request.startswith(p.crid_prefix) or any(request.startswith(t.crid) for t in p.tiers)
+        ),
+        None,
+    )
+    if owner is None:
+        return None
+    kind = "stop" if oco.group("leg") == "stop" else "tp"
+    return _Ownership(owner, ATTRIBUTION_EXTERNAL_REFERENCE, kind)
+
+
+def _tp_ownership(
+    order: _Order,
+    tp_match: re.Match[str],
+    *,
+    picks_by_key: Mapping[str, _Pick],
+    tp_tie: Mapping[str, str | None],
+) -> _Ownership:
+    """A take-profit leg's owner: the keeper's tie if it has one, else the uic rule."""
+    label = tp_label_from_tag(f"tp{tp_match.group(1)}")
+    tied = _owner_by_key(picks_by_key, tp_tie.get(order.order_id))
+    if tied is not None:
+        return _Ownership(
+            tied,
+            ATTRIBUTION_JOURNAL_TIE,
+            "tp",
+            tp_label=label,
+            evidence=[f"keeper:tranche_fired sell_order_id={order.order_id}"],
+        )
+    # The uic rule is applied at allocation time, when open lots are known.
+    return _Ownership(
+        None, ATTRIBUTION_EXTERNAL_REFERENCE, "tp", tp_label=label, evidence=["uic_rule"]
+    )
+
+
 def _resolve_ownership(
     order: _Order,
     *,
@@ -1789,8 +1960,11 @@ def _resolve_ownership(
 ) -> _Ownership:
     reference = order.reference
     if order.order_id in bracket_children:
-        kind = "stop" if (order.placed_order_type or "") in _STOP_ORDER_TYPES else "tp"
-        return _Ownership(bracket_children[order.order_id], ATTRIBUTION_JOURNAL_TIE, kind)
+        return _Ownership(
+            bracket_children[order.order_id],
+            ATTRIBUTION_JOURNAL_TIE,
+            _bracket_child_kind(order),
+        )
     if not reference:
         return _Ownership(None, None, "manual", evidence=["no_external_reference"])
     if _STOP_REF_RE.search(reference):
@@ -1804,36 +1978,13 @@ def _resolve_ownership(
         )
     oco = _OCO_LEG_RE.match(reference)
     if oco:
-        request = oco.group("request")
-        owner = bracket_requests.get(request) or next(
-            (
-                p
-                for p in picks_on_uic
-                if request.startswith(p.crid_prefix)
-                or any(request.startswith(t.crid) for t in p.tiers)
-            ),
-            None,
-        )
-        if owner is not None:
-            kind = "stop" if oco.group("leg") == "stop" else "tp"
-            return _Ownership(owner, ATTRIBUTION_EXTERNAL_REFERENCE, kind)
+        found = _oco_ownership(oco, picks_on_uic=picks_on_uic, bracket_requests=bracket_requests)
+        if found is not None:
+            return found
     uic_tp = _UIC_TP_REF_RE.match(reference)
     tp_match = _TP_REF_RE.search(reference)
     if uic_tp and tp_match and _int_or_none(uic_tp.group("uic")) == order.uic:
-        label = tp_label_from_tag(f"tp{tp_match.group(1)}")
-        tied = _owner_by_key(picks_by_key, tp_tie.get(order.order_id))
-        if tied is not None:
-            return _Ownership(
-                tied,
-                ATTRIBUTION_JOURNAL_TIE,
-                "tp",
-                tp_label=label,
-                evidence=[f"keeper:tranche_fired sell_order_id={order.order_id}"],
-            )
-        # The uic rule is applied at allocation time, when open lots are known.
-        return _Ownership(
-            None, ATTRIBUTION_EXTERNAL_REFERENCE, "tp", tp_label=label, evidence=["uic_rule"]
-        )
+        return _tp_ownership(order, tp_match, picks_by_key=picks_by_key, tp_tie=tp_tie)
     return _Ownership(None, None, "unknown", evidence=[f"unclaimed_reference:{reference}"])
 
 
@@ -1920,6 +2071,27 @@ class _ClosingEvent:
     stop_level: Measured
 
 
+def _is_prior_rejected_attempt(
+    other: _Order, order: _Order, fill_time: dt.datetime | None, since: dt.datetime | None
+) -> bool:
+    """Is ``other`` a comparable earlier rejected attempt at the same order?
+
+    Four stacked guards decided one thing, so the one thing gets a name. Same uic
+    and side, rejected, carrying no reference of its own, and timestamped inside
+    the window that ends at this fill.
+    """
+    if other.order_id == order.order_id or other.uic != order.uic or other.reference:
+        return False
+    if not other.rejected or other.buy_sell != order.buy_sell:
+        return False
+    when = other.rows[0].activity_time
+    if when is None:
+        return False
+    if fill_time is not None and when > fill_time:
+        return False
+    return since is None or when >= since
+
+
 def _rejected_attempt_evidence(
     order: _Order, venue: _Venue, since: dt.datetime | None
 ) -> list[str]:
@@ -1927,14 +2099,7 @@ def _rejected_attempt_evidence(
     evidence: list[str] = []
     fill_time = order.final_fill.activity_time if order.final_fill else None
     for other in venue.orders.values():
-        if other.order_id == order.order_id or other.uic != order.uic or other.reference:
-            continue
-        if not other.rejected or other.buy_sell != order.buy_sell:
-            continue
-        when = other.rows[0].activity_time
-        if when is None or (fill_time is not None and when > fill_time):
-            continue
-        if since is not None and when < since:
+        if not _is_prior_rejected_attempt(other, order, fill_time, since):
             continue
         text = f"rejected:{other.order_id}"
         if other.related_position_id:
@@ -2831,7 +2996,7 @@ def _render_outcome(
 # --- Record assembly ----------------------------------------------------------
 
 
-def _instrument(pick: _Pick, offline: bool) -> dict[str, Any]:
+def _instrument(pick: _Pick) -> dict[str, Any]:
     def member(value: Any, source: str) -> dict[str, Any]:
         if value is None:
             return _null(NULL_NOT_JOURNALED, None, source).to_dict()
@@ -2906,7 +3071,7 @@ def _record(
         "plan_source": _plan_source(plan),
         "plan_disaster_stop": denominator.to_dict(),
         "placed_stop": _placed_stop(pick, venue, stop_facts, state).to_dict(),
-        "instrument": _instrument(pick, offline),
+        "instrument": _instrument(pick),
         "sizing_fx": _sizing_fx(pick),
         "side": side,
         "entries": [
@@ -2933,6 +3098,36 @@ def _tp_plan_level(pick: _Pick, tp_label: str | None) -> tuple[int, float] | Non
     return None if level is None else (index, level)
 
 
+def _check_one_take_profit(
+    pick: _Pick, exit_: _Exit, venue: _Venue | None, side: str | None
+) -> None:
+    """Name one take-profit exit's plan level, and warn if the fill was worse.
+
+    The ``venue is None`` test stays INSIDE the loop body and is not hoisted to an
+    early return in the caller. Offline the evidence string is still appended to
+    every take-profit exit and only the WARNING is skipped for lack of a tick; an
+    early return would silently drop that evidence from every offline record.
+    """
+    found = _tp_plan_level(pick, exit_.tp_label)
+    if found is None:
+        return
+    index, level = found
+    evidence = f"plan:spec.tp_tranches[{index}].price {level:g}"
+    if evidence not in exit_.evidence:
+        exit_.evidence.append(evidence)
+    price = exit_.fill.price.value
+    tick = None if venue is None else venue.tick(pick.uic, level)
+    if price is None or tick is None or side is None:
+        return
+    worse = level - float(price) if side == "long" else float(price) - level
+    if worse > tick + _FLOAT_TOLERANCE:
+        pick.warn(
+            W_EXIT_OFF_PLAN_LEVEL,
+            f"order {exit_.fill.order_id}: {exit_.tp_label} filled at {float(price):g}, "
+            f"worse than the plan level {level:g} by more than one tick",
+        )
+
+
 def _check_take_profit_levels(pick: _Pick, venue: _Venue | None) -> None:
     """Name the plan level of every take-profit exit, and warn when the fill
     was WORSE than it by more than one tick (§4.4).
@@ -2944,26 +3139,27 @@ def _check_take_profit_levels(pick: _Pick, venue: _Venue | None) -> None:
     limit price improvement and is not flagged. Offline there is no tick."""
     side = _plan_side(pick.plan)
     for exit_ in pick.exits:
-        if exit_.reason != REASON_TAKE_PROFIT:
-            continue
-        found = _tp_plan_level(pick, exit_.tp_label)
-        if found is None:
-            continue
-        index, level = found
-        evidence = f"plan:spec.tp_tranches[{index}].price {level:g}"
-        if evidence not in exit_.evidence:
-            exit_.evidence.append(evidence)
-        price = exit_.fill.price.value
-        tick = None if venue is None else venue.tick(pick.uic, level)
-        if price is None or tick is None or side is None:
-            continue
-        worse = level - float(price) if side == "long" else float(price) - level
-        if worse > tick + _FLOAT_TOLERANCE:
-            pick.warn(
-                W_EXIT_OFF_PLAN_LEVEL,
-                f"order {exit_.fill.order_id}: {exit_.tp_label} filled at {float(price):g}, "
-                f"worse than the plan level {level:g} by more than one tick",
-            )
+        if exit_.reason == REASON_TAKE_PROFIT:
+            _check_one_take_profit(pick, exit_, venue, side)
+
+
+def _exit_exclusions(pick: _Pick) -> set[str]:
+    """The exclusions this pick's EXITS carry, on their own.
+
+    Why each one excludes a record is on :func:`_replay_exclusions`, which owns the
+    whole answer; this only finds the exit-shaped half of it.
+    """
+    found: set[str] = set()
+    for exit_ in pick.exits:
+        if exit_.reason == REASON_MANUAL_CLOSE:
+            found.add(EXCLUDE_MANUAL_CLOSE)
+        elif exit_.reason == REASON_UNKNOWN:
+            found.add(EXCLUDE_UNKNOWN_EXIT)
+        elif exit_.reason is None:
+            found.add(EXCLUDE_EXIT_REASON_NULL)
+        if exit_.attributed_qty.value is None:
+            found.add(EXCLUDE_AMBIGUOUS)
+    return found
 
 
 def _replay_exclusions(
@@ -2995,15 +3191,7 @@ def _replay_exclusions(
         state == STATE_NEVER_FILLED and state_reason == REASON_PENDING
     ):
         found.add(EXCLUDE_NOT_FINAL)
-    for exit_ in pick.exits:
-        if exit_.reason == REASON_MANUAL_CLOSE:
-            found.add(EXCLUDE_MANUAL_CLOSE)
-        elif exit_.reason == REASON_UNKNOWN:
-            found.add(EXCLUDE_UNKNOWN_EXIT)
-        elif exit_.reason is None:
-            found.add(EXCLUDE_EXIT_REASON_NULL)
-        if exit_.attributed_qty.value is None:
-            found.add(EXCLUDE_AMBIGUOUS)
+    found |= _exit_exclusions(pick)
     if pick.ambiguous:
         found.add(EXCLUDE_AMBIGUOUS)
     if any(tier.path == PATH_NOW_BRACKET for tier in pick.tiers):

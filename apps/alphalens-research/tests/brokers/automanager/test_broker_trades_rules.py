@@ -11,7 +11,11 @@ from __future__ import annotations
 import datetime as dt
 import json
 import shutil
+import unittest
 from typing import Any
+
+from alphalens_pipeline.brokers.automanager import trades
+from alphalens_pipeline.brokers.fill_history import OrderActivity
 
 from tests.brokers.automanager.test_broker_trades import (
     LULU_G2,
@@ -978,3 +982,106 @@ class TakeProfitAgainstThePlanLevel(_TradesCase):
                         for e in exit_["reason_evidence"]
                     )
                 )
+
+
+def _activity(**over: Any) -> OrderActivity:
+    """One audit row, with every field defaulted so a test states only what it means."""
+    fields: dict[str, Any] = {
+        "order_id": "o1",
+        "external_reference": None,
+        "uic": 111,
+        "buy_sell": "Sell",
+        "order_type": "Limit",
+        "status": "Placed",
+        "sub_status": None,
+        "price": None,
+        "activity_time": dt.datetime(2026, 9, 4, 14, 0, tzinfo=dt.UTC),
+        "amount": None,
+        "filled_amount": None,
+        "execution_price": None,
+        "average_price": None,
+        "position_id": None,
+        "related_position_id": None,
+        "log_id": None,
+    }
+    fields.update(over)
+    return OrderActivity(**fields)
+
+
+class ExtractedGuards(unittest.TestCase):
+    """The guard arms of the helpers the complexity split created.
+
+    Each is a fallback the whole-record tests never reach, because those build
+    records where the happy path holds. A guard moving into a new helper arrives
+    with its old call site's coverage and nothing asserting its own answer, so it
+    is pinned here directly - which is what extracting it to module level makes
+    possible.
+    """
+
+    def test_a_tier_with_no_watch_line_takes_its_index_from_the_crid(self):
+        """`_tier_index_for`'s fallback: the crid's trailing digits, and 0 when it
+        carries none."""
+        self.assertEqual(trades._tier_index_for(None, "AMBA-20260904-e2", "AMBA-20260904-e"), 2)
+        self.assertEqual(trades._tier_index_for({}, "AMBA-20260904-e2", "AMBA-20260904-e"), 2)
+        self.assertEqual(trades._tier_index_for(None, "unrelated", "AMBA-20260904-e"), 0)
+
+    def test_a_watch_line_that_states_an_index_wins_over_the_crid(self):
+        """The control: without it the test above would pass on a helper that always
+        read the crid."""
+        self.assertEqual(
+            trades._tier_index_for({"tier_index": 7}, "AMBA-20260904-e2", "AMBA-20260904-e"), 7
+        )
+
+    def test_an_oco_leg_no_pick_claims_resolves_to_nobody(self):
+        """`_oco_ownership` answers None rather than guessing, which is what lets the
+        caller fall through to the next reference rule instead of mis-attributing."""
+        oco = trades._OCO_LEG_RE.match("NOBODY-20260101-e1-stop")
+        assert oco is not None
+        self.assertIsNone(trades._oco_ownership(oco, picks_on_uic=[], bracket_requests={}))
+
+    def test_the_rejected_attempt_predicate_refuses_what_is_not_one(self):
+        """`_is_prior_rejected_attempt` decides which rejected orders count as
+        evidence of an earlier attempt at the same order. Each `False` below is a
+        separate reason, and the final `True` is the control."""
+        rejected = {"status": "Placed", "sub_status": "Rejected"}
+        order = trades._Order("o1", [_activity(order_id="o1", **rejected)])
+        same = trades._Order("o1", [_activity(order_id="o1", **rejected)])
+        other_uic = trades._Order("o2", [_activity(order_id="o2", uic=222, **rejected)])
+        has_ref = trades._Order(
+            "o3", [_activity(order_id="o3", external_reference="ref", **rejected)]
+        )
+        not_rejected = trades._Order("o4", [_activity(order_id="o4", status="Placed")])
+        genuine = trades._Order("o5", [_activity(order_id="o5", **rejected)])
+
+        def prior(other: Any) -> bool:
+            return trades._is_prior_rejected_attempt(other, order, None, None)
+
+        self.assertFalse(prior(same), "an order is not its own earlier attempt")
+        self.assertFalse(prior(other_uic), "a different instrument is not evidence")
+        self.assertFalse(prior(has_ref), "an order carrying its own reference is claimed")
+        self.assertFalse(prior(not_rejected), "an order that was not rejected is not an attempt")
+        self.assertTrue(prior(genuine))
+
+    def test_a_rejected_attempt_outside_the_window_does_not_count(self):
+        """The two time bounds, which the four identity guards do not reach."""
+        rejected = {"status": "Placed", "sub_status": "Rejected"}
+        early = dt.datetime(2026, 9, 4, 13, 0, tzinfo=dt.UTC)
+        late = dt.datetime(2026, 9, 4, 15, 0, tzinfo=dt.UTC)
+        order = trades._Order("o1", [_activity(order_id="o1", **rejected)])
+        other = trades._Order("o2", [_activity(order_id="o2", activity_time=late, **rejected)])
+        self.assertFalse(
+            trades._is_prior_rejected_attempt(other, order, early, None),
+            "an attempt AFTER the fill is not a prior attempt",
+        )
+        self.assertFalse(
+            trades._is_prior_rejected_attempt(
+                other, order, None, dt.datetime(2026, 9, 5, tzinfo=dt.UTC)
+            ),
+            "an attempt before the window opens is out of scope",
+        )
+        self.assertTrue(trades._is_prior_rejected_attempt(other, order, None, early))
+        no_time = trades._Order("o3", [_activity(order_id="o3", activity_time=None, **rejected)])
+        self.assertFalse(
+            trades._is_prior_rejected_attempt(no_time, order, None, None),
+            "an undated attempt cannot be placed in the window",
+        )

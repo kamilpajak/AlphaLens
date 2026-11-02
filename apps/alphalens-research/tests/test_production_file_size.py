@@ -357,7 +357,20 @@ BASELINE: dict[str, int] = {
     # ``control_loop.py`` entry above records an earlier attempt that counted from a
     # diff and shipped this gate red.
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1407,
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3302,
+    # +188 for the first half of this file's SonarCloud complexity cleanup: eight of
+    # its sixteen python:S3776 functions, cleared by naming the block each one's
+    # surplus sat in. Nineteen new module-level helpers and their docstrings; the
+    # logic is moved, not added, and two of the helpers REPLACE duplication rather
+    # than adding any (`_absorb_instrument_fields` served two readers that carried
+    # the same four lines, `_TERMINAL_BY_AUDIT_STATUS` two inline dicts that had
+    # drifted apart). Counted with ``wc -l`` on the merged file, not from the diff.
+    #
+    # Worth stating plainly: at 3490 lines against a 1000 ceiling this is the largest
+    # file in the repo and the growth is going the wrong way. It has a clear seam -
+    # the design memo it implements is sectioned, and the module follows those
+    # sections - but splitting it moves names that six test modules import directly,
+    # so it is its own issue and not a rider on a complexity pass.
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/trades.py": 3490,
     # Raised from 2416 for #1689's account-cash capability. The room goes to
     # ONE method, ``list_account_cash``: the SIM refusal, the two key
     # resolutions and the delegate. The read body itself is a separate module
