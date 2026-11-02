@@ -107,11 +107,15 @@
 	// Open the "more" disclosure so the residual drawer is visible for review.
 	// The assertion is on a DRAWER-ONLY cell: the unvalidated caption is now
 	// always on screen, so waiting for it would pass before the click and prove
-	// nothing.
-	const openMore = async ({ canvas }: { canvas: any }) => {
-		canvas.getByRole('button', { name: /more/i }).click();
-		await waitFor(() => expect(canvas.getByText(/vix %ile/i)).toBeTruthy());
-	};
+	// nothing. WHICH cell is a parameter because the drawer holds two on
+	// 2026-09-05 and one on the no-VIX-print shape, and `vix %ile` is exactly
+	// the cell the one-cell shape does not have.
+	const openMoreShowing =
+		(cell: RegExp) =>
+		async ({ canvas }: { canvas: any }) => {
+			canvas.getByRole('button', { name: /more/i }).click();
+			await waitFor(() => expect(canvas.getByText(cell)).toBeTruthy());
+		};
 
 	// The counterpart assertion: on a date with no residual the toggle must not
 	// exist at all. `queryByRole` returns null instead of throwing, which is the
@@ -208,9 +212,27 @@
 
 <!-- The residual drawer expanded: vix %ile + squeeze. The promoted drivers are
      NOT repeated in it, and the unvalidated caption is no longer inside it — it
-     sits below the drawer and renders on every date. -->
+     sits below the drawer and renders on every date.
+
+     Read the two pairs: each term sits immediately beside its value. The drawer
+     used to be a `grid-cols-2 sm:grid-cols-4` of `justify-between` cells, sized
+     for four residual cells that no longer exist, so each term was pinned to the
+     left edge of a quarter-width column and its value to the right edge. -->
 <Story
 	name="drawer expanded"
 	args={{ ...fromFixture, ...MEASURED_RET5 }}
-	play={openMore}
+	play={openMoreShowing(/vix %ile/i)}
+/>
+
+<!-- THE DRAWER WITH ONE CELL, which is the shape the old grid stretched worst:
+     a lone pair spread across a quarter of the strip. `residualCells` returns
+     one cell whenever only `vix_decile` or only `squeeze_on` resolved, and
+     DRIVERS_WITHOUT_LABEL is exactly that — the no-VIX-print capture has no
+     `vix_decile`, so `squeeze` is alone in the drawer. Same real 2026-09-05
+     values as the story above; nothing new is invented. It must read exactly
+     like the two-cell drawer. -->
+<Story
+	name="drawer expanded — one residual cell"
+	args={DRIVERS_WITHOUT_LABEL}
+	play={openMoreShowing(/squeeze/i)}
 />

@@ -267,9 +267,14 @@
 						<div class="grid grid-cols-12 items-center gap-2 text-[11px]">
 							<div class="col-span-4 text-fg uppercase truncate" title={bar.theme}>{bar.theme}</div>
 							<div class="col-span-7 h-2 bg-bg-2 relative overflow-hidden">
+								<!-- `fade-up` as a class plus `animation-delay`, like every other
+								     staggered entrance here. The `animation` shorthand written
+								     inline, as this was, beats any author stylesheet rule that is
+								     not `!important`, so the reduced-motion block in `app.css`
+								     could not reach it. -->
 								<div
-									class="absolute inset-y-0 left-0 bg-amber"
-									style="width: {bar.pct}%; animation: fade-up 0.5s ease-out {0.05 * i}s backwards"
+									class="absolute inset-y-0 left-0 bg-amber fade-up"
+									style="width: {bar.pct}%; animation-delay: {0.05 * i}s"
 								></div>
 							</div>
 							<div class="col-span-1 text-right text-cyan font-bold">{bar.count}</div>

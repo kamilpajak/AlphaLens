@@ -155,20 +155,38 @@ body {
 	animation: blink 1.2s steps(1) infinite;
 }
 
-@keyframes ticker {
-	from { transform: translateX(0); }
-	to { transform: translateX(-50%); }
-}
-.ticker-track {
-	animation: ticker 60s linear infinite;
-}
-
 @keyframes fade-up {
 	from { opacity: 0; transform: translateY(8px); }
 	to { opacity: 1; transform: translateY(0); }
 }
 .fade-up {
 	animation: fade-up 0.45s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+
+/* Honour `prefers-reduced-motion: reduce`. UNLAYERED on purpose: the two
+   animation rules above are unlayered too, and a rule inside `@layer base`
+   cannot override one outside it.
+
+   Both animations go entirely rather than being shortened, because neither
+   carries information:
+   - `fade-up` is a decorative 0.45s entrance with an 8px slide. `animation:
+     none` also drops the `backwards` fill, so the element renders in its
+     final state instead of staying at opacity 0.
+   - `blink` is an infinite 1.2s opacity toggle on the MarketSession open-state
+     dot. The open branch names the state in words — "live" in green — beside a
+     green dot, and the closed branch reads "closed" beside a grey one, so
+     trading state never rested on the motion. The "closes in" countdown is NOT
+     a third cue to lean on: it is `hidden lg:inline`, so below 1024px only the
+     word and the dot colour remain.
+     WCAG 2.2.2 asks for any blink over five seconds to be stoppable, and this
+     one never stops. Stopping it here settles that only for visitors who set
+     the preference; the default visitor still gets the infinite flash, so
+     2.2.2 is not met by this rule alone. */
+@media (prefers-reduced-motion: reduce) {
+	.fade-up,
+	.blink {
+		animation: none;
+	}
 }
 
 .corners {

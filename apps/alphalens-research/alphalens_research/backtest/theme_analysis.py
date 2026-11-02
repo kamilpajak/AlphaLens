@@ -202,20 +202,17 @@ def theme_series(
 
 def format_theme_summary(stats: ThemeSeriesStats, n_total_days: int) -> str:
     """Human-readable report for the markdown summary section."""
-    lines = []
-    lines.append(
+    lines = [
         f"Backtest window: {n_total_days} days, "
-        f"concentration threshold = {stats.concentration_threshold * 100:.0f}%"
-    )
-    lines.append(f"Mean HHI: {stats.mean_hhi:.3f} (0 = perfect diversification, 1 = single theme)")
-    lines.append(
+        f"concentration threshold = {stats.concentration_threshold * 100:.0f}%",
+        f"Mean HHI: {stats.mean_hhi:.3f} (0 = perfect diversification, 1 = single theme)",
         f"Days with max theme > {stats.concentration_threshold * 100:.0f}%: "
         f"{stats.concentration_alert_days} / {n_total_days} "
-        f"({stats.concentration_alert_days / max(n_total_days, 1) * 100:.1f}%)"
-    )
-    lines.append("")
-    lines.append("| Theme | Mean weight | Days dominant |")
-    lines.append("|---|---:|---:|")
+        f"({stats.concentration_alert_days / max(n_total_days, 1) * 100:.1f}%)",
+        "",
+        "| Theme | Mean weight | Days dominant |",
+        "|---|---:|---:|",
+    ]
     for theme in sorted(
         stats.all_themes, key=lambda t: stats.mean_weights.get(t, 0.0), reverse=True
     ):

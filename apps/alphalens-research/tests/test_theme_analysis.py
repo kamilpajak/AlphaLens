@@ -173,5 +173,83 @@ class TestSnapshotsFromBacktest(unittest.TestCase):
         self.assertAlmostEqual(snaps[0].theme_weights["quantum"], 0.5)
 
 
+class TestFormatThemeSummaryGoldenText(unittest.TestCase):
+    """The whole summary, character for character.
+
+    ``TestFormatThemeSummary`` above asserts four substrings, so the header block,
+    the blank line, the table header and the separator row are all invisible to it.
+    This pins them, which is what makes a formatting refactor of this function safe.
+    """
+
+    @staticmethod
+    def _stats(**over):
+        from alphalens_research.backtest.theme_analysis import ThemeSeriesStats
+
+        base = {
+            "all_themes": ("quantum", "ai"),
+            "mean_weights": {"quantum": 0.6, "ai": 0.4},
+            "days_dominant": {"quantum": 150, "ai": 100},
+            "mean_hhi": 0.45,
+            "concentration_alert_days": 30,
+            "concentration_threshold": 0.70,
+        }
+        base.update(over)
+        return ThemeSeriesStats(**base)
+
+    def test_the_whole_summary(self):
+        from alphalens_research.backtest.theme_analysis import format_theme_summary
+
+        self.assertEqual(
+            format_theme_summary(self._stats(), n_total_days=250),
+            "Backtest window: 250 days, concentration threshold = 70%\n"
+            "Mean HHI: 0.450 (0 = perfect diversification, 1 = single theme)\n"
+            "Days with max theme > 70%: 30 / 250 (12.0%)\n"
+            "\n"
+            "| Theme | Mean weight | Days dominant |\n"
+            "|---|---:|---:|\n"
+            "| quantum | 60.0% | 150 (60.0%) |\n"
+            "| ai | 40.0% | 100 (40.0%) |",
+        )
+
+    def test_no_themes_and_no_days_keeps_the_header_and_divides_by_one(self):
+        """The ``max(n_total_days, 1)`` guard: zero days must print 0.0%, not raise.
+        With no themes the table is a header and a separator with no rows, and the
+        output must not end in a stray newline."""
+        from alphalens_research.backtest.theme_analysis import format_theme_summary
+
+        self.assertEqual(
+            format_theme_summary(
+                self._stats(
+                    all_themes=(),
+                    mean_weights={},
+                    days_dominant={},
+                    mean_hhi=0.0,
+                    concentration_alert_days=0,
+                ),
+                n_total_days=0,
+            ),
+            "Backtest window: 0 days, concentration threshold = 70%\n"
+            "Mean HHI: 0.000 (0 = perfect diversification, 1 = single theme)\n"
+            "Days with max theme > 70%: 0 / 0 (0.0%)\n"
+            "\n"
+            "| Theme | Mean weight | Days dominant |\n"
+            "|---|---:|---:|",
+        )
+
+    def test_rows_are_ordered_by_mean_weight_descending(self):
+        from alphalens_research.backtest.theme_analysis import format_theme_summary
+
+        out = format_theme_summary(
+            self._stats(
+                all_themes=("ai", "quantum"),
+                mean_weights={"ai": 0.1, "quantum": 0.9},
+                days_dominant={"ai": 10, "quantum": 90},
+            ),
+            n_total_days=100,
+        )
+        rows = [line for line in out.splitlines() if line.startswith(("| quantum", "| ai"))]
+        self.assertEqual(rows, ["| quantum | 90.0% | 90 (90.0%) |", "| ai | 10.0% | 10 (10.0%) |"])
+
+
 if __name__ == "__main__":
     unittest.main()

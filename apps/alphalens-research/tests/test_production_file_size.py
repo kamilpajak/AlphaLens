@@ -164,7 +164,15 @@ BASELINE: dict[str, int] = {
     # mean different things by the word PLACED. The room is the note recording
     # WHY, beside the v2 note it mirrors — a bare version bump with no reason
     # written next to it is the shape that makes the next one a guess.
-    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3313,
+    # Raised by 6 for #1832, measured with `wc -l` on the merged file (3319).
+    # The drain now retires a placed immediate-only pick, so the published help
+    # could no longer explain `window_end` and `overdue` by "that pick is never
+    # retired" -- that sentence became false on the drain's side the day this
+    # landed, while the fields stayed, because the view keeps calling the narrow
+    # fold with no `immediate_only_keys`. The room says which of the two answers
+    # the view gives and that an overdue PLACED row may now be a pick the drain
+    # has finished with.
+    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3319,
     # Raised by 8: the score stage now also stamps the three raw broad-index
     # 5-session returns beside the market-state label. The room is 1 line of
     # lazy call and 7 of comment saying why the family is separate from the
@@ -321,7 +329,26 @@ BASELINE: dict[str, int] = {
     # 520.92, above its own 518.42 limit, which a resting buy limit cannot do),
     # and a line saying the DRY-RUN wording belongs to the pure engine in
     # `entry_trail_watcher.py` so it is not reintroduced here.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8136,
+    # Raised by 49 for #1832, measured with `wc -l` on the merged file (8185),
+    # not counted from the diff. Two things bought the room. The drain now hands
+    # the retirement fold the keys whose entry ladder is nothing but a now
+    # tranche, so a placed all-immediate pick leaves the queue instead of being
+    # written `expired` / "unplaced at window end" over a filled order (ten SIM
+    # keys, three LIVE picks). Most of those lines are the comment saying why
+    # the LEGACY refusal above keeps the unwidened set. The rest is
+    # `_an_order_exists_for`, which reads submissions.jsonl inside the expiry
+    # branch only so the alert can tell "nothing was placed" from "an order is
+    # already at the broker" — the second message must not invite a re-arm,
+    # because the arming door does not refuse one.
+    # Plus 8 after the adversarial review: the tick now takes `list(...)` of its
+    # own journal snapshot instead of the injected callable's word for it. This
+    # tick folds that snapshot THREE times and the placement gate is no longer
+    # the first of them, so a one-shot iterator left the LAST fold empty and
+    # every already-retired pick was placed AGAIN — reproduced against the real
+    # drain, safe on the base commit, unsafe on the first version of this one.
+    # The room is the comment saying why, because the next reader will otherwise
+    # see a redundant `list()` over something already annotated `-> list`.
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8193,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     # +24 for PR #1840, to take Sonar python:S3776 off ``select_stop_move_lines``: the
     # four skip guards move into ``_stop_move_window_ts`` with the docstring that names
@@ -350,7 +377,14 @@ BASELINE: dict[str, int] = {
     # with it (owner decision 2026-10-13, epic #1526).
     "apps/alphalens-pipeline/alphalens_pipeline/feedback/ladder_replay.py": 1917,
     "apps/alphalens-pipeline/alphalens_pipeline/feedback/population_ladder_monitor.py": 3347,
-    "apps/alphalens-pipeline/alphalens_pipeline/feedback/selection_label.py": 1354,
+    # +3 for PR #1837, to spell the `~/.alphalens` root ONCE (Sonar python:S1192
+    # flagged it four times over): one line for the `_ALPHALENS_HOME` constant and two
+    # for the note that it is module-private on purpose. Measured two ways (a grep and
+    # an AST walk over string constants, agreeing): 142 non-test modules carry that
+    # literal and 137 build the root with `Path.home()`, sharing no constant, so a
+    # repo-wide one is its own change and not a rider on this. A named constant cannot
+    # be introduced for free, so this entry moves rather than the fix being dropped.
+    "apps/alphalens-pipeline/alphalens_pipeline/feedback/selection_label.py": 1357,
     "apps/alphalens-pipeline/alphalens_pipeline/thematic/mapping/channel_assessor.py": 1267,
     "apps/alphalens-pipeline/alphalens_pipeline/thematic/mapping/orchestrator.py": 1626,
     "apps/alphalens-research/alphalens_research/eval/faithfulness.py": 1034,

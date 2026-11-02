@@ -1283,7 +1283,10 @@ class TestPlacePickBranches(IsolatedHomeTestCase):
         )
         captured: dict[str, Any] = {}
 
-        def _capture(_pick_arg: Any, journal_view: Any, _session: Any) -> Any:
+        # Two positionals, not three: the gate takes no pick (its rails are all
+        # session-wide), so a stub that still accepted one would hide a caller
+        # that kept passing it.
+        def _capture(journal_view: Any, _session: Any) -> Any:
             captured["jv"] = journal_view
             return object()
 

@@ -260,20 +260,30 @@ def format_decision_matrix(result: ValidationResult) -> str:
     hit_delta = result.accept_hit_rate - result.reject_hit_rate
 
     if delta > 0.005 and hit_delta > 0.05:
-        lines.append("**DEPLOY** — LLM reject-rate correlates with underperformance")
-        lines.append(
-            f"  (delta {delta * 100:+.2f}% AND hit-rate delta {hit_delta * 100:+.1f} p.p.)"
+        lines.extend(
+            [
+                "**DEPLOY** — LLM reject-rate correlates with underperformance",
+                f"  (delta {delta * 100:+.2f}% AND hit-rate delta {hit_delta * 100:+.1f} p.p.)",
+                "  → Integrating the 3-tier adaptive architecture is worth the cost.",
+            ]
         )
-        lines.append("  → Integrating the 3-tier adaptive architecture is worth the cost.")
     elif delta > 0.002 or hit_delta > 0.02:
-        lines.append("**ITERATE** — marginal signal, needs a larger sample or a better prompt")
-        lines.append(f"  (delta {delta * 100:+.2f}%, hit-rate delta {hit_delta * 100:+.1f} p.p.)")
-        lines.append("  → Extend the sample to 90+ days and test different scorer prompts.")
+        lines.extend(
+            [
+                "**ITERATE** — marginal signal, needs a larger sample or a better prompt",
+                f"  (delta {delta * 100:+.2f}%, hit-rate delta {hit_delta * 100:+.1f} p.p.)",
+                "  → Extend the sample to 90+ days and test different scorer prompts.",
+            ]
+        )
     else:
-        lines.append("**SKIP** — LLM does not add signal value over the rule-based scorer")
-        lines.append(f"  (delta {delta * 100:+.2f}%, hit-rate delta {hit_delta * 100:+.1f} p.p.)")
-        lines.append("  → Status quo (rule-based screener + Layer 3 post-analysis) is optimal")
-        lines.append("    for a solo retail setup. Do not integrate a pre-screening filter.")
+        lines.extend(
+            [
+                "**SKIP** — LLM does not add signal value over the rule-based scorer",
+                f"  (delta {delta * 100:+.2f}%, hit-rate delta {hit_delta * 100:+.1f} p.p.)",
+                "  → Status quo (rule-based screener + Layer 3 post-analysis) is optimal",
+                "    for a solo retail setup. Do not integrate a pre-screening filter.",
+            ]
+        )
 
     return "\n".join(lines)
 

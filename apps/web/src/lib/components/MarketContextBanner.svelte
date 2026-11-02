@@ -116,15 +116,22 @@
 	// the word printed two lines above them.
 	const labelKnown = $derived(isKnownMarketState(marketState));
 
-	// MarketStateTone → chip text class. `red-dim` is not in the shared
-	// SemanticTone vocabulary (tone.ts), so map locally — the PillarTone chips do
-	// the same. Every value is a literal class string so Tailwind keeps them.
+	// MarketStateTone → chip TEXT class, and text only. `red-dim` is not in the
+	// shared SemanticTone vocabulary (tone.ts), so map locally — the PillarTone
+	// chips do the same. Every value is a literal class string so Tailwind keeps
+	// them.
+	//
+	// Each entry used to carry a `border-*` colour as well, and none of them ever
+	// painted: the element that consumes this map has no border-width utility and
+	// no padding, so the five colours sat on a zero-width border. They are gone
+	// rather than completed, because the caption is deliberately not a pill —
+	// see the dot below.
 	const TONE_CLASS: Record<string, string> = {
-		green: 'text-green border-green',
-		amber: 'text-amber border-amber',
-		red: 'text-red border-red',
-		'red-dim': 'text-red-dim border-red-dim',
-		muted: 'text-fg-muted border-grid-strong'
+		green: 'text-green',
+		amber: 'text-amber',
+		red: 'text-red',
+		'red-dim': 'text-red-dim',
+		muted: 'text-fg-muted'
 	};
 
 	// Same shared-glossary lookup as the CandidateCard / +page tipProps helper.
@@ -176,7 +183,14 @@
 			<JargonTip {...tipProps('market context')} placement="below">
 				<span class="text-[10px] uppercase tracking-widest text-fg-muted">market context</span>
 			</JargonTip>
-			<!-- The word, demoted to a caption under the numbers it summarises. -->
+			<!-- The word, demoted to a caption under the numbers it summarises.
+			     A DOT, NOT A PILL, and on purpose. Every other tone-coloured state
+			     on this dashboard is a bordered pill (`statusPillClass`,
+			     `ExpertPillar`, `GatePill`), and this is the only `size-1.5`
+			     status dot in the SPA. The strip is header chrome and the word is
+			     a caption under the numbers that carry the information, so it must
+			     not compete with the pills inside the candidate cards below it.
+			     Reach for `statusPillClass` here only if that ordering changes. -->
 			<span
 				class="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-widest whitespace-nowrap {TONE_CLASS[
 					tone
@@ -199,7 +213,7 @@
 				{#each faceIndex as cell (cell.key)}
 					<div class="flex items-baseline gap-1.5 whitespace-nowrap">
 						<dt class="text-fg-muted uppercase tracking-widest text-[9px]">{cell.key} 5d</dt>
-						<dd class="font-mono text-fg">{cell.value}</dd>
+						<dd class="text-fg">{cell.value}</dd>
 					</div>
 				{/each}
 			</dl>
@@ -220,11 +234,22 @@
 						<!-- The flip point lives INSIDE the <dd>, not beside it: a <dl>'s
 						     <div> group may contain only <dt> and <dd>, and the annotation
 						     is part of the description anyway, so it is announced with the
-						     value instead of after it. -->
-						<dd class="font-mono text-fg flex items-baseline gap-1.5">
+						     value instead of after it.
+						     NOTHING HERE CARRIES A FONT CLASS, and that is the rule for the
+						     whole strip. `app.html` puts `font-mono` on `<body>` and
+						     `app.css` sets `var(--font-mono)` on `html, body`, so JetBrains
+						     Mono is simply the page. A `font-mono` on a `<dd>` states a
+						     contrast that does not exist — `CandidateCard.svelte` renders
+						     every number on this page without one.
+						     Written down because the opposite was shipped twice in two
+						     days: this span briefly took `font-sans`, the only one in all
+						     of `src/`, and since there is no `--font-sans` token it fell
+						     back to Tailwind's system stack — the one string on the page in
+						     a face nothing else uses. -->
+						<dd class="text-fg flex items-baseline gap-1.5">
 							{cell.value}
 							{#if cell.flip}
-								<span class="text-fg-muted text-[9px] font-sans">({cell.flip})</span>
+								<span class="text-fg-muted text-[9px]">({cell.flip})</span>
 							{/if}
 						</dd>
 					</div>
@@ -254,11 +279,41 @@
 		     not repeated here: two copies of one number twenty lines apart is a
 		     silent doubling the moment one of them is edited. -->
 		<div id="market-context-axes" class="mt-3 border-t border-grid pt-3">
-			<dl class="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1.5 text-[11px]">
+			<!-- BUILT LIKE THE TWO FACE ROWS ABOVE, not as a grid of spread cells.
+			     It used to be `grid grid-cols-2 sm:grid-cols-4` whose every cell was
+			     `justify-between`. THAT is what separated each term from its value:
+			     `justify-between` pushes the pair to the two ends of whatever width
+			     the track hands it, at any cell count — the grid did it on day one
+			     with all four cells filled (#758), not only after the drivers were
+			     promoted to the face and `residualCells` dropped to at most two.
+			     What the leftover columns changed was the SIZE of the gap, and they
+			     changed it differently by width: from 640px up, four quarter-width
+			     columns with half of them empty measured 218px between term and
+			     value; below the `sm` breakpoint the two cells filled a two-column
+			     grid and it was 75px. Either way the reader saw
+			     "VIX %ILE          76    SQUEEZE          off" — a gap wide enough to
+			     read as a column that failed to render rather than as a pair.
+			     Now each pair is its own flex group with a fixed `gap-1.5`, and the
+			     groups sit on one `gap-x-4` baseline row: the same shape as the index
+			     and driver rows, so the drawer and the face read alike. No track
+			     width is handed to a pair any more, so no cell count and no viewport
+			     can spread one again — that part is measured, by the geometry test.
+			     `whitespace-nowrap` sits on the group rather than the `<dd>` so
+			     `vix %ile` cannot break across its own space. That one is NOT
+			     measured and cannot be at any realistic width: two cells are about
+			     160px inside a 302px row at 360px, so nothing needs to break. It is
+			     here because the atomic-token rule in `apps/web/CLAUDE.md` is a
+			     review-time rule that nothing enforces, and the face rows carry it.
+			     The `<dl>` differs from theirs in one class: no `min-w-0`, which is
+			     inert while this list is the only child of a block. -->
+			<dl
+				aria-label="market context residuals"
+				class="flex items-baseline gap-x-4 gap-y-1 flex-wrap text-[11px]"
+			>
 				{#each residual as cell (cell.key)}
-					<div class="flex items-center justify-between gap-2">
+					<div class="flex items-baseline gap-1.5 whitespace-nowrap">
 						<dt class="text-fg-muted uppercase tracking-widest text-[9px]">{cell.key}</dt>
-						<dd class="font-mono text-fg whitespace-nowrap">{cell.value}</dd>
+						<dd class="text-fg">{cell.value}</dd>
 					</div>
 				{/each}
 			</dl>

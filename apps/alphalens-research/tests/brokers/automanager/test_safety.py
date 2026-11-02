@@ -29,7 +29,6 @@ class _StubSession:
     alive: bool
 
 
-_PICK = object()  # check()'s `pick` arg is vestigial — never referenced in the body
 _CLEAR_JOURNAL = JournalView(realized_r_today=0.0)
 
 
@@ -49,7 +48,6 @@ class SafetyGateTest(unittest.TestCase):
     @mock.patch.dict(os.environ, {ALLOW_ORDERS_ENV: "1"}, clear=False)
     def test_all_rails_clear_allows(self) -> None:
         d = check(
-            _PICK,
             _CLEAR_JOURNAL,
             _StubSession(alive=True),
             kill_path=self.kill,
@@ -61,7 +59,6 @@ class SafetyGateTest(unittest.TestCase):
     def test_kill_file_present_refuses_first(self) -> None:
         self.kill.write_text("stop", encoding="utf-8")
         d = check(
-            _PICK,
             _CLEAR_JOURNAL,
             _StubSession(alive=True),
             kill_path=self.kill,
@@ -76,7 +73,6 @@ class SafetyGateTest(unittest.TestCase):
         per-instance kill — defense in depth."""
         self.global_kill.write_text("halt everything", encoding="utf-8")
         d = check(
-            _PICK,
             _CLEAR_JOURNAL,
             _StubSession(alive=True),
             kill_path=self.kill,
@@ -88,7 +84,6 @@ class SafetyGateTest(unittest.TestCase):
     @mock.patch.dict(os.environ, {ALLOW_ORDERS_ENV: "1"}, clear=False)
     def test_dead_chain_refuses(self) -> None:
         d = check(
-            _PICK,
             _CLEAR_JOURNAL,
             _StubSession(alive=False),
             kill_path=self.kill,
@@ -100,7 +95,6 @@ class SafetyGateTest(unittest.TestCase):
     @mock.patch.dict(os.environ, {ALLOW_ORDERS_ENV: "0"}, clear=False)
     def test_allow_orders_not_set_refuses(self) -> None:
         d = check(
-            _PICK,
             _CLEAR_JOURNAL,
             _StubSession(alive=True),
             kill_path=self.kill,
@@ -115,7 +109,6 @@ class SafetyGateTest(unittest.TestCase):
     def test_daily_loss_limit_refuses_without_side_effects(self) -> None:
         journal = JournalView(realized_r_today=-3.5)
         d = check(
-            _PICK,
             journal,
             _StubSession(alive=True),
             kill_path=self.kill,
@@ -142,7 +135,7 @@ class SafetyGateTest(unittest.TestCase):
         against a fresh, empty temp home so neither can accidentally exist."""
         with TemporaryDirectory() as home_dir:
             with mock.patch("pathlib.Path.home", return_value=Path(home_dir)):
-                d = check(_PICK, _CLEAR_JOURNAL, _StubSession(alive=True))
+                d = check(_CLEAR_JOURNAL, _StubSession(alive=True))
         self.assertIsInstance(d, Allow)
 
 

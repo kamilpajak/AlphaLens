@@ -65,15 +65,31 @@ def _doc(
     notional: float = 2000.0,
     armed_ts: str = "2026-09-30T13:00:00+00:00",
     immediate: bool = False,
+    immediate_only: bool = False,
 ) -> TradeIntent:
-    tiers = (
-        (
+    # Three ladder shapes, and the difference between the last two is what
+    # #1832 turns on:
+    #   default        -- one pullback rung, no now tranche.
+    #   immediate      -- MIXED: one now tranche PLUS a pullback rung. This is
+    #                     the shape the #1247 retirement skip was written for:
+    #                     the drain still owes the pullback half.
+    #   immediate_only -- the whole ladder IS the now tranche, so nothing is
+    #                     left to drain once it is placed. The arming door
+    #                     allows at most ONE immediate tier
+    #                     (``validate`` violation ``immediate_tier_count``), so
+    #                     a single immediate rung is the only all-immediate
+    #                     ladder a document can carry.
+    if immediate_only:
+        tiers = (
+            EntryTierSpec(limit_price=10.0, alloc_pct=100.0, tag="T1", entry_mode="immediate"),
+        )
+    elif immediate:
+        tiers = (
             EntryTierSpec(limit_price=10.0, alloc_pct=50.0, tag="T1", entry_mode="immediate"),
             EntryTierSpec(limit_price=9.0, alloc_pct=50.0, tag="T2"),
         )
-        if immediate
-        else (EntryTierSpec(limit_price=10.0, alloc_pct=100.0, tag="T1"),)
-    )
+    else:
+        tiers = (EntryTierSpec(limit_price=10.0, alloc_pct=100.0, tag="T1"),)
     return TradeIntent(
         intent_id=f"{ticker}:{trade_date}",
         instrument=InstrumentHint(ticker=ticker, mic="XNYS"),
@@ -91,7 +107,11 @@ def _doc(
 def _plan_for(spec: Any, **_k: Any) -> SetupPlan:
     """Size the document the way the stub sizer does: $10 a share for its amount."""
     notional = float(spec.size.notional_acct)
-    if any(tier.entry_mode == "immediate" for tier in spec.entry_tiers):
+    modes = [tier.entry_mode for tier in spec.entry_tiers]
+    if modes == ["immediate"]:
+        # The all-immediate ladder: ONE sized tier, and it is the now tranche.
+        tiers = (TierPlan(0, 10.0, int(notional // 10.0), 100.0, "T1", entry_mode="immediate"),)
+    elif "immediate" in modes:
         half = int(notional / 2 // 10.0)
         tiers = (
             TierPlan(0, 10.0, half, 50.0, "T1", entry_mode="immediate"),
@@ -506,6 +526,292 @@ class ValidityWindowTest(_CapitalWaitCase):
         self.assertEqual(len(placer.alerts), 1)
 
 
+# --------------------------------------------------------------------------
+# #1832: an all-immediate pick leaves the queue once its now half is placed,
+# and an expiry that finds an order at the broker says so
+# --------------------------------------------------------------------------
+
+
+class ImmediateOnlyPickRetirementTest(_CapitalWaitCase):
+    """A pick whose only entry tier is the now tranche.
+
+    Its now record is the ONLY submission record it will ever have (#1247
+    skips exactly that record), so before #1832 nothing retired it and the
+    window check wrote ``expired`` / ``unplaced at window end`` over an order
+    that was placed and filled. Measured on the SIM journals 2026-10-30: ten
+    such keys.
+    """
+
+    def _now_record(self, intent: TradeIntent, outcome: str = "placed") -> dict[str, Any]:
+        return {
+            "ticker": str(intent.instrument.ticker).upper(),
+            "trade_date": str(intent.meta.trade_date),
+            "tranche": "now",
+            "tranche_meta": {"armed_ts": intent.meta.armed_ts, "outcome": outcome},
+            "brackets": [{"client_request_id": "rid-now", "entry": 10.0, "qty": 200}],
+        }
+
+    def _drain(
+        self,
+        placer: _Placer,
+        records: list[dict[str, Any]],
+        *,
+        ticks: int = 1,
+        one_shot: bool = False,
+    ) -> list[Any]:
+        """Run the real drain ``ticks`` times over the real pick journal.
+
+        ``one_shot`` hands the drain a generator instead of a list, which is the
+        shape that exposes whether the tick owns its journal snapshot.
+        """
+        from tests.brokers.automanager.test_control_loop import _deps, _StubBroker
+
+        calls: list[Any] = []
+
+        def _place(pick: Any) -> bool:
+            calls.append(pick)
+            return placer.place(pick)
+
+        base = _deps(
+            _StubBroker(), kill_file=self.home / "KILL", verdicts=[], place_calls=[], alerts=[]
+        )
+        deps = cl.LoopDeps(
+            **{
+                **base.__dict__,
+                "iter_picks": picks.iter_picks,
+                "place_pick": _place,
+                "read_records": (lambda: iter(records)) if one_shot else (lambda: list(records)),
+            }
+        )
+        for _tick in range(ticks):
+            cl._run_placement_drain(deps, cl.TickReport(), enabled=True)
+        return calls
+
+    def test_the_drain_owns_its_journal_snapshot(self) -> None:
+        # The tick folds `records` THREE times — the placement gate, the legacy
+        # refusal and #1832's retired set — and the gate is no longer the first
+        # of them. Handed a one-shot iterator, the LAST fold comes back empty,
+        # so every pick the journal already retires is placed AGAIN, with a
+        # fresh client_request_id per bracket that Saxo's 15 s x-request-id
+        # dedup cannot catch. `LoopDeps.read_records` is annotated `-> list`, so
+        # this pins the invariant to the drain instead of to an annotation.
+        intent = _doc(immediate_only=False)
+        picks.arm_pick(intent)
+        # A pullback record: the NARROW fold retires this key, so a drain that
+        # still sees the snapshot must place nothing.
+        records = [
+            {
+                "ticker": str(intent.instrument.ticker).upper(),
+                "trade_date": str(intent.meta.trade_date),
+                "brackets": [{"client_request_id": "rid-pullback"}],
+            }
+        ]
+        placer = _Placer(self, _RecordingBroker(), records=records)
+        self.assertEqual(
+            self._drain(placer, records, one_shot=True),
+            [],
+            "an already-retired pick was re-placed because a fold consumed the snapshot",
+        )
+
+    def test_a_placed_now_only_pick_is_never_written_expired_unplaced(self) -> None:
+        intent = _doc(immediate_only=True)
+        picks.arm_pick(intent)
+        records = [self._now_record(intent)]
+        placer = _Placer(self, _RecordingBroker(), records=records)
+        placer.now = _WINDOW_END
+
+        calls = self._drain(placer, records, ticks=2)
+
+        self.assertEqual(
+            [record.status for record in picks.read_pick_fold().records],
+            [picks.STATUS_ARMED],
+            "a pick whose order is at the broker must never be called unplaced",
+        )
+        self.assertEqual(calls, [], "its now half is placed, so the drain owes it nothing")
+        self.assertEqual(placer.alerts, [], "no page invites a second buy of an open position")
+
+    def test_a_mixed_pick_whose_now_half_placed_still_expires(self) -> None:
+        # The #1247 skip is CORRECT here: the pullback half was never placed,
+        # so the drain is not finished and the pick must still expire.
+        intent = _doc(immediate=True)
+        picks.arm_pick(intent)
+        records = [self._now_record(intent)]
+        placer = _Placer(self, _RecordingBroker(), records=records)
+        placer.now = _WINDOW_END
+
+        calls = self._drain(placer, records)
+
+        self.assertEqual(len(calls), 1, "the drain still owes its pullback half")
+        (record,) = picks.read_pick_fold().records
+        self.assertEqual(record.status, picks.STATUS_EXPIRED)
+
+    def test_an_expiry_that_finds_an_order_at_the_broker_forbids_a_blind_re_arm(self) -> None:
+        # The money-path half of #1832: `alphalens broker arm` does NOT refuse a
+        # second document for this key (intent_door._refuse_other_armed_date
+        # treats a non-armed status as no blocker), so the alert is the only
+        # thing standing between the operator and a second real-money entry.
+        intent = _doc(immediate=True)
+        placer = _Placer(self, _RecordingBroker(), records=[self._now_record(intent)])
+        placer.now = _WINDOW_END
+
+        self.assertFalse(placer.place(intent))
+
+        (record,) = picks.read_pick_fold().records
+        self.assertEqual(record.record["reason"], capital_wait.EXPIRED_WITH_ORDER_AT_BROKER)
+        (message, key) = placer.alerts[0]
+        self.assertEqual(key, f"pick-expired:KO:{_TRADE_DATE}")
+        self.assertIn(capital_wait.ORDER_AT_BROKER_PHRASE, message)
+        self.assertNotIn(capital_wait.RE_ARM_PHRASE, message)
+
+    def test_an_expiry_with_nothing_placed_still_asks_for_a_fresh_document(self) -> None:
+        placer = _Placer(self, _RecordingBroker())
+        placer.now = _WINDOW_END
+
+        self.assertFalse(placer.place(_doc()))
+
+        (message, _key) = placer.alerts[0]
+        self.assertIn(capital_wait.RE_ARM_PHRASE, message)
+        self.assertNotIn(capital_wait.ORDER_AT_BROKER_PHRASE, message)
+
+    def test_a_write_ahead_attempt_is_not_a_placement_but_is_still_at_the_broker(self) -> None:
+        # The crash shape: the write-ahead `attempt` record is appended before
+        # the POST, so the POST's outcome is unknown. `_now_already_done` will
+        # not re-POST it, and it is not `placed`, so retirement must not claim
+        # the pick is finished — but the alert must still warn about the broker.
+        intent = _doc(immediate_only=True)
+        picks.arm_pick(intent)
+        records = [self._now_record(intent, outcome="attempt")]
+        placer = _Placer(self, _RecordingBroker(), records=records)
+        placer.now = _WINDOW_END
+
+        calls = self._drain(placer, records)
+
+        self.assertEqual(len(calls), 1, "an attempt is not a placement")
+        (record,) = picks.read_pick_fold().records
+        self.assertEqual(record.status, picks.STATUS_EXPIRED)
+        self.assertIn(capital_wait.ORDER_AT_BROKER_PHRASE, placer.alerts[0][0])
+
+    def test_a_refused_cap_now_record_leaves_the_plain_message(self) -> None:
+        # `refused_cap` is the one outcome that PROVES nothing was submitted,
+        # so this expiry is honest about being unplaced and a re-arm is right.
+        intent = _doc(immediate_only=True)
+        placer = _Placer(
+            self, _RecordingBroker(), records=[self._now_record(intent, outcome="refused_cap")]
+        )
+        placer.now = _WINDOW_END
+
+        self.assertFalse(placer.place(intent))
+
+        (record,) = picks.read_pick_fold().records
+        self.assertEqual(record.record["reason"], capital_wait.UNPLACED_AT_WINDOW_END)
+        self.assertIn(capital_wait.RE_ARM_PHRASE, placer.alerts[0][0])
+
+    def test_an_unreadable_submissions_journal_takes_the_cautious_branch(self) -> None:
+        # "I could not check" must not read as "nothing was placed": the alert
+        # is what stops the second buy, so an unreadable journal warns.
+        def _boom(_path: Any) -> list[dict[str, Any]]:
+            raise OSError("journal unreadable")
+
+        placer = _Placer(self, _RecordingBroker())
+        placer.now = _WINDOW_END
+        with mock.patch("alphalens_pipeline.brokers.submission_log.iter_submission_records", _boom):
+            self.assertFalse(placer.place(_doc()))
+
+        self.assertIn(capital_wait.ORDER_AT_BROKER_PHRASE, placer.alerts[0][0])
+
+    def test_an_expired_pick_reads_no_broker_even_with_the_journal_consulted(self) -> None:
+        # The #1734 contract: the window check is judged before any broker read.
+        # The new journal read is a FILE read and must not weaken that.
+        class _NoIo(_RecordingBroker):
+            def get_account(self) -> Any:
+                raise AssertionError("an expired pick must not read the broker")
+
+            def get_positions(self) -> Any:
+                raise AssertionError("an expired pick must not read the broker")
+
+        intent = _doc(immediate=True)
+        placer = _Placer(self, _NoIo(), records=[self._now_record(intent)])
+        placer.now = _WINDOW_END
+
+        self.assertFalse(placer.place(intent))  # must not raise
+
+        self.assertIn(capital_wait.ORDER_AT_BROKER_PHRASE, placer.alerts[0][0])
+
+    def test_each_branch_opens_with_its_own_head_and_not_the_other_one(self) -> None:
+        # The HEAD is the first thing an operator reads, and "expired unplaced"
+        # printed over a filled order is the sentence this issue exists to
+        # delete. Pinned separately from the tail because the tail alone was not
+        # enough: replacing the head expression with the constant
+        # `UNPLACED_HEAD` left the whole brokers subtree green (measured
+        # 2026-10-31, 3792 tests, OK), so the page could have gone back to
+        # opening with the false word while its tail still warned.
+        intent = _doc(immediate=True)
+        at_broker = _Placer(self, _RecordingBroker(), records=[self._now_record(intent)])
+        at_broker.now = _WINDOW_END
+        at_broker.place(intent)
+        (message, _key) = at_broker.alerts[0]
+        self.assertIn(capital_wait.ORDER_AT_BROKER_HEAD, message)
+        self.assertNotIn(capital_wait.UNPLACED_HEAD, message)
+
+        unplaced = _Placer(self, _RecordingBroker())
+        unplaced.now = _WINDOW_END
+        unplaced.place(_doc("MU"))
+        (message, _key) = unplaced.alerts[0]
+        self.assertIn(capital_wait.UNPLACED_HEAD, message)
+        self.assertNotIn(capital_wait.ORDER_AT_BROKER_HEAD, message)
+
+    def test_a_recorded_hold_reason_still_wins_over_the_at_broker_fallback(self) -> None:
+        # Only the FALLBACK is branched: a recorded hold names what actually
+        # kept the pick from finishing, which is more specific than either
+        # default. So the journal keeps the gate's own words while the alert
+        # still warns about the broker — two surfaces, two different facts, on
+        # purpose. Nothing pinned that before, so a later edit could have let
+        # the branched fallback overwrite the gate's reason.
+        intent = _doc(immediate=True)
+        placer = _Placer(
+            self,
+            _RecordingBroker(),
+            records=[self._now_record(intent)],
+            safety=lambda *_a, **_k: Refuse(reason="KILL"),
+        )
+        self.assertFalse(placer.place(intent))  # inside the window: a rail holds it
+        placer.now = _WINDOW_END
+        self.assertFalse(placer.place(intent))
+
+        (record,) = picks.read_pick_fold().records
+        self.assertIn("safety rail", record.record["reason"])
+        self.assertNotEqual(record.record["reason"], capital_wait.EXPIRED_WITH_ORDER_AT_BROKER)
+        self.assertIn(capital_wait.ORDER_AT_BROKER_PHRASE, placer.alerts[-1][0])
+
+    def test_every_now_outcome_maps_to_one_window_end_message(self) -> None:
+        # The outcome-to-instruction mapping is a published instruction on the
+        # money path and had NO text coverage. `refused_cap` is the one outcome
+        # that PROVES nothing was submitted (picks._NO_ORDER_OUTCOMES), so it
+        # keeps the re-arm message. Every other outcome reads as "an order may
+        # exist" — including `refused_reject`, where the venue rejected the
+        # order and nothing rests at all. That is over-cautious in the one
+        # direction that cannot cost money, and it is pinned HERE so the next
+        # reader finds it stated rather than discovers it from a page.
+        at_broker_outcomes = ("placed", "attempt", "failed", "refused_reject", "future-word")
+        for index, outcome in enumerate((*at_broker_outcomes, "refused_cap")):
+            with self.subTest(outcome=outcome):
+                ticker = f"T{index}"
+                intent = _doc(ticker, immediate=True)
+                placer = _Placer(
+                    self, _RecordingBroker(), records=[self._now_record(intent, outcome=outcome)]
+                )
+                placer.now = _WINDOW_END
+                self.assertFalse(placer.place(intent))
+                (message, key) = placer.alerts[-1]
+                self.assertEqual(key, f"pick-expired:{ticker}:{_TRADE_DATE}")
+                if outcome == "refused_cap":
+                    self.assertIn(capital_wait.RE_ARM_PHRASE, message)
+                    self.assertIn(capital_wait.UNPLACED_HEAD, message)
+                else:
+                    self.assertIn(capital_wait.ORDER_AT_BROKER_PHRASE, message)
+                    self.assertIn(capital_wait.ORDER_AT_BROKER_HEAD, message)
+
+
 class LatePlacementGetsTheRemainingWindowTest(_CapitalWaitCase):
     def test_a_classic_placement_on_day_five_rests_two_sessions(self) -> None:
         # Placed 2026-10-07 for trade_date 2026-09-30: the window ends 10-09,
@@ -855,6 +1161,56 @@ def _lines(module: Any) -> list[str]:
     del module
     path = state_paths.pick_waits_path()
     return [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+class TheOperatorTextIsPinnedLiterally(unittest.TestCase):
+    """What the two expiry pages SAY, asserted against literal strings.
+
+    Every other assertion in this file compares the message with
+    ``capital_wait.ORDER_AT_BROKER_PHRASE`` and friends, which reads the
+    expectation out of the module under test: rewriting a constant leaves those
+    green. Measured — rewording the branded page to "wszystko w porzadku ... zrob
+    fikolka" left all 3789 brokers tests OK. For a page whose whole purpose is to
+    stop the operator buying an open position a second time, the words are the
+    behaviour, so they are spelled out here and nowhere else.
+
+    Deliberately NOT the whole string: an exact-match test would redden on any
+    rewording, including a better one. These are the three clauses that carry the
+    instruction.
+    """
+
+    def test_the_branded_page_says_an_order_already_reached_the_broker(self) -> None:
+        from alphalens_pipeline.brokers.automanager import capital_wait
+
+        head = capital_wait.ORDER_AT_BROKER_HEAD
+        tail = capital_wait.ORDER_AT_BROKER_PHRASE
+        self.assertIn("order", head.lower())
+        self.assertIn("broker", head.lower())
+        self.assertIn("ALREADY reached the broker", tail)
+        self.assertIn("check the position", tail)
+        self.assertIn("buys it again", tail)
+
+    def test_the_branded_page_never_asks_for_a_fresh_document(self) -> None:
+        from alphalens_pipeline.brokers.automanager import capital_wait
+
+        whole = f"{capital_wait.ORDER_AT_BROKER_HEAD} {capital_wait.ORDER_AT_BROKER_PHRASE}"
+        self.assertNotIn("arm a new document if the signal still stands", whole)
+        self.assertNotIn("if the signal still stands", whole)
+
+    def test_the_plain_page_still_asks_for_a_fresh_document(self) -> None:
+        from alphalens_pipeline.brokers.automanager import capital_wait
+
+        self.assertEqual(capital_wait.UNPLACED_HEAD, "expired unplaced")
+        self.assertEqual(
+            capital_wait.RE_ARM_PHRASE,
+            "arm a new document if the signal still stands",
+        )
+
+    def test_the_two_heads_are_not_the_same_words(self) -> None:
+        from alphalens_pipeline.brokers.automanager import capital_wait
+
+        self.assertNotEqual(capital_wait.UNPLACED_HEAD, capital_wait.ORDER_AT_BROKER_HEAD)
+        self.assertNotEqual(capital_wait.RE_ARM_PHRASE, capital_wait.ORDER_AT_BROKER_PHRASE)
 
 
 if __name__ == "__main__":

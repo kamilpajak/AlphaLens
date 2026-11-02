@@ -16,6 +16,7 @@ import logging
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -28,6 +29,7 @@ from alphalens_pipeline.brokers.automanager.picks import (
     arm_pick,
     generation_of,
     identity_token,
+    is_now_only_ladder,
     iter_picks,
     keys_with_any_submission,
     mark_disarmed,
@@ -1378,6 +1380,103 @@ class JoinHelperTest(unittest.TestCase):
         # (append-only journals are never rewritten).
         records = [{"ticker": "KO", "brief_date": "2026-07-20"}]
         self.assertEqual(submitted_pick_keys(records), {("KO", "2026-07-20")})
+
+
+def _ladder(*modes: str, ticker: str = "KO", trade_date: str = "2026-07-20") -> TradeIntent:
+    """An intent whose entry ladder has one rung per ``modes`` entry."""
+    base = _intent(ticker, trade_date)
+    tiers = tuple(
+        EntryTierSpec(
+            limit_price=100.0 - index,
+            alloc_pct=100.0 / len(modes),
+            tag=f"T{index + 1}",
+            entry_mode=mode,
+        )
+        for index, mode in enumerate(modes)
+    )
+    return replace(base, spec=replace(base.spec, entry_tiers=tiers))
+
+
+class ImmediateOnlyRetirementTest(unittest.TestCase):
+    """#1832: the now half DOES retire a pick that is nothing but a now half.
+
+    The retirement fold reads SUBMISSION records, which carry no ladder shape,
+    so the caller that holds the decoded queue hands it the keys whose ladder
+    is all immediate. A caller that passes nothing gets the pre-#1832 answer.
+    """
+
+    _KEY = ("KO", "2026-07-20")
+
+    def _now(self, outcome: str | None = "placed") -> list[dict[str, object]]:
+        meta: dict[str, object] = {"armed_ts": "2026-07-20T14:00:00+00:00"}
+        if outcome is not None:
+            meta["outcome"] = outcome
+        return [
+            {"ticker": "KO", "trade_date": "2026-07-20", "tranche": "now", "tranche_meta": meta}
+        ]
+
+    def test_a_single_immediate_rung_is_a_now_only_ladder(self) -> None:
+        self.assertTrue(is_now_only_ladder(_ladder("immediate")))
+
+    def test_a_mixed_ladder_is_not(self) -> None:
+        self.assertFalse(is_now_only_ladder(_ladder("immediate", "pullback")))
+        self.assertFalse(is_now_only_ladder(_ladder("pullback")))
+
+    def test_two_immediate_rungs_are_not_a_now_only_ladder(self) -> None:
+        # The drain places ``now_tiers[0]`` only (control_loop._route_now_tranche),
+        # so a second immediate rung is still OWED. Retiring such a pick would
+        # starve it silently. The arming door refuses this shape
+        # (violation ``immediate_tier_count``); the predicate refuses it too.
+        self.assertFalse(is_now_only_ladder(_ladder("immediate", "immediate")))
+
+    def test_an_empty_ladder_is_not_a_now_only_ladder(self) -> None:
+        self.assertFalse(is_now_only_ladder(_ladder()))
+
+    def test_a_placed_now_record_retires_a_now_only_pick(self) -> None:
+        self.assertEqual(
+            submitted_pick_keys(self._now(), immediate_only_keys={self._KEY}), {self._KEY}
+        )
+
+    def test_the_same_record_does_not_retire_a_mixed_pick(self) -> None:
+        # #1247 verbatim: the pullback half is still owed, so the key must not
+        # be in the retired set and the drain must come back for it.
+        self.assertEqual(submitted_pick_keys(self._now(), immediate_only_keys=set()), set())
+
+    def test_only_a_placed_outcome_retires(self) -> None:
+        for outcome in ("attempt", "refused_cap", "failed", "refused_reject", "future", None):
+            with self.subTest(outcome=outcome):
+                self.assertEqual(
+                    submitted_pick_keys(self._now(outcome), immediate_only_keys={self._KEY}),
+                    set(),
+                    outcome,
+                )
+
+    def test_a_pullback_record_still_retires_whatever_the_caller_passes(self) -> None:
+        records = [{"ticker": "KO", "trade_date": "2026-07-20"}]
+        self.assertEqual(submitted_pick_keys(records, immediate_only_keys=set()), {self._KEY})
+        self.assertEqual(submitted_pick_keys(records, immediate_only_keys={self._KEY}), {self._KEY})
+
+    def test_retirement_stays_a_subset_of_everything_at_the_broker(self) -> None:
+        # The invariant `broker picks` relies on (#1828). Widening retirement
+        # must not lift a key out of the existence fold.
+        # The corpus must contain the ONE shape that can violate the inclusion:
+        # a record that is NOT a now tranche and whose outcome REFUSES. Without
+        # it both folds hold every key by construction and the assertion is a
+        # tautology — it was, before this line. `_records_an_order` returning
+        # True for any non-now record (#1828) is what actually holds the
+        # property; this is the corpus that notices if that guard goes.
+        records = [
+            *self._now(),
+            {"ticker": "MU", "trade_date": "2026-07-21"},
+            {
+                "ticker": "ZZ",
+                "trade_date": "2026-07-22",
+                "tranche_meta": {"outcome": "refused_cap"},
+            },
+        ]
+        retired = submitted_pick_keys(records, immediate_only_keys={self._KEY})
+        self.assertLessEqual(retired, keys_with_any_submission(records))
+        self.assertIn(("ZZ", "2026-07-22"), retired, "the violating shape must be in the corpus")
 
 
 class IdentityHelperTest(unittest.TestCase):
