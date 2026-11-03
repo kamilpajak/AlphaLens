@@ -1239,9 +1239,11 @@ def _journal_envelope_clamped(
     ``envelope_*`` facts on the action; a divergence-free reanchor carries
     ``None`` and never writes this). Read by nothing in the protection logic —
     no fold consumes it (like ``amend_ok``), so the boot compactor drops it at
-    restart. It is the ONLY one of the three amend-outcome markers that is pure
-    telemetry: ``reanchored`` and ``trailed`` ARE fold-consumed and the
-    compactor keeps them (#1324)."""
+    restart — the kind is unknown to its election, and the pre-compaction
+    snapshot (#1650) is where the record then lives, readable through
+    ``journal_snapshots.iter_journal_history``. It is the ONLY one of the three
+    amend-outcome markers that is pure telemetry: ``reanchored`` and
+    ``trailed`` ARE fold-consumed and the compactor keeps them (#1324)."""
     _append_standalone_stop_journal(
         {
             "kind": "envelope_clamped",

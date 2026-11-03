@@ -5334,6 +5334,83 @@ def _stop_move_blocks(
     return front, tail
 
 
+# Compaction growth bound, the standalone-stop sibling of
+# ``entry_trails.COMPACTED_LINES_PER_CRID_BOUND``: per uic the kept set holds at
+# most these FIXED slots, one per keep reason, so no ordering of the input can
+# produce a fifteenth — the elected ``reanchored`` marker, the stop's newest
+# move and its closer (#1669), the elected ``trailed`` marker,
+# ``oco_unsupported``, the newest ``oco_placed`` / ``amend_failed`` /
+# ``oco_too_far`` / ``stop_placed`` / ``amend_ok``, the ``stop_filled`` matching
+# the kept stop's order id, the max-seq ``amend_seq``, and the governing plus
+# latest ``tranche_plan``.
+#
+# On top of them the kept set grows with the input's KEYS, never with the
+# journal's LENGTH (which is what #895 was): one ``planned`` per
+# client_request_id, one ``stop_filled`` per stopped-out pick key (#1327) and
+# per closure ref key (#1223), and one ``tranche_fired`` per fired line still
+# inside the fold's accumulator. That last term is per LINE while the fold reads
+# only the TAG; it was 4 lines in the whole LIVE history on 2026-11-03.
+#
+# The discriminating test is the EQUALITY one in
+# ``test_compaction_fold_identity.TestTheKeptSetGrowsWithKEYSNotWithTheJOURNAL``,
+# which reaches this number exactly on a constructed shape, together with the
+# length-independence test beside it. The randomized battery in the same class
+# is a sanity ceiling and nothing more: its key-driven allowance counts every
+# ``tranche_fired`` line of the uic rather than those the fold still holds, so
+# over 1500 journals and 2943 per-uic rows the tightest trial still had 4 lines
+# of slack (measured 2026-11-03). It would stay green under a widening of up to
+# that much, and tightening it would mean re-deriving the fold's accumulator
+# inside a test, i.e. computing the expectation from the code under test.
+COMPACTED_FIXED_LINES_PER_UIC_BOUND = 14
+
+
+# Every record kind written to ``standalone_stops.jsonl``, each mapped to this
+# compactor's DECISION about it. The declaration is here, beside the election,
+# because the election is what the decision is about: a kind absent from this
+# map is a kind nobody decided, and an undecided kind is silently eaten at the
+# next daemon restart (memo G4 calls that bug class CRITICAL, and
+# ``entry_trails``' module docstring says it must not recur).
+#
+# ``test_standalone_stop_kind_registry`` collects the written kinds from the
+# SOURCE of every ``stop_journal._append_standalone_stop_journal`` call site and
+# requires them to equal these keys, so adding a writer without a line here is
+# a CI failure rather than a silent drop. The three values:
+#   RETAINED  — the election can keep a line of this kind, so the fold that
+#               reads it survives a boot.
+#   CONSUMED  — a marker the election reads and then does not copy out; its
+#               effect is in what it suppresses, not in the kept file.
+#   DROPPED   — knowingly not kept. Recoverable only from the #1650
+#               pre-compaction snapshot, through
+#               ``journal_snapshots.iter_journal_history``.
+KIND_RETAINED = "RETAINED"
+KIND_CONSUMED = "CONSUMED"
+KIND_DROPPED = "DROPPED"
+STANDALONE_STOP_JOURNAL_KINDS: dict[str, str] = {
+    "planned": KIND_RETAINED,
+    "planned_retracted": KIND_CONSUMED,
+    "tranche_plan": KIND_RETAINED,
+    "tranche_plan_retracted": KIND_CONSUMED,
+    "tranche_fired": KIND_RETAINED,
+    "stop_placed": KIND_RETAINED,
+    "stop_filled": KIND_RETAINED,
+    "trailed": KIND_RETAINED,
+    "reanchored": KIND_RETAINED,
+    "oco_placed": KIND_RETAINED,
+    "oco_unsupported": KIND_RETAINED,
+    "oco_too_far": KIND_RETAINED,
+    "amend_failed": KIND_RETAINED,
+    "amend_ok": KIND_RETAINED,
+    "amend_seq": KIND_RETAINED,
+    # The one DELIBERATE fold-identity exception, argued in the docstring
+    # below: only ``stop_journal._read_persisted_gen`` reads it, and the reset
+    # to the initial gen is harmless.
+    "gen": KIND_DROPPED,
+    # Pure reanchor telemetry (#1015): no fold and no CLI reads it, so it is
+    # dropped whole rather than preserved verbatim — see UNKNOWN KINDS below.
+    "envelope_clamped": KIND_DROPPED,
+}
+
+
 def _compact_standalone_stop_journal_lines(
     lines: Iterable[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -5401,9 +5478,73 @@ def _compact_standalone_stop_journal_lines(
     ``gen`` markers are the one DELIBERATE exception to fold-identity: they are
     read only by ``stop_journal._read_persisted_gen``, and the reset to the initial gen is
     harmless (post-restart re-emits are past Saxo's 15s request-id dedup window,
-    and protection is broker-state-truth not journal-derived). Every other line
-    — unknown kinds and malformed lines — is dropped; none contributes to the
-    folds above.
+    and protection is broker-state-truth not journal-derived). Do not read that
+    as "the marker is redundant": ``_read_persisted_gen`` returns ``(gen, qty)``,
+    the kept ``stop_placed`` carries the gen in its ``ref``
+    (``<entry_crid>-stop-<gen>``) and the qty in its own field, and a generation
+    whose placement was never confirmed journals no ``stop_placed`` at all — so
+    that generation survives in the snapshot only.
+
+    EVERY OTHER LINE IS DROPPED, and dropping it is not the same as losing it.
+    A dropped line contributes to no fold above, but it is often the only
+    record of its numbers, so the caller snapshots the pre-compaction bytes
+    (#1648) and ``journal_snapshots.iter_journal_history`` rebuilds the full
+    history from them. Both readers that need a dropped number already read
+    that history, NOT this file: ``broker trades`` (``trades._read_journals``)
+    for ``max(trailed.peak)`` and the windowed stop-move marker, and ``broker
+    reconcile-fills`` for a closed position's ``tranche_fired`` telemetry.
+    Measured on the LIVE journal on 2026-11-03: 103 records parse from this
+    file, and ``iter_journal_history`` yields 350 DISTINCT records across it and
+    its snapshots (it de-duplicates on canonical JSON, so the two figures are
+    not in the same unit and 247 is not a count of anything).
+
+    Two slots here are WIDER than fold-equivalence and both are deliberate: the
+    #1669 stop-move block above, and the newest ``amend_ok`` / ``stop_placed``
+    outcome per uic, which no fold consumes and latency inspection reads. No
+    THIRD one is added, and the reason differs per candidate:
+
+    - a ``trailed`` slot for the peak reader. The #1669 block already keeps the
+      newest ``trailed`` line per uic, and ``peak`` is a high-water mark that
+      ``_update_peaks`` ratchets monotonically — but only "for the daemon's
+      lifetime": a restart seeds ``peak = price`` again, so inside ONE
+      entry-to-exit window an earlier dropped line can carry a HIGHER peak than
+      the kept newest one. A slot cannot fix that, because what the reader needs
+      is the maximum over the window and no per-uic slot knows the window. On a
+      uic that held two positions the kept line is not even inside the earlier
+      one. Retention would turn an honest null into a number that is sometimes
+      too small;
+    - a ``tranche_fired`` slot for its telemetry. Worse than useless: a re-kept
+      line WOULD re-enter ``stop_journal._fold_fired_since_latest_plan`` and
+      tell the real-money daemon a take-profit had already fired.
+
+    Lines compacted BEFORE the first snapshot (2026-10-01T20:10:03Z) are gone
+    for good. ``broker trades`` says so for exactly one shape: OFFLINE, for a
+    pick whose entry and exit quantities do not balance, where ``_state``
+    answers ``unresolved`` / ``compacted_before_snapshots`` rather than guessing.
+    A pre-horizon pick that reads CLOSED is reported closed with full numbers,
+    and any field built from per-tick lines (today ``mfe_lower_bound`` and the
+    windowed stop-move marker) may then come off an incomplete history with no
+    per-pick marker saying so.
+
+    TWO KINDS ARE DROPPED WHOLE today, both declared DROPPED in
+    :data:`STANDALONE_STOP_JOURNAL_KINDS`: ``gen`` (above) and
+    ``envelope_clamped`` (pure reanchor telemetry, no fold and no CLI reads it).
+    The LIVE history holds 14 of the first and none of the second. Unlike the
+    sibling ``entry_trails.compact_entry_trail_lines``, this compactor does NOT
+    preserve an unknown kind verbatim. That is a JUDGEMENT, not a measurement:
+    an unknown kind appended per tick would never compact, turning the keep set
+    below into the unbounded growth #895 exists to stop, and the choice here is
+    to keep the bound unconditional and make an undeclared kind a CI failure
+    instead (``test_standalone_stop_kind_registry``).
+
+    MALFORMED LINES: ``stop_journal._parse_standalone_stop_lines`` drops exactly
+    three shapes one layer up, in ``_compact_standalone_stop_journal`` — blank,
+    not JSON, and JSON that is not an object — because this function takes parsed
+    mappings while the entry-trails one takes raw strings. Everything else
+    arrives: a dict with no ``kind``, or with a ``uic`` / ``ts`` /
+    ``stop_price`` / ``avg_price`` that will not parse. That is why every
+    election here carries its own parse guard, and why a new one must too. All of
+    these lines are in the snapshot, byte for byte.
 
     Also kept: per pick key, the ``stop_filled`` ``stop_journal._elect_owed_stop_fill_lines``
     elects (#1327), so ``_derive_owed_sibling_retires`` is unchanged. Its

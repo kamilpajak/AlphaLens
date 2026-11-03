@@ -348,7 +348,16 @@ BASELINE: dict[str, int] = {
     # drain, safe on the base commit, unsafe on the first version of this one.
     # The room is the comment saying why, because the next reader will otherwise
     # see a redundant `list()` over something already annotated `-> list`.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8193,
+    # +141 for the standalone-stop compactor's account of what it DROPS: which
+    # reader recovers each dropped number (the pre-compaction snapshots, not this
+    # file), why no retention slot is added for one, the per-uic growth bound the
+    # compactor had never stated, and ``STANDALONE_STOP_JOURNAL_KINDS``, the
+    # per-kind compaction decision an AST gate holds against the writers. All of
+    # it docstring and two constants, in the function a future author would widen.
+    # Counted with ``wc -l`` on the file (8192 before, 8333 after) — the entry it
+    # replaces read 8193, one line above the file it recorded, so the entry-to-entry
+    # delta is 140 while the file grew 141.
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8333,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     # +24 for PR #1840, to take Sonar python:S3776 off ``select_stop_move_lines``: the
     # four skip guards move into ``_stop_move_window_ts`` with the docstring that names
@@ -356,7 +365,9 @@ BASELINE: dict[str, int] = {
     # Counted with ``wc -l`` on the merged file, not from the diff — the comment on the
     # ``control_loop.py`` entry above records an earlier attempt that counted from a
     # diff and shipped this gate red.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1407,
+    # +2: ``_journal_envelope_clamped`` said the boot compactor drops the record
+    # and stopped there; it now names the snapshot the record then lives in.
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1409,
     # +188 for the first half of this file's SonarCloud complexity cleanup: eight of
     # its sixteen python:S3776 functions, cleared by naming the block each one's
     # surplus sat in. Nineteen new module-level helpers and their docstrings; the
