@@ -8588,6 +8588,10 @@ class TestPersistentOcoLagMonitor(IsolatedHomeTestCase):
             len(persistent), 1, f"expected exactly one persistent-lag page, got {alerts}"
         )
         self.assertIn(str(_UIC), persistent[0])
+        # The tick report counts the page it sent. Nothing else observed this
+        # counter for this page, so replacing the increment with ``pass`` left the
+        # whole brokers suite green.
+        self.assertEqual(report.alerts, 1)
 
     def test_no_alert_below_threshold(self) -> None:
         # _OCO_LAG_ALERT_TICKS - 1 holds stay silent (safe transient lag).
@@ -8645,8 +8649,34 @@ class TestPersistentOcoLagMonitor(IsolatedHomeTestCase):
             alerts=[],
         )
         report = cl.TickReport()
+        # A NoOp CARRYING a uic: this is the case the reason check has to reject.
+        # With a bare ``NoOp()`` the uic-is-None guard rejects it first, so the
+        # test passed even when any NoOp counted as a lag hold.
         for _ in range(cl._OCO_LAG_ALERT_TICKS + 2):
-            cl._track_oco_lag(deps, [NoOp()], report, ticker_by_uic=self._ticker_map())
+            cl._track_oco_lag(deps, [NoOp(uic=_UIC)], report, ticker_by_uic=self._ticker_map())
+        self.assertEqual(deps.oco_lag_counts, {})
+
+    def test_a_lag_hold_without_a_uic_is_ignored(self) -> None:
+        # The other half, and it needs the LAG reason to be observable. A bare
+        # ``NoOp()`` takes the reset branch and leaves the counter empty either way,
+        # so it cannot tell whether the uic-is-None guard is there. A lag-reason NoOp
+        # with no uic takes the counting branch: without the guard the counter grows
+        # a ``None`` key and the page would read "uic None".
+        deps = _deps(
+            _StubBroker(),
+            kill_file=Path("/nonexistent/KILL"),
+            verdicts=[],
+            place_calls=[],
+            alerts=[],
+        )
+        report = cl.TickReport()
+        for _ in range(cl._OCO_LAG_ALERT_TICKS + 2):
+            cl._track_oco_lag(
+                deps,
+                [NoOp(reason=cl._OCO_LAG_HOLD_REASON)],
+                report,
+                ticker_by_uic=self._ticker_map(),
+            )
         self.assertEqual(deps.oco_lag_counts, {})
 
     def test_run_once_end_to_end_pages_once_on_persistent_lag(self) -> None:
@@ -8735,35 +8765,53 @@ class TestPersistentOcoLagMonitor(IsolatedHomeTestCase):
         self.assertEqual(keys, [f"oco-lag-persistent:{_UIC}"])
 
     def test_the_page_says_only_the_uic_when_no_position_names_it(self) -> None:
-        # The ticker comes from THIS tick's long positions, so an empty map must leave
-        # the old page shape exactly as it was — the uic alone, never an invented name
-        # and never a bare "None". UNREACHABLE through run_once today: the lag NoOp is
-        # emitted only from ``_reconcile_long``, which ``reconcile_protection`` calls
-        # only while iterating ``long_positions``, so every lag uic is a key of the
-        # map this page reads. Called directly for that reason.
-        deps = _deps(
-            _StubBroker(),
-            kill_file=Path("/nonexistent/KILL"),
-            verdicts=[],
-            place_calls=[],
-            alerts=[],
-        )
-        alerts: list[str] = []
-        throttle = cl._AlertThrottle(alerts.append)
-        deps = cl.LoopDeps(
-            **{**deps.__dict__, "alert_throttled": lambda m, r: throttle.emit(m, reason=r)}
-        )
-        report = cl.TickReport()
-        for _ in range(cl._OCO_LAG_ALERT_TICKS):
-            cl._track_oco_lag(deps, self._lag_action(), report, ticker_by_uic={})
-        persistent = [a for a in alerts if "propagation lag held" in a]
-        self.assertEqual(len(persistent), 1, f"expected one persistent-lag page, got {alerts}")
-        self.assertEqual(
-            persistent[0],
+        # With no ticker the page keeps exactly its old shape — the uic alone, never
+        # an invented name, never a bare "None" and never a leading space.
+        #
+        # TWO falsy shapes, because they take different code paths and only one of
+        # them is reachable. A MISSING KEY cannot happen through run_once: the lag
+        # NoOp is emitted only from ``_reconcile_long``, which
+        # ``reconcile_protection`` calls only while iterating ``long_positions``, so
+        # every lag uic is a key of the map. An EMPTY TICKER can: the Saxo adapter
+        # builds it from ``DisplayAndFormat.Symbol`` through ``or {}``
+        # (``saxo/broker.py``, ``_to_position``) and treats "" as "not stamped"
+        # rather than as a guess. Without the empty-ticker case, widening the
+        # condition to ``if ticker is not None`` left all 3829 brokers tests green
+        # while the page opened with a space instead of a name.
+        expected = (
             f"uic {_UIC}: OCO exit propagation lag held {cl._OCO_LAG_ALERT_TICKS} "
             f"consecutive ticks (>= {cl._OCO_LAG_ALERT_TICKS}) — Q9 may be stalled, "
-            "check the resting OCO pair",
+            "check the resting OCO pair"
         )
+        for nameless in ({}, {_UIC: ""}):
+            with self.subTest(ticker_by_uic=nameless):
+                # A FRESH throttle and fresh deps per shape: the real throttle
+                # dedups on ``(uic, reason)`` within its interval, so a reused one
+                # would suppress the second shape's page and the assertion would
+                # pass on an empty list.
+                base = _deps(
+                    _StubBroker(),
+                    kill_file=Path("/nonexistent/KILL"),
+                    verdicts=[],
+                    place_calls=[],
+                    alerts=[],
+                )
+                alerts: list[str] = []
+                throttle = cl._AlertThrottle(alerts.append)
+                deps = cl.LoopDeps(
+                    **{
+                        **base.__dict__,
+                        "alert_throttled": lambda m, r, t=throttle: t.emit(m, reason=r),
+                    }
+                )
+                report = cl.TickReport()
+                for _ in range(cl._OCO_LAG_ALERT_TICKS):
+                    cl._track_oco_lag(deps, self._lag_action(), report, ticker_by_uic=nameless)
+                persistent = [a for a in alerts if "propagation lag held" in a]
+                self.assertEqual(
+                    len(persistent), 1, f"expected one persistent-lag page, got {alerts}"
+                )
+                self.assertEqual(persistent[0], expected)
 
     def test_dark_when_amend_off_no_hold_no_counter(self) -> None:
         # Amend OFF: the M1 guard never fires (place-residual-first arm runs instead),
