@@ -3429,16 +3429,19 @@ def _exit_result_r(
       not only on the arithmetic;
     * a pick that already fired a take-profit tranche: the market sell's fill
       price is never journaled, so the command nulls the exit family for the
-      WHOLE pick, this stop fill included;
+      WHOLE pick, this stop fill included. Asked of
+      ``stop_journal.fired_tranche_tags_by_pick``, which attributes a fired
+      tranche to the pick that was GOVERNING when the line was written and never
+      forgets it. The executor's own fold cannot answer this: it RESETS on every
+      new plan generation, so a keyless bracket-path plan line appended after the
+      tranche fired, a retraction, or a later pick on the uic each made it report
+      no fired tranche while the command still listed the take-profit among the
+      pick's exits. Measured: the page stated ``+0.3834R`` for a pick the command
+      published as null;
     * a stop whose ref names no pick, or a pick with no priceable entry-trail
       fill (:func:`entry_trails.realized_entry`);
     * a uic whose GOVERNING plan now names a different pick than this stop's
-      ref does. ``_fold_fired_since_latest_plan`` resets its per-uic
-      accumulator on a new generation (a different ``pick_key``, a keyless
-      bracket line, a retraction), so on a re-planned uic that fold can report
-      no fired tranche while the pick's own ``tranche_fired`` line is still in
-      the journal and still nulls the command's number. Comparing the two keys
-      catches the generations; it is free, because the pass already folded them.
+      ref does: the stop belongs to a position this uic no longer holds.
     * an EMPTY ``journal_lines``: an absent snapshot cannot show that no
       take-profit fired, and "cannot show" is not "did not".
 
@@ -3446,12 +3449,6 @@ def _exit_result_r(
     of times a day, in a function that has already done two broker round trips
     (the open-orders probe and the budgeted audit resolution) by the time it
     gets here.
-
-    Residual, unverified and deliberately not papered over: a take-profit that
-    fired and was then RETRACTED with no successor plan on the uic leaves the
-    governing key ``None`` and the fold reset, so neither guard above sees it.
-    No LIVE pick of that shape has been observed; if one appears, the page
-    overstates while the command nulls.
     """
     if partial or qty is None or price is None or not journal_lines:
         return None
@@ -3461,7 +3458,7 @@ def _exit_result_r(
     governing = plan_pick_keys.get(uic)
     if governing is not None and governing != pick_key:
         return None
-    if stop_journal._fold_fired_since_latest_plan(journal_lines).get(uic):
+    if stop_journal.fired_tranche_tags_by_pick(journal_lines).get(pick_key):
         return None
     entry = entry_trails.realized_entry(entry_trails.read_entry_trail_fold(), pick_key)
     if entry is None:

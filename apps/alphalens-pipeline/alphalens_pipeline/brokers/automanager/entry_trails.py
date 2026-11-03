@@ -579,8 +579,9 @@ class RealizedEntry:
 
     The two facts an exit page needs to state a result in R, both read off the
     SAME journal lines: ``avg_price``/``qty`` from the ``fired`` terminals of
-    the pick's tiers, ``plan_stop`` from the ``disaster_stop`` its arm-time
-    ``watch_open`` lines stamped (``control_loop`` writes it there from
+    the pick's tiers — ALL of them, which is why :func:`realized_entry` refuses
+    a ladder with a tier missing — ``plan_stop`` from the ``disaster_stop`` its
+    arm-time ``watch_open`` lines stamped (``control_loop`` writes it there from
     ``TradeSetupPlan.disaster_stop``, which ``sizing`` takes verbatim from
     ``spec.disaster_stop`` — the same number ``broker trades`` divides by)."""
 
@@ -593,16 +594,28 @@ def realized_entry(fold: EntryTrailFold, pick_key: str) -> RealizedEntry | None:
     """``pick_key``'s realized entry blended over its FILLED tiers, or ``None``.
 
     Pure: folds an already-read :class:`EntryTrailFold`. The blend is
-    quantity-weighted over every tier whose terminal is ``fired``, which is
-    what ``broker trades`` means by ``avg_entry_price`` — a pick whose E1
-    filled and whose E2 was cancelled is priced on E1 alone, and a two-tier
-    fill on one blend, never on the first tier.
+    quantity-weighted over every tier whose terminal is ``fired``. That equals
+    what ``broker trades`` means by ``avg_entry_price`` only when this journal
+    holds the pick's WHOLE ladder, which is what the gap refusal below is for —
+    a pick whose E1 filled and whose E2 was cancelled is priced on E1 alone,
+    and a two-tier fill on one blend, never on the first tier.
 
     ``None`` — the caller then states no result — on every shape this cannot
     price honestly:
 
-    * no fired tier (a bracket pick places client geometry and opens no
+    * no fired tier (a pick placed entirely as client geometry opens no
       entry-trail watch at all, so its tiers are simply absent here);
+    * a tier MISSING from the middle of the ladder. The tiers this journal
+      holds must run 0, 1, ... with no gap, because a gap means an entry leg
+      the entry trail never saw and therefore cannot price. RHI:2026-09-03 is
+      that shape: tier 0 went out as a client-geometry bracket (701 shares @
+      43.75, recorded only in ``submissions.jsonl``) and tier 1 as an
+      entry-trail watch (1095 @ 42.34). Blending the tiers present gives
+      42.34, while the pick's entry is 42.890 over all 1796 shares, and a
+      1095-share stop filling at 45.00 would read ``+1.4457R`` on a trade that
+      made ``+0.8826R``. A ladder whose TRAILING tiers were never armed is NOT
+      a gap: its indices still run from zero, and ``broker trades`` blends the
+      same tiers this does;
     * a fired tier missing or corrupting either fill fact, mirroring
       ``broker trades``, which nulls the whole entry family rather than
       blending the tiers it happens to have;
@@ -613,6 +626,7 @@ def realized_entry(fold: EntryTrailFold, pick_key: str) -> RealizedEntry | None:
     """
     stops: set[float] = set()
     pairs: list[tuple[float, float]] = []
+    indices: list[int] = []
     for state in fold.tiers.values():
         opened = state.watch_open or {}
         if opened.get("pick_key") != pick_key:
@@ -621,6 +635,12 @@ def realized_entry(fold: EntryTrailFold, pick_key: str) -> RealizedEntry | None:
         if stop is None:
             return None
         stops.add(stop)
+        index = opened.get("tier_index")
+        # A non-int (or a missing) index collapses to 0, so two such tiers
+        # collide and the contiguity test below refuses them. That is the
+        # cautious direction: an index this code cannot read is an index it
+        # cannot prove is not a gap.
+        indices.append(index if isinstance(index, int) and not isinstance(index, bool) else 0)
         if state.terminal_kind != KIND_FIRED:
             continue
         terminal = state.terminal_record or {}
@@ -629,6 +649,8 @@ def realized_entry(fold: EntryTrailFold, pick_key: str) -> RealizedEntry | None:
         if price is None or qty is None:
             return None
         pairs.append((qty, price))
+    if sorted(indices) != list(range(len(indices))):
+        return None
     if len(stops) != 1 or not pairs:
         return None
     total = sum(qty for qty, _ in pairs)

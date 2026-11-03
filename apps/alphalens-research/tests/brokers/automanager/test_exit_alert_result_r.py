@@ -46,6 +46,7 @@ from broker_contract.contract import OrderState, OrderStatus
 from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
 from tests.brokers.automanager.trades_fixture import (
     NOW,
+    SIM_RHI_DIR,
     FakeFillHistory,
     install_journals,
     trade,
@@ -75,6 +76,15 @@ VST_EXPECTED_R = 21.30 / 55.56
 _UIC = 7300542
 
 
+def _tier_index_from_crid(crid: str) -> int:
+    """The tier index production stamps on the ``watch_open`` line, read back off
+    the crid the same line carries (``...-entry-t1`` -> 1). Kept in the fixture
+    because ``realized_entry`` refuses a ladder with a GAP in its indices, so a
+    fixture that omitted them would make every multi-tier pick look like a gap."""
+    _, _, tail = crid.rpartition("-t")
+    return int(tail) if tail.isdigit() else 0
+
+
 def _entry_lines(
     *,
     pick_key: str = VST,
@@ -82,9 +92,11 @@ def _entry_lines(
     disaster_stop: float = VST_PLAN_STOP,
     avg_price: float | None = VST_AVG_ENTRY,
     realized_qty: float = VST_QTY,
+    tier_index: int | None = None,
 ) -> list[dict[str, Any]]:
     """One entry tier's journal pair: the arm-time ``watch_open`` that stamped
-    the plan stop, and the ``fired`` terminal that stamped the realized fill."""
+    the plan stop and the tier index, and the ``fired`` terminal that stamped the
+    realized fill."""
     opened: dict[str, Any] = {
         "kind": "watch_open",
         "crid": crid,
@@ -93,6 +105,7 @@ def _entry_lines(
         "disaster_stop": disaster_stop,
         "uic": _UIC,
         "qty": realized_qty,
+        "tier_index": _tier_index_from_crid(crid) if tier_index is None else tier_index,
     }
     fired: dict[str, Any] = {"kind": "fired", "crid": crid, "realized_qty": realized_qty}
     if avg_price is not None:
@@ -212,6 +225,19 @@ def _stop_placed(**over: Any) -> dict[str, Any]:
     }
     line.update(over)
     return line
+
+
+def _fold_of(lines: list[dict[str, Any]]) -> entry_trails.EntryTrailFold:
+    """Fold entry-trail lines through the REAL reader, behind its path seam."""
+    tmp = TemporaryDirectory()
+    path = Path(tmp.name) / "entry_trails.jsonl"
+    with path.open("w", encoding="utf-8") as fh:
+        for line in lines:
+            fh.write(json.dumps(line) + "\n")
+    try:
+        return entry_trails.read_entry_trail_fold(path=path)
+    finally:
+        tmp.cleanup()
 
 
 def _trailed_to(level: float, *, ts: float = 200.0) -> dict[str, Any]:
@@ -385,6 +411,21 @@ class TheRIsRefusedWhereBrokerTradesPublishesNull(_ExitPageCase):
     """Each refusal is paired with the null ``broker trades`` writes for the
     same shape, so the two surfaces stay silent together."""
 
+    def test_a_partial_fill_covering_the_whole_entry_carries_no_r(self) -> None:
+        # The ``partial`` refusal on its own. The test below fills 2 of 6, so the
+        # per-pick quantity guard answers first and the suite stayed green when
+        # ``partial`` was dropped from the guard. Here the stop reports a PARTIAL
+        # status while its filled quantity equals the pick's whole entry, so the
+        # quantity guard passes and only ``partial`` can refuse. broker trades
+        # nulls it as ``not_closed`` either way.
+        text = self.page_for(
+            _stop_placed(),
+            _trailed_to(VST_RESTING_STOP),
+            entries=_entry_lines(),
+            outcome=_filled(VST_STOP_ID, VST_QTY, VST_EXIT_PRICE, partial=True),
+        )
+        self.assertNotIn("R,", text)
+
     def test_a_partial_fill_carries_no_r(self) -> None:
         # broker trades: the pick is not ``closed``, so its whole exit family
         # (r_multiple included) is null with reason ``not_closed``.
@@ -444,6 +485,74 @@ class TheRIsRefusedWhereBrokerTradesPublishesNull(_ExitPageCase):
             outcome=_filled(VST_STOP_ID, VST_QTY, VST_EXIT_PRICE),
         )
         self.assertNotIn("R,", text)
+
+    def test_a_keyless_plan_line_after_the_take_profit_still_refuses(self) -> None:
+        # The take-profit refusal must survive a generation RESET. A keyless
+        # ``tranche_plan`` (the bracket path) appended after the tranche fired
+        # clears the executor's fired accumulator AND drops the governing key, so
+        # both of the other two guards go quiet -- while ``broker trades`` still
+        # lists the take-profit among this pick's exits and nulls the whole
+        # family. Measured before the per-pick attribution: the page said
+        # ``+0.3834R`` here.
+        text = self.page_for(
+            {"kind": "tranche_plan", "uic": _UIC, "pick_key": VST, "ts": 40.0},
+            {"kind": "tranche_fired", "uic": _UIC, "tag": "tp1"},
+            _stop_placed(),
+            {"kind": "tranche_plan", "uic": _UIC, "pick_key": None, "ts": 60.0},
+            entries=_entry_lines(),
+            outcome=_filled(VST_STOP_ID, VST_QTY, VST_EXIT_PRICE),
+        )
+        self.assertNotIn("R,", text)
+
+    def test_a_retracted_plan_after_the_take_profit_still_refuses(self) -> None:
+        # The residual the first version of this code admitted in a docstring and
+        # could not close. A retraction cannot un-sell the shares, so what fired
+        # under the plan stays attributed to the pick.
+        text = self.page_for(
+            {"kind": "tranche_plan", "uic": _UIC, "pick_key": VST, "ts": 40.0},
+            {"kind": "tranche_fired", "uic": _UIC, "tag": "tp1"},
+            _stop_placed(),
+            {"kind": "tranche_plan_retracted", "uic": _UIC, "pick_key": VST, "ts": 60.0},
+            entries=_entry_lines(),
+            outcome=_filled(VST_STOP_ID, VST_QTY, VST_EXIT_PRICE),
+        )
+        self.assertNotIn("R,", text)
+
+    def test_a_later_picks_take_profit_on_the_same_uic_does_not_silence_this_one(self) -> None:
+        # The attribution must not over-refuse either. A uic is one instrument and
+        # the journal is append-only, so a LATER pick's fired tranche must not
+        # taint this pick's page -- the two are separate keys.
+        text = self.page_for(
+            {"kind": "tranche_plan", "uic": _UIC, "pick_key": "AVGO:2026-08-01", "ts": 10.0},
+            {"kind": "tranche_fired", "uic": _UIC, "tag": "tp1"},
+            {"kind": "tranche_plan", "uic": _UIC, "pick_key": VST, "ts": 40.0},
+            _stop_placed(),
+            entries=_entry_lines(),
+            outcome=_filled(VST_STOP_ID, VST_QTY, VST_EXIT_PRICE),
+        )
+        self.assertIn("R,", text)
+
+    def test_a_nan_fill_price_carries_no_r(self) -> None:
+        # broker trades nulls this as ``non_finite``. Before the finiteness check
+        # the page rendered ``+nanR``: every comparison against NaN is False, so
+        # NaN walked straight through the ``risk <= 0`` guard.
+        text = self.page_for(
+            _stop_placed(),
+            entries=_entry_lines(),
+            outcome=_filled(VST_STOP_ID, VST_QTY, float("nan")),
+        )
+        self.assertNotIn("R,", text)
+        self.assertNotIn("nan", text.lower())
+
+    def test_an_infinite_fill_price_carries_no_r(self) -> None:
+        # The same null, the other non-finite shape: the page rendered ``+infR``.
+        text = self.page_for(
+            _stop_placed(),
+            entries=_entry_lines(),
+            outcome=_filled(VST_STOP_ID, VST_QTY, float("inf")),
+        )
+        self.assertNotIn("R,", text)
+        self.assertNotIn("inf", text.lower())
 
     def test_an_absent_journal_snapshot_carries_no_r(self) -> None:
         # "Cannot show that no take-profit fired" is not "none fired". With no
@@ -520,6 +629,172 @@ class TheRIsRefusedWhereBrokerTradesPublishesNull(_ExitPageCase):
         )
         self.assertNotIn("R,", text)
         self.assertNotIn("0.0935", text)
+
+
+class TheBlendRefusesAPickItCannotSeeWholly(IsolatedHomeTestCase):
+    """A ladder with a tier MISSING from the entry-trail journal is priced on a
+    SUBSET of the pick's shares, so it is refused.
+
+    RHI:2026-09-03 is that shape and it is a real journal in this repository:
+    tier 0 went out as a client-geometry bracket (701 shares @ 43.75, recorded
+    only in ``submissions.jsonl``) and tier 1 as an entry-trail watch (1095 @
+    42.34). The per-pick quantity guard cannot catch it, because one trail stop
+    for 1095 matches the trail blend's own quantity exactly.
+    """
+
+    def test_the_mixed_rhi_pick_is_not_priced_on_its_trail_tier_alone(self) -> None:
+        with mock.patch.object(
+            entry_trails,
+            "_entry_trail_journal_path",
+            lambda: SIM_RHI_DIR / "entry_trails.jsonl",
+        ):
+            fold = entry_trails.read_entry_trail_fold()
+        self.assertIsNone(entry_trails.realized_entry(fold, "RHI:2026-09-03"))
+
+    def test_the_trail_blend_would_have_overstated_the_result(self) -> None:
+        # Why the refusal is worth a guard rather than a comment. Computed here
+        # from the journal's own numbers, independently of the code under test.
+        trail_blend, trail_qty, plan_stop = 42.34, 1095.0, 40.5
+        pick_blend = (1095 * 42.34 + 701 * 43.75) / (1095 + 701)
+        exit_price = 45.00
+        stated = (exit_price - trail_blend) / (trail_blend - plan_stop)
+        actual = (exit_price - pick_blend) / (pick_blend - plan_stop)
+        self.assertAlmostEqual(stated, 1.4457, places=4)
+        self.assertAlmostEqual(actual, 0.8826, places=4)
+        # And the guard that was supposed to stop it does not fire.
+        self.assertLessEqual(abs(trail_qty - 1095.0), 0.5)
+
+    def test_a_ladder_whose_last_tier_was_never_armed_still_prices(self) -> None:
+        # The refusal is about a GAP, not about a short ladder. Trailing tiers
+        # that were never armed leave the indices running from zero, and
+        # ``broker trades`` blends the same tiers this does.
+        fold = _fold_of(_entry_lines(crid="VST-2026-09-21-entry-t0"))
+        entry = entry_trails.realized_entry(fold, VST)
+        self.assertIsNotNone(entry)
+        assert entry is not None
+        self.assertEqual(entry.qty, VST_QTY)
+
+    def test_two_tiers_that_both_stamp_index_zero_are_refused(self) -> None:
+        # An index this code cannot read is an index it cannot prove is not a
+        # gap, so the collision refuses rather than blending.
+        fold = _fold_of(
+            [
+                *_entry_lines(crid="VST-2026-09-21-entry-t0", tier_index=0),
+                *_entry_lines(crid="VST-2026-09-21-entry-t1", tier_index=0),
+            ]
+        )
+        self.assertIsNone(entry_trails.realized_entry(fold, VST))
+
+
+class TheBlendRefusesAJournalItCannotRead(IsolatedHomeTestCase):
+    """The three refusals inside :func:`entry_trails.realized_entry` that the
+    page-level tests reached through a different guard.
+
+    Driven against the function itself rather than through a page, because the
+    page refuses for whichever reason comes first and so cannot say WHICH guard
+    answered."""
+
+    def test_a_watch_open_with_no_plan_stop_refuses(self) -> None:
+        # TWO tiers, and only the second lacks the stop. A single-tier corpus is
+        # blind here: skipping the one tier empties ``stops`` and the
+        # ``len(stops) != 1`` arm refuses instead, so the suite stayed green when
+        # this refusal was turned into a ``continue``. With a sibling tier that
+        # DOES stamp a stop, skipping blends the pick on that tier alone.
+        lines = [
+            *_entry_lines(crid="VST-2026-09-21-entry-t0"),
+            *_entry_lines(crid="VST-2026-09-21-entry-t1", realized_qty=4.0),
+        ]
+        del lines[2]["disaster_stop"]
+        self.assertIsNone(entry_trails.realized_entry(_fold_of(lines), VST))
+
+    def test_a_fired_tier_with_no_fill_price_refuses(self) -> None:
+        # Two tiers for the same reason: with one tier, skipping it leaves
+        # ``pairs`` empty and the ``not pairs`` arm answers. With a sibling, the
+        # skip prices the pick on a subset of its shares -- the very defect the
+        # ladder-gap refusal exists for, arriving by another route.
+        lines = [
+            *_entry_lines(crid="VST-2026-09-21-entry-t0"),
+            *_entry_lines(crid="VST-2026-09-21-entry-t1", realized_qty=4.0, avg_price=None),
+        ]
+        self.assertIsNone(entry_trails.realized_entry(_fold_of(lines), VST))
+
+    def test_a_single_tier_with_no_fill_price_refuses(self) -> None:
+        self.assertIsNone(entry_trails.realized_entry(_fold_of(_entry_lines(avg_price=None)), VST))
+
+    def test_a_fired_tier_with_a_non_finite_quantity_refuses(self) -> None:
+        lines = _entry_lines()
+        lines[1]["realized_qty"] = float("nan")
+        self.assertIsNone(entry_trails.realized_entry(_fold_of(lines), VST))
+
+    def test_tiers_stamping_two_different_plan_stops_refuse(self) -> None:
+        fold = _fold_of(
+            [
+                *_entry_lines(crid="VST-2026-09-21-entry-t0", disaster_stop=125.85),
+                *_entry_lines(crid="VST-2026-09-21-entry-t1", disaster_stop=120.00),
+            ]
+        )
+        self.assertIsNone(entry_trails.realized_entry(fold, VST))
+
+    def test_a_pick_with_no_fired_tier_refuses(self) -> None:
+        # Not a crash: the blend's divisor would be zero.
+        lines = _entry_lines()
+        del lines[1]
+        self.assertIsNone(entry_trails.realized_entry(_fold_of(lines), VST))
+
+
+class TheArithmeticRefusesWhatItCannotDivide(unittest.TestCase):
+    """:func:`trade_alerts.result_r` on its own, for the facts a page cannot reach.
+
+    ``exit_qty`` does NOT enter the quotient — it cancels, which is why one exit
+    can agree with a whole-pick number — so a non-finite quantity is invisible to
+    the finiteness check on the RESULT, and only the check on the INPUTS catches
+    it. Measured: dropping that check left the whole brokers suite green."""
+
+    def test_a_non_finite_exit_quantity_refuses(self) -> None:
+        for bad in (float("nan"), float("inf")):
+            with self.subTest(exit_qty=bad):
+                self.assertIsNone(
+                    trade_alerts.result_r(
+                        avg_entry=VST_AVG_ENTRY,
+                        plan_stop=VST_PLAN_STOP,
+                        exit_qty=bad,
+                        exit_price=VST_EXIT_PRICE,
+                    )
+                )
+
+    def test_a_non_finite_entry_or_stop_refuses(self) -> None:
+        for field in ("avg_entry", "plan_stop"):
+            for bad in (float("nan"), float("inf")):
+                with self.subTest(field=field, value=bad):
+                    facts: dict[str, float | None] = {
+                        "avg_entry": VST_AVG_ENTRY,
+                        "plan_stop": VST_PLAN_STOP,
+                        "exit_qty": VST_QTY,
+                        "exit_price": VST_EXIT_PRICE,
+                    }
+                    facts[field] = bad
+                    self.assertIsNone(trade_alerts.result_r(**facts))
+
+    def test_a_missing_fact_refuses_rather_than_raising(self) -> None:
+        self.assertIsNone(
+            trade_alerts.result_r(
+                avg_entry=None,
+                plan_stop=VST_PLAN_STOP,
+                exit_qty=VST_QTY,
+                exit_price=VST_EXIT_PRICE,
+            )
+        )
+
+    def test_a_non_positive_risk_refuses(self) -> None:
+        # The command's ``non_positive_risk``: the entry is at or beyond the stop.
+        self.assertIsNone(
+            trade_alerts.result_r(
+                avg_entry=VST_PLAN_STOP,
+                plan_stop=VST_PLAN_STOP,
+                exit_qty=VST_QTY,
+                exit_price=VST_EXIT_PRICE,
+            )
+        )
 
 
 class TheRenderedSignIsTheRealSign(unittest.TestCase):

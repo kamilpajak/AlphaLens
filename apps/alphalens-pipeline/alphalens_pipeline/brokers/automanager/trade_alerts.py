@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import enum
 import logging
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -192,8 +193,18 @@ def result_r(
     positive, which is the refusal ``broker trades`` writes as
     ``non_positive_risk``. The executor is long-only, so the sign convention
     below is the long one; a short would need the ``trades`` sign factor too.
+
+    Every fact is also checked for FINITENESS, and so is the result. A NaN
+    passes ``risk <= 0`` (every comparison against NaN is False), so without
+    this the page rendered ``+nanR`` — and ``+infR`` for an infinite fill price
+    — where the command publishes a null with reason ``non_finite``. The rest of
+    the path already refuses both (``entry_trails._finite_positive_float``,
+    ``_entry_order_filled_qty``); the exit price arrives straight from the
+    broker's audit row and was the one unguarded input.
     """
     if avg_entry is None or plan_stop is None or exit_qty is None or exit_price is None:
+        return None
+    if not all(math.isfinite(v) for v in (avg_entry, plan_stop, exit_qty, exit_price)):
         return None
     risk = avg_entry - plan_stop
     if risk <= 0 or exit_qty <= 0:
@@ -204,6 +215,10 @@ def result_r(
     # with a whole-pick number at all. It is also why ``exit_qty`` still has to
     # be a positive FACT here rather than be dropped: the shapes where it is
     # not are the shapes where the command publishes a null.
+    # No finiteness check on the RESULT: with four finite inputs and a positive
+    # risk the quotient is finite for every price a venue quotes, so such a check
+    # was measured UNREACHABLE — no test could redden its removal and no input
+    # could reach it. The guard that carries this is the one on the inputs above.
     return (exit_price - avg_entry) / risk
 
 
@@ -320,7 +335,10 @@ def render(event: TradeEvent) -> str:
         head.append(event.label)
     if event.qty is not None:
         head.append(f"{event.qty:g}")
-    if event.price is not None:
+    if event.price is not None and math.isfinite(event.price):
+        # A non-finite price is not a fact, and this module's rule is that a
+        # field it does not know is LEFT OUT rather than rendered. Before this,
+        # a NaN from the broker's audit row paged ``SELL VST SL 6 @ nan``.
         head.append(f"@ {format_price(event.price)}")
     parts = [" ".join(head)]
     parts.extend(text for text in (_reason_text(event), _outcome_text(event)) if text)

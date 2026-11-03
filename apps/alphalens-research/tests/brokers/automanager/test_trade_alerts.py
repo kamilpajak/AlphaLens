@@ -348,7 +348,15 @@ class StopReason(unittest.TestCase):
 class RealMessagesFromIssue1621(unittest.TestCase):
     """The five LIVE messages quoted in #1621, rebuilt from the values in their
     real journal lines (entry_trails.jsonl ``fired``, standalone_stops.jsonl
-    ``stop_filled`` / ``trailed``, ``tranche_fired``)."""
+    ``stop_filled`` / ``trailed``, ``tranche_fired``).
+
+    These are the messages AS SENT, which is the point of the corpus, so they are
+    not updated when the page gains a field. Two of them would read differently
+    today, and in both cases because their journal lines carry no value for the
+    new field rather than because the page ignores it: the SMMT take-profit line
+    has ``target_price`` null, and the UBER and ASTS picks' entry pairs are not
+    among these lines, so no result can be computed. The post-#1621 shapes are
+    pinned in ``test_exit_alert_result_r`` and ``test_stop_fill_reconcile``."""
 
     def test_smmt_entry(self) -> None:
         event = TradeEvent(

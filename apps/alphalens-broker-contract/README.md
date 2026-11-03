@@ -730,12 +730,19 @@ window and its row count.
 | `stop_amend_history_unavailable` | offline, and the stop's moves cannot be known |
 | `account_amount_not_reported` | the report row is there, but the account-currency amount on it is not: no `BookedAmountAccountCurrency` on a trades row, or no `AmountAccountCurrency` on a fee booking row. Distinct from `report_row_missing`, where there is no row at all. One such row nulls the whole member rather than leaving a sum over the others |
 
-A null is binding on every other surface. An operator alert may state a trade's R only
-where this command would state one: where the command publishes a null, the alert says
-nothing. A page carrying a number against a null is worse than a page carrying none,
+A SHAPE null is binding on every other surface. An operator alert may state a trade's R
+only where this command would state one: where the command publishes a null because of
+what the trade IS — `not_closed`, a pick that already took a take-profit, `never_filled`,
+`non_positive_risk`, `non_finite`, `ambiguous_attribution` — the alert says nothing. A
+page carrying a number against one of those nulls is worse than a page carrying none,
 because the reader cannot tell which of the two surfaces is wrong. The alert must also
 use this command's denominator — `spec.disaster_stop`, not the level a trailed stop was
 resting at when it filled — or the two publish different numbers under one name.
+
+The AVAILABILITY nulls are different and do not bind: `offline`, `no_audit_row`,
+`report_row_missing`, `compacted_before_snapshots`, `sim_reports_unusable` and
+`stop_amend_history_unavailable` say what this command could not READ, not what the trade
+was. A daemon holding the fill in hand may state a result the command cannot.
 
 #### Exit reasons
 
