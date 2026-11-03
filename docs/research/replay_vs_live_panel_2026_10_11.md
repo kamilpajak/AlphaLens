@@ -544,6 +544,16 @@ of thing that otherwise disappears.
   are `entry_mode: immediate` and the replay refuses them. Nothing here measures the backtester
   against an immediate entry, and nothing can until that shape has a model — which per the spec
   needs a drain-time price the bars may not carry.
+
+  How urgent that is was counted rather than inferred from the cohort. Over all 53 records in the
+  same report: **38 picks are pure `pullback`, 3 are pure `immediate`, 1 is mixed**, and 11 carry no
+  `entry_tiers` at all (the legacy plan shape). By declared tier it is **46 `pullback` against 4
+  `immediate`**. Every `immediate` pick sits on ONE trade date, 2026-10-30, against ten trade dates
+  carrying a `pullback` pick. The owner confirms on 2026-11-03 that `immediate` is NOT the default
+  entry mode, so the shape is an exception on one day rather than a drift in how picks are written,
+  and the panel will keep growing from `pullback` picks — `MSFT:2026-10-30` is the next one, still
+  open. Three of four picks on one day is a single-day number and was read as a trend here before it
+  was counted; the counts above are what the question should rest on.
 - **13 of 24 closed picks, not 24.** The other eleven are excluded for `legacy_plan_shape`,
   `entry_mode_unsupported`, `manual_close` or `placed_late`. This panel describes the subset the
   tool accepts, and that subset is not a random sample of the owner's trading.
