@@ -229,7 +229,7 @@ def companyfacts_census_command(
                     "empty": census.empty,
                     "unreadable": census.unreadable,
                     "fresh": census.fresh,
-                    "refetching": census.refetching,
+                    "aging": census.aging,
                     "past_gate": census.past_gate,
                     "chain_absent": census.chain_absent,
                     "crossing_gate_within_horizon": census.crossing_gate_within_horizon,
@@ -245,7 +245,7 @@ def companyfacts_census_command(
         f"({census.readable} readable, {census.empty} empty, {census.unreadable} unreadable)"
     )
     typer.echo(
-        f"  fcff age: {census.fresh} fresh, {census.refetching} refetching, "
+        f"  fcff age: {census.fresh} fresh, {census.aging} aging, "
         f"{census.past_gate} past gate, {census.chain_absent} no chain"
     )
     typer.echo(

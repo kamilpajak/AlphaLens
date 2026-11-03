@@ -1638,7 +1638,7 @@ class TestCompanyfactsCensusEmitsDomainMetrics(unittest.TestCase):
                 cache.companyfacts_census(store)
 
         metrics = emit.call_args.kwargs["metrics"]
-        self.assertEqual(metrics['alphalens_companyfacts_fcff_age_band{band="fresh"}'], 1)
+        self.assertEqual(metrics['alphalens_companyfacts_fcff_age_files{band="fresh"}'], 1)
         self.assertEqual(metrics['alphalens_companyfacts_cached_files{state="readable"}'], 1)
 
     def test_an_empty_store_still_emits_every_series(self) -> None:

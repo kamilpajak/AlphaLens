@@ -101,11 +101,12 @@ alphalens thematic brief
 # brief is already published must not fail over observability.
 #
 # The gauges are the half PR #1636 deferred: nothing else watches the store
-# ageing out of the 270-day TTM staleness gate, and when 2612 cached tables
-# crossed it together on 2026-09-28 every EDGAR-derived column for them went
-# blank with no error anywhere. The alert rules that read these gauges reach
-# the VPS on their own within an hour of a merge; THIS script does not, so the
-# rules ship in a later PR than the code that feeds them.
+# ageing out of the 270-day TTM staleness gate, and when a large cohort of
+# cached tables crossed it together on 2026-09-28 every TTM column for them
+# went blank with no error anywhere. The alert rules that read these gauges
+# reach the VPS on their own within an hour of a merge; THIS script does not —
+# it is baked into the image — so the rules ship in a later PR than the code
+# that feeds them.
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] cache companyfacts-census"
 alphalens cache companyfacts-census \
     || echo "WARN: companyfacts census failed; store-staleness gauges go unwritten" >&2

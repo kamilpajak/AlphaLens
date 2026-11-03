@@ -11,9 +11,10 @@ deliberate about:
   TTM *and* a capex TTM, and ``compute_ttm`` gates each separately. The store's
   own ``_data_age_days`` takes one max over the UNION of both chains, which
   reads "fresh" for an issuer whose OCF is current and whose capex stopped four
-  quarters ago — while ``fcff_yield_pct`` is null anyway. Measured on a 500-CIK
-  sample on 2026-11-03: 40 of the 142 CIKs the union measure calls fresh have a
-  capex leg already past the gate. ``test_binding_leg_*`` is that case.
+  quarters ago — while ``fcff_yield_pct`` is null anyway. Measured over all 4195
+  readable files of the local store on 2026-11-03: of the 1228 the union places
+  inside the gate, 293 are past it on the binding leg and 168 are missing a leg
+  entirely. ``TestBindingLeg`` is that case.
 * **"The chain is absent" is its own bucket, not the worst band.** It is cause 2
   of the #1335 decomposition — financials, royalty trusts and miners that never
   file ``PaymentsToAcquirePropertyPlantAndEquipment`` — a structural property of
@@ -117,13 +118,13 @@ class TestAgeBands(_StoreFixture):
         self.plant_both_legs(REFETCH_DATA_AGE_DAYS)
 
         census = self.census()
-        self.assertEqual((census.fresh, census.refetching), (1, 0))
+        self.assertEqual((census.fresh, census.aging), (1, 0))
 
-    def test_one_day_past_the_refetch_threshold_is_refetching(self) -> None:
+    def test_one_day_past_the_refetch_threshold_is_aging(self) -> None:
         self.plant_both_legs(REFETCH_DATA_AGE_DAYS + 1)
 
         census = self.census()
-        self.assertEqual((census.fresh, census.refetching), (0, 1))
+        self.assertEqual((census.fresh, census.aging), (0, 1))
 
     def test_the_gate_itself_still_serves_a_ttm(self) -> None:
         # `compute_ttm` rejects on `last_end < asof - max_staleness_days`, which
@@ -132,13 +133,13 @@ class TestAgeBands(_StoreFixture):
         self.plant_both_legs(DEFAULT_TTM_MAX_STALENESS_DAYS)
 
         census = self.census()
-        self.assertEqual((census.refetching, census.past_gate), (1, 0))
+        self.assertEqual((census.aging, census.past_gate), (1, 0))
 
     def test_one_day_past_the_gate_is_dark(self) -> None:
         self.plant_both_legs(DEFAULT_TTM_MAX_STALENESS_DAYS + 1)
 
         census = self.census()
-        self.assertEqual((census.refetching, census.past_gate), (0, 1))
+        self.assertEqual((census.aging, census.past_gate), (0, 1))
 
     def test_the_bands_partition_the_readable_files(self) -> None:
         self.plant_both_legs(40)
@@ -148,7 +149,7 @@ class TestAgeBands(_StoreFixture):
 
         census = self.census()
         self.assertEqual(
-            census.fresh + census.refetching + census.past_gate + census.chain_absent,
+            census.fresh + census.aging + census.past_gate + census.chain_absent,
             census.readable,
         )
 
@@ -300,7 +301,7 @@ class TestCrossingHorizon(_StoreFixture):
         self.plant_both_legs(REFETCH_DATA_AGE_DAYS + 1)
 
         census = self.census()
-        self.assertEqual(census.refetching, 2)
+        self.assertEqual(census.aging, 2)
         self.assertEqual(census.crossing_gate_within_horizon, 1)
 
 
@@ -375,10 +376,10 @@ class TestBandsAtLiteralAges(_StoreFixture):
 
         self.assertEqual(self.census().fresh, 1)
 
-    def test_a_two_hundred_day_old_filer_is_refetching(self) -> None:
+    def test_a_two_hundred_day_old_filer_is_aging(self) -> None:
         self.plant_both_legs(200)
 
-        self.assertEqual(self.census().refetching, 1)
+        self.assertEqual(self.census().aging, 1)
 
     def test_a_four_hundred_day_old_filer_is_past_the_gate(self) -> None:
         self.plant_both_legs(400)
@@ -397,7 +398,7 @@ class TestBandsAtLiteralAges(_StoreFixture):
                     fixture.plant_both_legs(age)
                     census = fixture.census()
                     self.assertEqual(
-                        census.fresh + census.refetching + census.past_gate + census.chain_absent,
+                        census.fresh + census.aging + census.past_gate + census.chain_absent,
                         1,
                         f"age {age} landed in no band or in two",
                     )
@@ -409,14 +410,14 @@ class TestCountsAreNotTransposable(_StoreFixture):
     """Distinct counts per bucket, so a swapped field cannot pass.
 
     Every bucket gets a different number of files. With equal counts a census
-    that wired `empty` to `unreadable`, or `refetching` to `chain_absent`,
+    that wired `empty` to `unreadable`, or `aging` to `chain_absent`,
     would satisfy every assertion — and `unreadable` is one of the series the
     follow-up alert rules read.
     """
 
     def _plant_distinct(self) -> None:
         self.plant_both_legs(40)  # fresh: 1
-        for _ in range(2):  # refetching: 2
+        for _ in range(2):  # aging: 2
             self.plant_both_legs(200)
         for _ in range(3):  # past_gate: 3
             self.plant_both_legs(400)
@@ -432,7 +433,7 @@ class TestCountsAreNotTransposable(_StoreFixture):
 
         census = self.census()
         self.assertEqual(
-            (census.fresh, census.refetching, census.past_gate, census.chain_absent),
+            (census.fresh, census.aging, census.past_gate, census.chain_absent),
             (1, 2, 3, 4),
         )
 
@@ -450,10 +451,10 @@ class TestCountsAreNotTransposable(_StoreFixture):
         metrics = census_metrics(self.census())
         self.assertEqual(
             [
-                metrics['alphalens_companyfacts_fcff_age_band{band="fresh"}'],
-                metrics['alphalens_companyfacts_fcff_age_band{band="refetching"}'],
-                metrics['alphalens_companyfacts_fcff_age_band{band="past_gate"}'],
-                metrics['alphalens_companyfacts_fcff_age_band{band="chain_absent"}'],
+                metrics['alphalens_companyfacts_fcff_age_files{band="fresh"}'],
+                metrics['alphalens_companyfacts_fcff_age_files{band="aging"}'],
+                metrics['alphalens_companyfacts_fcff_age_files{band="past_gate"}'],
+                metrics['alphalens_companyfacts_fcff_age_files{band="chain_absent"}'],
                 metrics['alphalens_companyfacts_cached_files{state="empty"}'],
                 metrics['alphalens_companyfacts_cached_files{state="unreadable"}'],
             ],
@@ -520,8 +521,8 @@ class TestCensusMetrics(_StoreFixture):
         self.plant_both_legs(40)
 
         metrics = census_metrics(self.census())
-        for band in ("fresh", "refetching", "past_gate", "chain_absent"):
-            self.assertIn(f'alphalens_companyfacts_fcff_age_band{{band="{band}"}}', metrics)
+        for band in ("fresh", "aging", "past_gate", "chain_absent"):
+            self.assertIn(f'alphalens_companyfacts_fcff_age_files{{band="{band}"}}', metrics)
         for state in ("readable", "empty", "unreadable"):
             self.assertIn(f'alphalens_companyfacts_cached_files{{state="{state}"}}', metrics)
 
@@ -530,8 +531,8 @@ class TestCensusMetrics(_StoreFixture):
         self.plant_both_legs(400)
 
         metrics = census_metrics(self.census())
-        self.assertEqual(metrics['alphalens_companyfacts_fcff_age_band{band="fresh"}'], 1)
-        self.assertEqual(metrics['alphalens_companyfacts_fcff_age_band{band="past_gate"}'], 1)
+        self.assertEqual(metrics['alphalens_companyfacts_fcff_age_files{band="fresh"}'], 1)
+        self.assertEqual(metrics['alphalens_companyfacts_fcff_age_files{band="past_gate"}'], 1)
 
     def test_the_horizon_label_states_the_window(self) -> None:
         # The threshold lives in a label, not in the metric name, so a second

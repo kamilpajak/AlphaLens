@@ -7,13 +7,23 @@ being invisible.
 WHY THIS EXISTS. ``compute_ttm`` refuses any result whose freshest input period
 ended more than :data:`~alphalens_pipeline.data.fundamentals.ttm_aggregator.DEFAULT_TTM_MAX_STALENESS_DAYS`
 days before ``asof``. Until #1636 the store never refreshed a file it already
-held, so 2612 cached tables stopped at the quarter ending 2025-12-31 and all
-crossed that gate on 2026-09-28 — together, silently, with no error anywhere.
-Every column that calls ``compute_ttm`` went blank with them: the FCFF yield,
-the valuation composite, the magic-formula health screen, the Buffett layer and
-the O'Neil earnings-growth term. #1636 gave the store a lifetime; its "Known
-issues" left this half undone, and named the next wave: 1843 tables stopping at
-2026-03-31, due to cross on 2026-12-27.
+held, so a large cohort of cached tables stopped at the quarter ending
+2025-12-31 and crossed that gate together on 2026-09-28 — silently, with no
+error anywhere.
+
+What goes blank with such a cohort, traced rather than assumed: ``compute_ttm``
+is reached from exactly one place, ``ev_fcff_features_as_of``
+(``edgar_fundamentals.py``, eleven calls), so every consumer of that features
+dict loses its TTM columns at once — the thematic scorer, and through it the
+FCFF yield, the valuation composite and the magic-formula health screen, plus
+``experts/buffett/comparison.py``, which reads the same dict. The O'Neil
+earnings-growth term does NOT belong on that list, and the Buffett layer only
+half belongs: both also read ``annual_series_as_of``, which carries no
+staleness gate at all. An earlier version of this docstring named all five as
+going dark together; that was repeating #1636's prose rather than reading the
+call graph.
+
+#1636 gave the store a lifetime; its "Known issues" left this half undone.
 
 WHAT IT MEASURES, AND WHAT IT DELIBERATELY DOES NOT.
 
@@ -25,62 +35,118 @@ WHAT IT MEASURES, AND WHAT IT DELIBERATELY DOES NOT.
   ``alphalens_thematic_score_core_numerics_finite_total`` covers only columns
   whose absence is always a defect, and ``fcff_yield_pct`` is kept out of it.
 * **The BINDING leg, not the union.** ``compute_fcff`` needs an operating-cash-
-  flow TTM *and* a capex TTM, each gated on its own. So the age that decides
-  whether this issuer can produce an FCFF yield is the OLDER of the two legs.
-  This is NOT the measure ``EdgarFundamentalsStore._data_age_days`` uses: that
-  one takes a single max over the UNION of both chains, which is right for
+  flow TTM *and* a capex TTM, each gated on its own, so an issuer whose capex
+  stopped four quarters ago cannot produce an FCFF yield however current its
+  cash-flow statement is. This census therefore bins on the OLDER of the two
+  legs. That is NOT the measure ``EdgarFundamentalsStore._data_age_days`` uses:
+  that one takes a single max over the UNION of both chains, which is right for
   deciding whom to re-ask (any sign of life means the issuer is worth a fetch)
-  and wrong for reporting who has gone dark. Counted over all 4195 readable
-  files of the local store on 2026-11-03: the union measure places 1228 inside
-  the gate, and of those 293 are past it on the binding leg while another 168
-  are missing a leg entirely. The three numbers close exactly against this
-  census's own bands (767 + 293 + 168 = 1228), which is the second path that
-  makes them a measurement rather than a restatement.
+  and wrong for reporting who has gone dark. Measured on the production store
+  on 2026-11-03, the two disagree about 1007 files — see the table below.
+
+  The binding leg is NECESSARY but not SUFFICIENT, and the gap is measured, not
+  waved at. Of the files this census places inside the gate, 5.7% still cannot
+  produce both TTM legs, because ``compute_ttm`` has to BUILD the number: four
+  standalone quarters spanning 250-300 days, or a Compustat-style construction
+  with a prior-FY anchor. This census asks only when the newest row ended. A
+  further group fails one level up: ``compute_fcff_yield_pct`` falls back on
+  ``impute_fcff(revenue_ttm, fcf_margin_5y_median)`` when actual FCFF is
+  non-positive, and both of those come from the same store, so the REVENUE
+  chain's own age can darken an issuer whose two FCFF legs are current. So
+  ``fresh + aging`` is an upper bound on what the FCFF path can read, by a
+  few percent, and the series is a staleness trend rather than a yield count.
 * **An absent leg is its own bucket.** ``band="chain_absent"`` holds the
   issuers that never file one of the two chains at all — financials, royalty
-  trusts, miners. That is cause 2 of the #1335 decomposition: a structural
-  property of the universe, not a staleness a refetch could cure. Folded into
-  ``past_gate`` it would put a permanent floor under the series a reader
-  watches for movement.
+  trusts and miners that do not report
+  ``PaymentsToAcquirePropertyPlantAndEquipment``, which is cause 2 of the #1335
+  decomposition, TOGETHER WITH the tables that carry no past ``us-gaap`` period
+  of any kind, which that decomposition counted separately. Both are
+  structurally dead for FCFF, which is why they share a band, but the band is
+  therefore wider than cause 2 alone. Folded into ``past_gate`` it would put a
+  permanent floor under the series a reader watches for movement.
 
-WHAT IS AND IS NOT ALERTABLE, measured on the production store on 2026-11-03
-(all 6076 files, read through this measure):
+THE PRODUCTION BASELINE. Taken on 2026-11-03 by running THIS code against the
+live store, read-only, inside the pipeline image — not by the store's own
+measure, and not on the Mac's mirror, which is a different and staler store:
 
-  1827 files, 30.1% of the store, are past the gate. That share is not a fault
-  and cannot be drained. ``preload`` re-asks only the tickers in the current
-  run's universe, so a CIK nobody scores is never re-asked: 1219 of the 1697
-  chain-bearing past-gate files had not been written for over 120 days. A level
-  threshold on that share is lit from the day it ships. A RISE threshold is no
-  better — 786 files cross the gate before 2026-12-27, 698 of them on that one
-  date, and 143 of the 786 were refetched within the last 30 days and still
-  carry 2026-03-31 or older, because SEC has nothing newer to give.
+  =====================  =====  ======  ===================================
+  band                   files  share   under the store's union measure
+  =====================  =====  ======  ===================================
+  fresh (<= 150 days)     2051   33.8%  2910
+  aging (150-270)          569    9.4%   859
+  past_gate (> 270)       2243   36.9%  1827
+  chain_absent            1201   19.8%   610
+  empty                     12    0.2%    12
+  unreadable                 0    0.0%     0
+  TOTAL                   6076  100.0%  6076
+  =====================  =====  ======  ===================================
+
+Both identities close exactly: 6064 + 12 + 0 = 6076 and the four bands sum to
+6064. The right-hand column is why this table exists in full. An earlier
+version of this docstring published the union column as though this census had
+produced it, and it does not even close — those four rows sum to 6206 against
+6076, because the union measure's "no chain" bucket overlaps its past-gate
+bucket by 130 files. Expect the first scraped gauges to read 416 MORE past-gate
+and 591 MORE chain_absent files than the union measure suggests. That
+difference is the whole point of the binding leg, not a defect.
+
+WHAT IS AND IS NOT ALERTABLE.
+
+36.9% of the store being past the gate is not a fault and cannot be drained.
+``preload`` re-asks only the tickers in the current run's universe, never the
+store, so a CIK nobody scores is never re-asked at all. A level threshold on
+that share is therefore lit from the day it ships.
+
+A RISE threshold is no better, and the shape of the ageing says why. 522 files
+cross the gate between 2026-11-03 and 2026-12-27, 451 of them on that single
+date — but the real cliff is later and nearly four times larger: 1752 files
+cross on 2027-03-28. Those dates are quarter-ends plus 271 days, so they are a
+property of the filing calendar, and a rule that fires on them fires every
+quarter on something no operator action clears.
 
 So the age bands and the crossing horizon are DASHBOARD series: they make the
 wave visible and graphable, and nothing pages on them. What pages is the
 machinery — is the store still there, do its files still open, is anything
-still writing it. :data:`WRITER_LIVENESS_DAYS` is the series for that last one,
-and it is the only one that moves within days of a regression: a frozen store
-keeps serving fresh data for about 150 days before one file reaches the refetch
-threshold, so every age band is blind for five months after the freeze starts.
+still writing it.
+
+:data:`WRITER_LIVENESS_DAYS` is the series for that last question, and it is
+the FAST one. Not because the bands are slow to move — measured on the
+production store, the first fresh file reaches the refetch threshold in 9 days
+and 1891 of the 2051 fresh files pass it within 30, so a frozen store's bands
+start shifting within weeks. The reason is that a shifting band is AMBIGUOUS:
+it moves the same way when the store freezes, when the universe rotates, and
+when the filing calendar turns. A liveness count that falls to zero means one
+thing only. (An earlier version of this docstring claimed the bands stay blind
+for five months after a freeze; that was wrong by a factor of twenty and is
+corrected here rather than quietly dropped.)
+
 It measures the WRITER, not freshness — refetching a dormant royalty trust
 advances an mtime and changes nothing at the gate — and must never be read as
 the latter.
 
 KNOWN GAP, inherited from the measure this one refines (#1642). ``compute_ttm``
 also filters ``unit == "USD"`` and a form whitelist; neither this census nor
-``_data_age_days`` filters either. So a CNY or CAD reporter, and a 10-KT filer,
-read here as fresher than the consumer actually sees them, and this census
-slightly UNDER-reports how much of the store is dark. Measured over 600 random
-CIKs on 2026-09-30, 5 disagreed and none was masked, because all five were past
-the threshold anyway. Closing it needs its own measurement: a non-USD reporter
-would end up with no age at all, which may be worse than the gap.
+``_data_age_days`` filters either, so a CNY or CAD reporter and a 10-KT filer
+read here as fresher than the consumer sees them. Measured rather than merely
+admitted: applying both filters to the age moves 16 of 4195 local files between
+bands, 0.4%, and 15 of those were dark either way. It is the SMALL half of the
+over-report. The large half is TTM constructability above — 43 files against
+this gap's 1, on the same population — so a reader calibrating a dashboard
+should take ``fresh + aging`` as about 6% optimistic, not 0.4%.
 
 Read through projected parquet reads rather than through
 ``CompanyfactsParquetReader``: that reader loads every column and memoises up
 to 2500 whole tables, and a store-wide scan has no use for either. Three of the
-twelve columns answer the whole census. Measured 0.66-1.21 ms per file, so
-about 4-8 s for a 6076-file store; the whole 4200-file local store censuses in
-7.6 s end to end through the CLI.
+twelve columns answer the whole census.
+
+COST, measured on the VPS against the real 6076-file store, three consecutive
+runs inside the pipeline image: 28.6 s, 34.1 s and 34.4 s, so 4.7-5.7 ms per
+file, with a peak RSS of 288-327 MB. An earlier version of this docstring said
+4-8 s, extrapolated from the Mac's 0.66-1.21 ms per file; the VPS is four to
+five times slower per file and the extrapolation was never run there. Against
+the thematic build's 210-minute start timeout and its 4 GB MemoryMax that is
+still about 0.3% of the time budget and under a tenth of the memory, which is
+what makes a full scan three times a day affordable.
 """
 
 from __future__ import annotations
@@ -106,8 +172,12 @@ logger = logging.getLogger(__name__)
 #: that made the original freshness measure lie.
 _TAXONOMY: Final[str] = "us-gaap"
 
-#: The two legs, each a CHAIN rather than one concept, so an issuer that
-#: migrated to the continuing-operations variant still reads as filing the leg.
+#: The two legs, each a CHAIN rather than one concept, because an issuer can
+#: file either member and still be filing the leg. The reasons differ: the OCF
+#: chain's second member is the continuing-operations variant the same issuer
+#: migrates to, while the capex chain's is a different tag some issuers use
+#: instead (``PaymentsToAcquireProductiveAssets``). Reading one member only
+#: would put a live filer in ``chain_absent``.
 _OCF_LEG: Final[frozenset[str]] = frozenset(chains.OPERATING_CASH_FLOW)
 _CAPEX_LEG: Final[frozenset[str]] = frozenset(chains.CAPEX)
 
@@ -123,28 +193,40 @@ _COLUMNS: Final[list[str]] = ["taxonomy", "concept", "period_end"]
 #: horizon can count a CIK that is legitimately not yet due to be re-asked. The
 #: ceiling: every CIK in the refetch band crosses the gate within
 #: ``270 - 150 = 120`` days by arithmetic, so any horizon from 120 up is just
-#: ``band="refetching"`` under a second name. Verified on the local store —
-#: within 60d, within 90d and within 120d all read 1218, the size of the band.
+#: ``band="aging"`` under a second name. Verified on the PRODUCTION store
+#: with this census's own measure — within 120 days reads 569, exactly the size
+#: of the refetch band, while 30 days reads 39. (An earlier version of this
+#: comment quoted 1218 for the same identity; that was the union measure's
+#: band, taken on the Mac's mirror, and both the instrument and the store were
+#: wrong.)
 CROSSING_HORIZON_DAYS: Final[int] = 30
 
 #: How far back the writer-liveness counter looks.
 #:
 #: 7 days, because it must clear the longest gap a HEALTHY store can show. The
 #: refetch budget is spent freshest-stale-first, so a converged store writes
-#: only the few files that newly crossed the threshold: measured on production
-#: over the week to 2026-11-03, the daily stale counts were 82, 12, 31 and 5,
-#: and 408 files were written in those 7 days. A 1-day window would read zero
-#: on a quiet legitimate day; a 30-day window would take a month to notice a
-#: freeze.
+#: only the files that newly crossed the threshold. Measured on production on
+#: 2026-11-03 by this census: 414 files carry an mtime inside this window, so
+#: the healthy reading is firmly non-zero rather than marginally so. A 1-day
+#: window would read zero on a quiet legitimate day; a 30-day window would take
+#: a month to notice a freeze.
 WRITER_LIVENESS_DAYS: Final[int] = 7
 
 _BAND_FRESH: Final[str] = "fresh"
-_BAND_REFETCHING: Final[str] = "refetching"
+#: Named ``aging`` and deliberately NOT ``refetching``, although its lower
+#: bound is :data:`REFETCH_DATA_AGE_DAYS`. The refetcher decides with the
+#: store's UNION measure, this census bins on the binding leg, and the two
+#: disagree about a thousand files on the production store — so a file can sit
+#: in this band while ``preload`` considers it fresh and never re-asks it. A
+#: label promising "this is being refetched" would be read as a queue depth,
+#: and it is not one: it is how many files are past the refetch threshold and
+#: still serving.
+_BAND_AGING: Final[str] = "aging"
 _BAND_PAST_GATE: Final[str] = "past_gate"
 _BAND_CHAIN_ABSENT: Final[str] = "chain_absent"
 
 _METRIC_CACHED_FILES: Final[str] = "alphalens_companyfacts_cached_files"
-_METRIC_AGE_BAND: Final[str] = "alphalens_companyfacts_fcff_age_band"
+_METRIC_AGE_BAND: Final[str] = "alphalens_companyfacts_fcff_age_files"
 _METRIC_CROSSING: Final[str] = "alphalens_companyfacts_crossing_gate_files"
 _METRIC_REFETCHED: Final[str] = "alphalens_companyfacts_refetched_files"
 
@@ -157,7 +239,7 @@ class StoreCensus:
     """One reading of the whole store.
 
     ``readable + empty + unreadable == total_files``, and
-    ``fresh + refetching + past_gate + chain_absent == readable``. Both
+    ``fresh + aging + past_gate + chain_absent == readable``. Both
     identities are pinned by tests; they are what lets a rule compare a count
     against its own denominator rather than against a remembered one.
     """
@@ -168,7 +250,7 @@ class StoreCensus:
     empty: int
     unreadable: int
     fresh: int
-    refetching: int
+    aging: int
     past_gate: int
     chain_absent: int
     crossing_gate_within_horizon: int
@@ -235,7 +317,7 @@ def census_companyfacts_store(store_dir: Path, *, today: dt.date | None = None) 
     ref = today or dt.date.today()
     counts = {
         _BAND_FRESH: 0,
-        _BAND_REFETCHING: 0,
+        _BAND_AGING: 0,
         _BAND_PAST_GATE: 0,
         _BAND_CHAIN_ABSENT: 0,
     }
@@ -263,7 +345,7 @@ def census_companyfacts_store(store_dir: Path, *, today: dt.date | None = None) 
         elif age <= REFETCH_DATA_AGE_DAYS:
             counts[_BAND_FRESH] += 1
         elif age <= DEFAULT_TTM_MAX_STALENESS_DAYS:
-            counts[_BAND_REFETCHING] += 1
+            counts[_BAND_AGING] += 1
         else:
             counts[_BAND_PAST_GATE] += 1
 
@@ -284,7 +366,7 @@ def census_companyfacts_store(store_dir: Path, *, today: dt.date | None = None) 
         empty=empty,
         unreadable=unreadable,
         fresh=counts[_BAND_FRESH],
-        refetching=counts[_BAND_REFETCHING],
+        aging=counts[_BAND_AGING],
         past_gate=counts[_BAND_PAST_GATE],
         chain_absent=counts[_BAND_CHAIN_ABSENT],
         crossing_gate_within_horizon=crossing,
@@ -309,7 +391,7 @@ def census_metrics(census: StoreCensus) -> dict[str, int]:
         f'{_METRIC_CACHED_FILES}{{state="empty"}}': census.empty,
         f'{_METRIC_CACHED_FILES}{{state="unreadable"}}': census.unreadable,
         f'{_METRIC_AGE_BAND}{{band="{_BAND_FRESH}"}}': census.fresh,
-        f'{_METRIC_AGE_BAND}{{band="{_BAND_REFETCHING}"}}': census.refetching,
+        f'{_METRIC_AGE_BAND}{{band="{_BAND_AGING}"}}': census.aging,
         f'{_METRIC_AGE_BAND}{{band="{_BAND_PAST_GATE}"}}': census.past_gate,
         f'{_METRIC_AGE_BAND}{{band="{_BAND_CHAIN_ABSENT}"}}': census.chain_absent,
         f'{_METRIC_CROSSING}{{within_days="{CROSSING_HORIZON_DAYS}"}}': (

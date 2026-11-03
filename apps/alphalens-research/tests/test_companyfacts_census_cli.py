@@ -115,7 +115,7 @@ class TestJsonOutput(_CommandFixture):
                     "empty",
                     "unreadable",
                     "fresh",
-                    "refetching",
+                    "aging",
                     "past_gate",
                     "chain_absent",
                     "crossing_gate_within_horizon",
@@ -224,7 +224,7 @@ class _StubCensus:
 
     asof = dt.date(2026, 11, 3)
     total_files = readable = empty = unreadable = 0
-    fresh = refetching = past_gate = chain_absent = 0
+    fresh = aging = past_gate = chain_absent = 0
     crossing_gate_within_horizon = refetched_recently = 0
 
 
