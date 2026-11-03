@@ -993,9 +993,14 @@ def _every_keep_reason_journal() -> list[dict[str, Any]]:
             "ts": 61.0,
         },
         {"kind": "oco_unsupported", "uic": _BOUND_UIC},
-        {"kind": "oco_placed", "uic": _BOUND_UIC, "ts": 70.0},
-        {"kind": "amend_failed", "uic": _BOUND_UIC, "ts": 71.0},
-        {"kind": "oco_too_far", "uic": _BOUND_UIC, "ts": 72.0},
+        # Inside the TTL window of the middle ``now`` ``_every_fold`` queries
+        # (125.0, ttl 10.0) and outside the latest (150.0). At the ts these
+        # three carried before — 70-72 — every one of the nine ``ttl:*`` entries
+        # of the oracle was the empty set at every query point, so the fold
+        # comparison in the REACHED test below was true and said nothing.
+        {"kind": "oco_placed", "uic": _BOUND_UIC, "ts": 118.0},
+        {"kind": "amend_failed", "uic": _BOUND_UIC, "ts": 119.0},
+        {"kind": "oco_too_far", "uic": _BOUND_UIC, "ts": 120.0},
         {"kind": "amend_ok", "uic": _BOUND_UIC, "qty": 5.0, "ts": 73.0},
         {"kind": "amend_seq", "uic": _BOUND_UIC, "seq": 4},
         {
@@ -1041,9 +1046,16 @@ def _every_keep_reason_journal() -> list[dict[str, Any]]:
 def _more_of_every_kind(
     journal: list[dict[str, Any]], copies: int, skip: str = ""
 ) -> list[dict[str, Any]]:
-    """``journal`` with ``copies`` further rounds of every line prepended, each
+    """``journal`` with ``copies`` further rounds of every line APPENDED, each
     timestamped line carrying a FRESH ts and the same keys (crid, pick keys,
-    tag, order ids) — more journal, no new keys. ``skip`` leaves one kind out."""
+    tag, order ids) — more journal, no new keys. ``skip`` leaves one kind out.
+
+    Appended, not prepended, because the fresh timestamps must land where a
+    writer would put them: this compactor is write-order-sensitive (the folds
+    walk lines in write order and a plan line resets the trailed fold), so a
+    newer round sitting ahead of older lines is a file no daemon can produce.
+    Measured on ``_every_keep_reason_journal`` with ``skip="tranche_fired"``:
+    appended the kept set is 16 at every copy count, prepended it was 21."""
     grown: list[dict[str, Any]] = []
     ts = 300.0
     for _ in range(copies):
@@ -1055,7 +1067,7 @@ def _more_of_every_kind(
                 ts += 1.0
                 copy["ts"] = ts
             grown.append(copy)
-    return grown + journal
+    return journal + grown
 
 
 class TestTheKeptSetGrowsWithKEYSNotWithTheJOURNAL(unittest.TestCase):
@@ -1102,6 +1114,11 @@ class TestTheKeptSetGrowsWithKEYSNotWithTheJOURNAL(unittest.TestCase):
             cl.COMPACTED_FIXED_LINES_PER_UIC_BOUND,
             "the bound must be reached from below: a bound nobody reaches is not measured",
         )
+        # A smoke check, not the fold gate: 6 of the oracle's 24 entries are
+        # still empty on this shape (``standing``, ``moving``,
+        # ``standing_stop_move`` and the three ``ttl:*:150.0`` queries, where
+        # expired IS the right answer), so for those it compares nothing. The
+        # randomized battery above is what holds fold identity.
         self.assertEqual(_every_fold(journal), _every_fold(kept), "and it still folds the same")
 
     def test_twenty_times_the_journal_keeps_the_same_number_of_lines(self) -> None:
@@ -1117,6 +1134,11 @@ class TestTheKeptSetGrowsWithKEYSNotWithTheJOURNAL(unittest.TestCase):
             for copies in (1, 5, 20)
         ]
         self.assertEqual(counts, [counts[0]] * 3, "no growth in the journal's length")
+        # The step this comparison alone cannot see: it compares the grown
+        # journals to EACH OTHER, so a one-off jump between the ungrown journal
+        # and the first extra round reads as flat. Measured here too.
+        ungrown = len(cl._compact_standalone_stop_journal_lines(journal))
+        self.assertLessEqual(counts[0], ungrown, "one extra round keeps no more lines")
 
     def test_the_fired_slot_is_the_one_term_that_grows_per_LINE(self) -> None:
         # Measured, and stated rather than hidden: the fired election keeps

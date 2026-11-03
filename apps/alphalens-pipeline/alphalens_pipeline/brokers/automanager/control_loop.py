@@ -5350,8 +5350,17 @@ def _stop_move_blocks(
 # per closure ref key (#1223), and one ``tranche_fired`` per fired line still
 # inside the fold's accumulator. That last term is per LINE while the fold reads
 # only the TAG; it was 4 lines in the whole LIVE history on 2026-11-03.
-# Reached exactly, and held from above over the randomized battery, by
-# ``test_compaction_fold_identity.TestTheKeptSetGrowsWithKEYSNotWithTheJOURNAL``.
+#
+# The discriminating test is the EQUALITY one in
+# ``test_compaction_fold_identity.TestTheKeptSetGrowsWithKEYSNotWithTheJOURNAL``,
+# which reaches this number exactly on a constructed shape, together with the
+# length-independence test beside it. The randomized battery in the same class
+# is a sanity ceiling and nothing more: its key-driven allowance counts every
+# ``tranche_fired`` line of the uic rather than those the fold still holds, so
+# over 1500 journals and 2943 per-uic rows the tightest trial still had 4 lines
+# of slack (measured 2026-11-03). It would stay green under a widening of up to
+# that much, and tightening it would mean re-deriving the fold's accumulator
+# inside a test, i.e. computing the expectation from the code under test.
 COMPACTED_FIXED_LINES_PER_UIC_BOUND = 14
 
 

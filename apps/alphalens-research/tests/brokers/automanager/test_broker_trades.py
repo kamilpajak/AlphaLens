@@ -17,10 +17,13 @@ import datetime as dt
 import json
 import re
 import unittest
+from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import journal_snapshots, trade_alerts
+from alphalens_pipeline.brokers.automanager import trades as trades_module
 from alphalens_pipeline.brokers.automanager.trades import (
     EXIT_REASON_BY_ALERT_REASON,
     EXIT_REASONS,
@@ -186,19 +189,25 @@ class GoldenVst(_TradesCase):
 
 
 class MfeLowerBoundIsReadFromTheCompactionSnapshot(_TradesCase):
-    """``mfe_lower_bound`` is ``max(trailed.peak) - avg_entry_price``, and on the
-    LIVE fixture every ``trailed`` line it reads had ALREADY been removed from
-    the journal by a boot compaction: the current file holds none of them, the
-    2026-10-01 snapshot holds all four. The number exists because
-    ``trades._read_journals`` reads ``journal_snapshots.iter_journal_history``,
-    not the live file (#1650).
+    """``mfe_lower_bound`` is ``max(trailed.peak) - avg_entry_price``, read over
+    ``journal_snapshots.iter_journal_history`` (#1648) rather than over the live
+    journal, and the four peaks it reads on the LIVE fixture are in the
+    2026-10-01 snapshot.
+
+    NO assertion here may depend on WHICH of them the fixture's current file
+    kept: that file was written by the compactor as it stood before #1707 added
+    the stop-move keep block, so today's compactor applied to the same snapshot
+    keeps the newest ``trailed`` line. The provenance is fixed; the reader
+    behaviour is what this class pins. Hence
+    :meth:`test_the_reader_is_wired_to_the_history_not_to_the_live_file`, which
+    holds whatever the fixture contains.
 
     The reader-side half of the retention decision recorded in
-    ``control_loop._compact_standalone_stop_journal_lines``: a compactor slot
-    keeping ONE ``trailed`` line per uic cannot answer this reader, which needs
-    the MAXIMUM peak inside one entry-to-exit window. A change that points
-    ``broker trades`` at the live journal instead of the history must make this
-    red."""
+    ``control_loop._compact_standalone_stop_journal_lines``: the reader needs the
+    MAXIMUM peak inside one entry-to-exit window, which no per-uic compactor slot
+    can supply, because ``_update_peaks`` reseeds the high-water mark after a
+    restart and the kept newest line can then carry a LOWER peak than a dropped
+    earlier one."""
 
     _VST_UIC = 7300542
     _VST_AVG_ENTRY = 135.11
@@ -217,10 +226,10 @@ class MfeLowerBoundIsReadFromTheCompactionSnapshot(_TradesCase):
             if raw.strip()
         ]
         history = list(journal_snapshots.iter_journal_history(journal))
-        self.assertEqual(
-            [r for r in current if self._is_vst_trail(r)],
-            [],
-            "the boot compaction left no trailed line of this uic in the journal",
+        self.assertLess(
+            len([r for r in current if self._is_vst_trail(r)]),
+            len(self._SNAPSHOT_PEAKS),
+            "the live file does not hold every trailed line the snapshot does",
         )
         self.assertEqual(
             sorted(r["peak"] for r in history if self._is_vst_trail(r)),
@@ -244,6 +253,62 @@ class MfeLowerBoundIsReadFromTheCompactionSnapshot(_TradesCase):
         measured = trade(self.build(pick=VST), VST)["outcome"]["mfe_lower_bound"]
         self.assertIsNone(value(measured))
         self.assertEqual(measured["null_reason"], "not_journaled")
+
+    def test_a_later_lower_peak_does_not_replace_the_maximum(self) -> None:
+        # Discrimination check: the fixture's four peaks ascend with ``ts``, so
+        # ``max(peaks)`` and ``peaks[-1]`` are the same number on it and a reader
+        # that took the LAST one would pass. This appends a synthetic fifth
+        # ``trailed`` line one second after the last real one, inside the same
+        # window, carrying a peak BELOW the maximum — the shape a restart
+        # produces, since ``_update_peaks`` reseeds the high-water mark.
+        newest_ts = max(
+            record["ts"]
+            for record in journal_snapshots.iter_journal_history(
+                install_journals(self.home) / "standalone_stops.jsonl"
+            )
+            if self._is_vst_trail(record)
+        )
+        install_journals(
+            self.home,
+            extra={
+                "standalone_stops": [
+                    {
+                        "kind": "trailed",
+                        "uic": self._VST_UIC,
+                        "peak": min(self._SNAPSHOT_PEAKS),
+                        "last_price": min(self._SNAPSHOT_PEAKS),
+                        "level": 130.0,
+                        "ts": newest_ts + 1.0,
+                    }
+                ]
+            },
+        )
+        self.assertAlmostEqual(
+            value(trade(self.build(pick=VST), VST)["outcome"]["mfe_lower_bound"]),
+            max(self._SNAPSHOT_PEAKS) - self._VST_AVG_ENTRY,
+            places=6,
+        )
+
+    def test_the_reader_is_wired_to_the_history_not_to_the_live_file(self) -> None:
+        # Structural, so it survives a refreshed fixture: the whole
+        # no-retention decision rests on this one call, and a value assertion
+        # on a fixture cannot hold it (the fixture's current file predates
+        # #1707, see the class docstring).
+        install_journals(self.home)
+        seen: list[Path] = []
+        real = journal_snapshots.iter_journal_history
+
+        def spy(path: Path, **kwargs: Any) -> Any:
+            seen.append(path)
+            return real(path, **kwargs)
+
+        with mock.patch.object(journal_snapshots, "iter_journal_history", spy):
+            trade(self.build(pick=VST), VST)
+        self.assertEqual(
+            sorted(path.name for path in seen),
+            sorted(f"{name}.jsonl" for name in trades_module._JOURNALS),
+            "every journal the record is built from is read through the history",
+        )
 
 
 class DiscriminationCheck(_TradesCase):
