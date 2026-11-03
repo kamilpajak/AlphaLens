@@ -166,7 +166,8 @@ first look at fires says the opposite.
   about.
 
 **2026-10-29 reference addendum (§4d) — the recorded reason, and the premise it rests on.
-Status: RECOVERED AND CONTRADICTED.**
+Status: RECOVERED AND CONTRADICTED — by the vendor's own instrument metadata as of
+2026-11-03, not only by a naming convention.**
 
 Written because two live-tier docstrings cited a "memo trap #8" that is in no tracked markdown.
 Three earlier drafts of this section were wrong in ways the adversarial pass caught; what they got
@@ -230,9 +231,21 @@ row is consistent with BOTH hypotheses. The VCYT trough of 44.00 does not help e
 latch, not a server echo.
 
 **6. Two cheap steps before any attended probe, neither needing an order.**
-*(i)* Read `SupportedOrderTriggerPriceTypes` for the instrument — the **A7** step already written
-down in [`trailing_probes_runbook_2026_08_07.md`](trailing_probes_runbook_2026_08_07.md), which is
-read-only. *(ii)* Journal the server's own resting trigger. The reconcile pass already calls
+*(i)* **DONE 2026-11-03, and it is the strongest evidence in this section.**
+`SupportedOrderTriggerPriceTypes` is `["LastTraded", "Open"]` on MSFT (uic 261), GOOGL
+(773599), VCYT (1823042) and HUT (23457959) — four XNAS names this project has armed a native
+trailing entry on, the first of them the currently open position. **Bid is not on the list at
+all**, and no `DefaultOrderTriggerPriceType` is published, so the venue states no default
+either. `SupportedOrderTypes` on the same four includes `TrailingStopIfTraded`, so the type the
+daemon places is supported where the list offers no Bid. Read through the canonical client,
+`SaxoClient.get_instrument_details(uic, "Stock")` →
+`GET /ref/v1/instruments/details/{Uic}/{AssetType}`: four GETs, no order touched; the A7 step in
+[`trailing_probes_runbook_2026_08_07.md`](trailing_probes_runbook_2026_08_07.md) now carries the
+method beside the answer. **So reason (b) is contradicted by vendor metadata at n=4**, not only
+by a naming convention and the single 2026-08-07 precheck. What it does NOT settle: the field
+specifies the `Trigger*` family's trigger price, and the vendor still publishes nothing about
+which series a `TrailingStopIfTraded` RATCHET follows — only that on these instruments Bid is
+not an offered trigger reference at all. All four are XNAS; a non-US venue is unprobed. *(ii)* Journal the server's own resting trigger. The reconcile pass already calls
 `get_order` every 45 s on every resting armed tier (`control_loop`'s `_read_entry_order`) and uses
 the answer only for "is it gone"; on a `TrailingStopIfTraded` the resting price is Saxo's `Price`,
 the trigger as the server holds it, and the exit side already trusts it this way (#1514). A
