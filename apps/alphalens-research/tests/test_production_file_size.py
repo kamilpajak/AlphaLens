@@ -348,16 +348,16 @@ BASELINE: dict[str, int] = {
     # drain, safe on the base commit, unsafe on the first version of this one.
     # The room is the comment saying why, because the next reader will otherwise
     # see a redundant `list()` over something already annotated `-> list`.
-    # +100 for the standalone-stop compactor's account of what it DROPS: which
+    # +132 for the standalone-stop compactor's account of what it DROPS: which
     # reader recovers each dropped number (the pre-compaction snapshots, not this
     # file), why no retention slot is added for one, the per-uic growth bound the
     # compactor had never stated, and ``STANDALONE_STOP_JOURNAL_KINDS``, the
     # per-kind compaction decision an AST gate holds against the writers. All of
     # it docstring and two constants, in the function a future author would widen.
-    # Counted with ``wc -l`` on the file (8192 before, 8292 after) — the entry it
+    # Counted with ``wc -l`` on the file (8192 before, 8324 after) — the entry it
     # replaces read 8193, one line above the file it recorded, so the entry-to-entry
-    # delta is 99 while the file grew 100.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8292,
+    # delta is 131 while the file grew 132.
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8324,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     # +24 for PR #1840, to take Sonar python:S3776 off ``select_stop_move_lines``: the
     # four skip guards move into ``_stop_move_window_ts`` with the docstring that names
