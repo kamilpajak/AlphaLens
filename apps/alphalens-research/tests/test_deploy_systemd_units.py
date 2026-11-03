@@ -916,6 +916,41 @@ class TestRunThematicDayChainContract(unittest.TestCase):
             line = self._stage_line(stage)
             self.assertIn("||", line, f"post-brief stage must be best-effort ('|| ...'): {line!r}")
 
+    def test_every_invoked_subcommand_exists_in_the_cli(self):
+        # `_stage_line` matches by startswith, so a script calling a command
+        # that does not exist satisfies every other test in this class: the
+        # line is found, it carries its `||`, and the build stays green while
+        # the step does nothing. A best-effort step is exactly where that hides
+        # — the `||` swallows Typer's "No such command" and its exit code 2.
+        from alphalens_cli.main import app
+        from typer.testing import CliRunner
+
+        runner = CliRunner()
+        for stage in self.CORE_STAGES + self.BEST_EFFORT:
+            words = ("thematic " + stage if stage in self.CORE_STAGES else stage).split()
+            group, command = words[0], words[1]
+            with self.subTest(stage=stage):
+                result = runner.invoke(app, [group, "--help"])
+                self.assertEqual(result.exit_code, 0, f"group {group!r} missing: {result.stdout}")
+                self.assertIn(
+                    command,
+                    result.stdout,
+                    f"run_thematic_day.sh calls `alphalens {group} {command}`, "
+                    f"which is not a command of the {group!r} group",
+                )
+
+    def test_the_companyfacts_census_runs_after_the_brief(self):
+        # Its whole value is reading the state the day's refetch pass left
+        # behind, and `score` is what calls preload. Moved above `score` it
+        # still passes every other assertion here while measuring yesterday's
+        # store, which is the kind of wrong that looks right on a dashboard.
+        census = self.text.index("alphalens cache companyfacts-census")
+        brief = self.text.index("alphalens thematic brief")
+        score = self.text.index("alphalens thematic score")
+
+        self.assertGreater(census, brief, "census must run after `thematic brief`")
+        self.assertGreater(census, score, "census must run after `thematic score`")
+
     def test_core_stage_ordering(self):
         # score (which reads map-themes' parquet) must run before brief, so the
         # zero-novel / #614 fail-fast actually gates the brief.

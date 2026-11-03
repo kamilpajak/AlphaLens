@@ -29,6 +29,7 @@ import datetime as dt
 import os
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 import pyarrow as pa
@@ -37,6 +38,7 @@ from alphalens_pipeline.data.fundamentals import concept_chains as chains
 from alphalens_pipeline.data.fundamentals.companyfacts_parquet import SCHEMA
 from alphalens_pipeline.data.fundamentals.ttm_aggregator import DEFAULT_TTM_MAX_STALENESS_DAYS
 from alphalens_pipeline.data.store.companyfacts_census import (
+    CENSUS_SCHEMA,
     CROSSING_HORIZON_DAYS,
     WRITER_LIVENESS_DAYS,
     census_companyfacts_store,
@@ -329,6 +331,183 @@ class TestWriterLiveness(_StoreFixture):
         (self.store / "0000000098.parquet").write_bytes(b"not a parquet file")
 
         self.assertEqual(self.census().refetched_recently, 1)
+
+
+class TestConstantsArePinnedByValue(unittest.TestCase):
+    """The thresholds, pinned as LITERALS as well as used symbolically.
+
+    Every other test in this file writes `REFETCH_DATA_AGE_DAYS` rather than
+    150, which is right — it says what the boundary MEANS. But a test that
+    derives its own fixture from the constant it checks moves WITH that
+    constant, so mutating 150 to 365 leaves the whole file green. These four
+    assertions are what makes the symbolic ones bite. Same fix #1636 made after
+    its own empty-table mutant survived for exactly this reason.
+    """
+
+    def test_the_refetch_threshold_is_150_days(self) -> None:
+        self.assertEqual(REFETCH_DATA_AGE_DAYS, 150)
+
+    def test_the_ttm_gate_is_270_days(self) -> None:
+        self.assertEqual(DEFAULT_TTM_MAX_STALENESS_DAYS, 270)
+
+    def test_the_crossing_horizon_is_30_days(self) -> None:
+        self.assertEqual(CROSSING_HORIZON_DAYS, 30)
+
+    def test_the_writer_liveness_window_is_7_days(self) -> None:
+        self.assertEqual(WRITER_LIVENESS_DAYS, 7)
+
+    def test_the_json_schema_string_is_pinned(self) -> None:
+        # Documented as the field a consumer branches on, so it is part of the
+        # contract rather than a label.
+        self.assertEqual(CENSUS_SCHEMA, "alphalens.companyfacts.census/v1")
+
+
+class TestBandsAtLiteralAges(_StoreFixture):
+    """The bands at ages written as plain numbers, not derived from the constants.
+
+    The companion to the symbolic boundary tests above: if 150 or 270 moves,
+    these fail, where a test whose fixture is built from the constant would
+    quietly follow it.
+    """
+
+    def test_a_hundred_day_old_filer_is_fresh(self) -> None:
+        self.plant_both_legs(100)
+
+        self.assertEqual(self.census().fresh, 1)
+
+    def test_a_two_hundred_day_old_filer_is_refetching(self) -> None:
+        self.plant_both_legs(200)
+
+        self.assertEqual(self.census().refetching, 1)
+
+    def test_a_four_hundred_day_old_filer_is_past_the_gate(self) -> None:
+        self.plant_both_legs(400)
+
+        self.assertEqual(self.census().past_gate, 1)
+
+    def test_the_bands_partition_at_every_age_across_the_range(self) -> None:
+        # The identity the docstring promises, checked across the whole range
+        # rather than at four planted ages: a hole at any single age would
+        # otherwise survive.
+        for age in range(0, 500, 7):
+            with self.subTest(age=age):
+                fixture = _StoreFixture("run")
+                fixture.setUp()
+                try:
+                    fixture.plant_both_legs(age)
+                    census = fixture.census()
+                    self.assertEqual(
+                        census.fresh + census.refetching + census.past_gate + census.chain_absent,
+                        1,
+                        f"age {age} landed in no band or in two",
+                    )
+                finally:
+                    fixture.doCleanups()
+
+
+class TestCountsAreNotTransposable(_StoreFixture):
+    """Distinct counts per bucket, so a swapped field cannot pass.
+
+    Every bucket gets a different number of files. With equal counts a census
+    that wired `empty` to `unreadable`, or `refetching` to `chain_absent`,
+    would satisfy every assertion — and `unreadable` is one of the series the
+    follow-up alert rules read.
+    """
+
+    def _plant_distinct(self) -> None:
+        self.plant_both_legs(40)  # fresh: 1
+        for _ in range(2):  # refetching: 2
+            self.plant_both_legs(200)
+        for _ in range(3):  # past_gate: 3
+            self.plant_both_legs(400)
+        for _ in range(4):  # chain_absent: 4
+            self.plant((OCF, TODAY - dt.timedelta(days=40)))
+        for i in range(5):  # empty: 5
+            pq.write_table(_rows(), self.store / f"000000900{i}.parquet")
+        for i in range(6):  # unreadable: 6
+            (self.store / f"000000800{i}.parquet").write_bytes(b"torn")
+
+    def test_each_band_carries_its_own_count(self) -> None:
+        self._plant_distinct()
+
+        census = self.census()
+        self.assertEqual(
+            (census.fresh, census.refetching, census.past_gate, census.chain_absent),
+            (1, 2, 3, 4),
+        )
+
+    def test_empty_and_unreadable_are_not_interchangeable(self) -> None:
+        self._plant_distinct()
+
+        census = self.census()
+        self.assertEqual((census.empty, census.unreadable), (5, 6))
+
+    def test_the_gauges_carry_the_same_distinct_counts(self) -> None:
+        # The identity above holds in the dataclass; this is the one that
+        # matters to Prometheus, and the two can disagree.
+        self._plant_distinct()
+
+        metrics = census_metrics(self.census())
+        self.assertEqual(
+            [
+                metrics['alphalens_companyfacts_fcff_age_band{band="fresh"}'],
+                metrics['alphalens_companyfacts_fcff_age_band{band="refetching"}'],
+                metrics['alphalens_companyfacts_fcff_age_band{band="past_gate"}'],
+                metrics['alphalens_companyfacts_fcff_age_band{band="chain_absent"}'],
+                metrics['alphalens_companyfacts_cached_files{state="empty"}'],
+                metrics['alphalens_companyfacts_cached_files{state="unreadable"}'],
+            ],
+            [1, 2, 3, 4, 5, 6],
+        )
+
+
+class TestAsOf(_StoreFixture):
+    """The reference date is reported, and it is the one the caller asked for."""
+
+    def test_the_census_reports_the_date_it_was_taken_against(self) -> None:
+        self.plant_both_legs(40)
+
+        self.assertEqual(self.census().asof, TODAY)
+
+    def test_an_omitted_today_defaults_to_the_real_today(self) -> None:
+        # Staleness is a question about the store versus SEC NOW, so the
+        # default must be the real date rather than any injected one.
+        self.plant_both_legs(40)
+
+        census = census_companyfacts_store(self.store)
+
+        self.assertEqual(census.asof, dt.date.today())
+
+
+class TestUnreadableArms(_StoreFixture):
+    """Both failure arms, which a reader would otherwise have to trust."""
+
+    def test_a_file_the_process_may_not_read_is_unreadable_not_a_crash(self) -> None:
+        # Exercises the read's OSError arm, which the corrupt-file test does
+        # NOT: a torn parquet raises pyarrow's ArrowInvalid, and so does a
+        # directory named like one (both measured). Only a permission failure
+        # reaches the OSError arm, so narrowing the except to ArrowInvalid
+        # alone would propagate and lose the whole emit.
+        blocked = self.store / "0000000096.parquet"
+        blocked.write_bytes(b"unreadable by permission")
+        os.chmod(blocked, 0o000)
+        self.addCleanup(os.chmod, blocked, 0o600)
+        if os.access(blocked, os.R_OK):  # running as root: the arm is unreachable
+            self.skipTest("cannot make a file unreadable as this user")
+
+        self.assertEqual(self.census().unreadable, 1)
+
+    def test_a_file_whose_mtime_cannot_be_read_is_not_counted_as_written(self) -> None:
+        # `_written_within` returns False on OSError. Inverting that arm would
+        # make the liveness gauge count files nobody wrote, and liveness is the
+        # one series the follow-up rules alert on for a frozen store.
+        from alphalens_pipeline.data.store import companyfacts_census as mod
+
+        self.plant_both_legs(40, mtime=TODAY)
+        with unittest.mock.patch.object(Path, "stat", side_effect=OSError("no stat")):
+            census = mod.census_companyfacts_store(self.store, today=TODAY)
+
+        self.assertEqual(census.refetched_recently, 0)
 
 
 class TestCensusMetrics(_StoreFixture):
