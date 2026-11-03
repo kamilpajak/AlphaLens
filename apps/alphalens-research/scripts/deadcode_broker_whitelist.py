@@ -45,5 +45,10 @@ _.fractional_enabled  # InstrumentQuantityRules reports what the venue said verb
 # Test hooks and documented bounds.
 _._reset_remote_quote_source_for_tests  # test hook that resets the module-level quote source
 _.COMPACTED_LINES_PER_CRID_BOUND  # documented compaction bound that the entry-trail tests assert
+_.COMPACTED_FIXED_LINES_PER_UIC_BOUND  # the standalone-stop sibling of the bound above
+_.STANDALONE_STOP_JOURNAL_KINDS  # per-kind compaction decision, read by its AST gate
+_.KIND_RETAINED  # one of its three decision values
+_.KIND_CONSUMED
+_.KIND_DROPPED
 _.open_watch  # tested EntryTierWatcher constructor; production opens watches in control_loop._open_entry_watches
 _.get_user  # SaxoClient auth read used by the hermetic client tests and the SIM live probe

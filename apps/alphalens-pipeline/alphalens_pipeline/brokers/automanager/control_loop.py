@@ -5355,6 +5355,53 @@ def _stop_move_blocks(
 COMPACTED_FIXED_LINES_PER_UIC_BOUND = 14
 
 
+# Every record kind written to ``standalone_stops.jsonl``, each mapped to this
+# compactor's DECISION about it. The declaration is here, beside the election,
+# because the election is what the decision is about: a kind absent from this
+# map is a kind nobody decided, and an undecided kind is silently eaten at the
+# next daemon restart (memo G4 calls that bug class CRITICAL, and
+# ``entry_trails``' module docstring says it must not recur).
+#
+# ``test_standalone_stop_kind_registry`` collects the written kinds from the
+# SOURCE of every ``stop_journal._append_standalone_stop_journal`` call site and
+# requires them to equal these keys, so adding a writer without a line here is
+# a CI failure rather than a silent drop. The three values:
+#   RETAINED  — the election can keep a line of this kind, so the fold that
+#               reads it survives a boot.
+#   CONSUMED  — a marker the election reads and then does not copy out; its
+#               effect is in what it suppresses, not in the kept file.
+#   DROPPED   — knowingly not kept. Recoverable only from the #1650
+#               pre-compaction snapshot, through
+#               ``journal_snapshots.iter_journal_history``.
+KIND_RETAINED = "RETAINED"
+KIND_CONSUMED = "CONSUMED"
+KIND_DROPPED = "DROPPED"
+STANDALONE_STOP_JOURNAL_KINDS: dict[str, str] = {
+    "planned": KIND_RETAINED,
+    "planned_retracted": KIND_CONSUMED,
+    "tranche_plan": KIND_RETAINED,
+    "tranche_plan_retracted": KIND_CONSUMED,
+    "tranche_fired": KIND_RETAINED,
+    "stop_placed": KIND_RETAINED,
+    "stop_filled": KIND_RETAINED,
+    "trailed": KIND_RETAINED,
+    "reanchored": KIND_RETAINED,
+    "oco_placed": KIND_RETAINED,
+    "oco_unsupported": KIND_RETAINED,
+    "oco_too_far": KIND_RETAINED,
+    "amend_failed": KIND_RETAINED,
+    "amend_ok": KIND_RETAINED,
+    "amend_seq": KIND_RETAINED,
+    # The one DELIBERATE fold-identity exception, argued in the docstring
+    # below: only ``stop_journal._read_persisted_gen`` reads it, and the reset
+    # to the initial gen is harmless.
+    "gen": KIND_DROPPED,
+    # Pure reanchor telemetry (#1015): no fold and no CLI reads it, so it is
+    # dropped whole rather than preserved verbatim — see UNKNOWN KINDS below.
+    "envelope_clamped": KIND_DROPPED,
+}
+
+
 def _compact_standalone_stop_journal_lines(
     lines: Iterable[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
