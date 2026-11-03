@@ -950,5 +950,231 @@ class TestCompactionAcrossRepeatedBoots(unittest.TestCase):
         )
 
 
+# --- #895: the growth bound ------------------------------------------------------
+
+_BOUND_UIC = 777
+_BOUND_PICK_A = "AAA:2026-09-01"
+_BOUND_PICK_B = "BBB:2026-09-02"
+
+
+def _every_keep_reason_journal() -> list[dict[str, Any]]:
+    """One uic shaped so EVERY keep reason of the standalone compactor fires at
+    once — the shape that REACHES the bound.
+
+    The two ``trailed`` lines differ in ts and in file order on purpose: the
+    ts=130 line is the stop's newest move (``select_stop_move_lines`` is
+    time-scoped) while the plan line between them resets the trailed fold, so
+    the ELECTED trailed line is the ts=120 one and the move has to be kept
+    separately with its closer (#1669)."""
+    ladder = _tranche_plan(_BOUND_UIC, _BOUND_PICK_B)
+    return [
+        # The fill matching the kept stop's order id. Written before any plan
+        # line (so it is not closure evidence) with a ref that names no pick
+        # (so it owes no sibling retire): this slot and nothing else.
+        {
+            "kind": "stop_filled",
+            "uic": _BOUND_UIC,
+            "order_id": "O1",
+            "qty": 5.0,
+            "avg_price": 9.0,
+            "ref": "bracket-xyz-stop-0",
+            "partial": False,
+            "ts": 60.0,
+        },
+        # The owed-sibling-retire fill of pick A (#1327), also pre-plan.
+        {
+            "kind": "stop_filled",
+            "uic": _BOUND_UIC,
+            "order_id": "O2",
+            "qty": 5.0,
+            "avg_price": 9.0,
+            "ref": _entry_stop_ref(_BOUND_PICK_A, 0),
+            "partial": False,
+            "ts": 61.0,
+        },
+        {"kind": "oco_unsupported", "uic": _BOUND_UIC},
+        {"kind": "oco_placed", "uic": _BOUND_UIC, "ts": 70.0},
+        {"kind": "amend_failed", "uic": _BOUND_UIC, "ts": 71.0},
+        {"kind": "oco_too_far", "uic": _BOUND_UIC, "ts": 72.0},
+        {"kind": "amend_ok", "uic": _BOUND_UIC, "qty": 5.0, "ts": 73.0},
+        {"kind": "amend_seq", "uic": _BOUND_UIC, "seq": 4},
+        {
+            "kind": "reanchored",
+            "uic": _BOUND_UIC,
+            "avg_price": 10.0,
+            "stop_price": 9.2,
+            "ts": 115.0,
+        },
+        _planned(f"{_BOUND_UIC}-crid-A", uic=_BOUND_UIC, stop=9.0, tp=20.0),
+        {
+            "kind": "stop_placed",
+            "uic": _BOUND_UIC,
+            "qty": 5.0,
+            "order_id": "O1",
+            "ref": _entry_stop_ref(_BOUND_PICK_A, 0),
+            "stop_price": 9.0,
+            "ts": 100.0,
+        },
+        {"kind": "trailed", "uic": _BOUND_UIC, "level": 12.0, "peak": 14.0, "ts": 130.0},
+        ladder,
+        {"kind": "trailed", "uic": _BOUND_UIC, "level": 11.0, "peak": 13.0, "ts": 120.0},
+        # A ladder-malformed re-append of the SAME pick key: no generation
+        # reset, and a second kept plan line (it still carries the governing
+        # key the retraction sweep reads).
+        dict(ladder, tp_tranches="junk"),
+        {"kind": "tranche_fired", "uic": _BOUND_UIC, "tag": "tp1"},
+        # Closure evidence inside the open generation (#1223), whose ref also
+        # makes it pick B's owed fill — one line, both reasons.
+        {
+            "kind": "stop_filled",
+            "uic": _BOUND_UIC,
+            "order_id": "O9",
+            "qty": 5.0,
+            "avg_price": 9.0,
+            "ref": _entry_stop_ref(_BOUND_PICK_B, 0),
+            "partial": False,
+            "ts": 200.0,
+        },
+    ]
+
+
+def _more_of_every_kind(
+    journal: list[dict[str, Any]], copies: int, skip: str = ""
+) -> list[dict[str, Any]]:
+    """``journal`` with ``copies`` further rounds of every line prepended, each
+    timestamped line carrying a FRESH ts and the same keys (crid, pick keys,
+    tag, order ids) — more journal, no new keys. ``skip`` leaves one kind out."""
+    grown: list[dict[str, Any]] = []
+    ts = 300.0
+    for _ in range(copies):
+        for line in journal:
+            if line["kind"] == skip:
+                continue
+            copy = dict(line)
+            if "ts" in copy:
+                ts += 1.0
+                copy["ts"] = ts
+            grown.append(copy)
+    return grown + journal
+
+
+class TestTheKeptSetGrowsWithKEYSNotWithTheJOURNAL(unittest.TestCase):
+    """#895 is a growth bug, and the compactor had no stated bound and no test
+    pinning one — unlike its sibling (``entry_trails.COMPACTED_LINES_PER_CRID_BOUND``,
+    raised twice under a test that asserts the worst case EQUALS it).
+
+    The bound is per uic, and it has two parts: the fixed slots
+    (``cl.COMPACTED_FIXED_LINES_PER_UIC_BOUND``, one per keep reason) and terms
+    that grow with the input's KEYS — one ``planned`` per client_request_id,
+    one ``stop_filled`` per stopped-out pick key and per closure ref key, and
+    one ``tranche_fired`` per fired line still counting."""
+
+    _EXPECTED_KINDS = [
+        "reanchored",  # 1 elected marker, front block
+        "trailed",  # 2 the stop's newest move (#1669)
+        "planned_retracted",  # 3 its closer (#1669)
+        "planned",  # + one per client_request_id
+        "oco_unsupported",  # 4
+        "oco_placed",  # 5 newest
+        "amend_failed",  # 6 newest
+        "oco_too_far",  # 7 newest
+        "stop_placed",  # 8 newest
+        "stop_filled",  # 9 the fill matching the kept stop's order id
+        "stop_filled",  # + one per stopped-out pick key (A)
+        "amend_ok",  # 10 newest
+        "amend_seq",  # 11 max seq
+        "tranche_plan",  # 12 the governing ladder
+        "tranche_plan",  # 13 the latest plan line, distinct
+        "tranche_fired",  # + one per fired line still counting
+        "stop_filled",  # + closure evidence, pick B's owed fill too
+        "trailed",  # 14 the elected ratchet floor
+    ]
+    # The non-fixed slots in the shape above: one planned crid, one fired line,
+    # two owed pick keys (A, and B on the closure line).
+    _KEYED_SLOTS = 4
+
+    def test_the_fixed_bound_is_REACHED_by_the_every_reason_shape(self) -> None:
+        journal = _every_keep_reason_journal()
+        kept = cl._compact_standalone_stop_journal_lines(journal)
+        self.assertEqual([line["kind"] for line in kept], self._EXPECTED_KINDS)
+        self.assertEqual(
+            len(kept) - self._KEYED_SLOTS,
+            cl.COMPACTED_FIXED_LINES_PER_UIC_BOUND,
+            "the bound must be reached from below: a bound nobody reaches is not measured",
+        )
+        self.assertEqual(_every_fold(journal), _every_fold(kept), "and it still folds the same")
+
+    def test_twenty_times_the_journal_keeps_the_same_number_of_lines(self) -> None:
+        # Every kind but tranche_fired: the keep set is decided by the keys, so
+        # more lines under the same keys cannot grow it.
+        journal = _every_keep_reason_journal()
+        counts = [
+            len(
+                cl._compact_standalone_stop_journal_lines(
+                    _more_of_every_kind(journal, copies, skip="tranche_fired")
+                )
+            )
+            for copies in (1, 5, 20)
+        ]
+        self.assertEqual(counts, [counts[0]] * 3, "no growth in the journal's length")
+
+    def test_the_fired_slot_is_the_one_term_that_grows_per_LINE(self) -> None:
+        # Measured, and stated rather than hidden: the fired election keeps
+        # every tranche_fired line inside the fold's accumulator, while the
+        # fold itself only needs the TAG. On the LIVE journal that term was 4
+        # lines in the whole history on 2026-11-03, so it is a documented shape
+        # and not a growth path anyone has seen.
+        journal = _every_keep_reason_journal()
+        for copies in (1, 5, 20):
+            grown = _more_of_every_kind(journal, copies)
+            kept = cl._compact_standalone_stop_journal_lines(grown)
+            fired = [line for line in kept if line["kind"] == "tranche_fired"]
+            self.assertEqual(len(fired), copies + 1, f"{copies} extra rounds")
+            self.assertEqual(
+                sj._fold_fired_since_latest_plan(grown),
+                sj._fold_fired_since_latest_plan(kept),
+                "the fold reads one tag however many lines carry it",
+            )
+
+    def test_no_generated_journal_exceeds_the_bound(self) -> None:
+        rng = random.Random(895)
+        for trial in range(1500):
+            journal = _random_journal(rng)
+            kept = cl._compact_standalone_stop_journal_lines(journal)
+            per_uic: dict[int, int] = {}
+            for line in kept:
+                uic = sj._coerce(line, "uic", int)
+                if uic is not None:
+                    per_uic[uic] = per_uic.get(uic, 0) + 1
+            for uic, count in per_uic.items():
+                bound = cl.COMPACTED_FIXED_LINES_PER_UIC_BOUND + _keyed_slots(journal, uic)
+                self.assertLessEqual(count, bound, f"trial {trial}: uic {uic} kept {count}")
+
+
+def _keyed_slots(journal: list[dict[str, Any]], uic: int) -> int:
+    """The bound's key-driven terms for ``uic``, read off the INPUT: one per
+    ``planned`` crid, per ``tranche_fired`` line, per owed pick key and per
+    closure ref key."""
+    crids: set[Any] = set()
+    fired = 0
+    owed: set[str] = set()
+    closure: set[str | None] = set()
+    for line in journal:
+        if sj._coerce(line, "uic", int) != uic:
+            continue
+        kind = line.get("kind")
+        if kind == "planned":
+            crids.add(line.get("client_request_id"))
+        elif kind == "tranche_fired":
+            fired += 1
+        elif kind == "stop_filled":
+            pick_key = sj._owed_pick_key_from_stop_fill(line)
+            if pick_key:
+                owed.add(pick_key)
+            ref = line.get("ref")
+            closure.add(sj._pick_key_from_stop_ref(ref if isinstance(ref, str) else None))
+    return len(crids) + fired + len(owed) + len(closure)
+
+
 if __name__ == "__main__":
     unittest.main()
