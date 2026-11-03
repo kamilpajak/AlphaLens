@@ -20,7 +20,7 @@ import unittest
 from typing import Any
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
-from alphalens_pipeline.brokers.automanager import trade_alerts
+from alphalens_pipeline.brokers.automanager import journal_snapshots, trade_alerts
 from alphalens_pipeline.brokers.automanager.trades import (
     EXIT_REASON_BY_ALERT_REASON,
     EXIT_REASONS,
@@ -183,6 +183,67 @@ class GoldenVst(_TradesCase):
 
     def test_the_whole_record_renders_as_strict_json(self) -> None:
         json.dumps(self.report.body(), allow_nan=False)
+
+
+class MfeLowerBoundIsReadFromTheCompactionSnapshot(_TradesCase):
+    """``mfe_lower_bound`` is ``max(trailed.peak) - avg_entry_price``, and on the
+    LIVE fixture every ``trailed`` line it reads had ALREADY been removed from
+    the journal by a boot compaction: the current file holds none of them, the
+    2026-10-01 snapshot holds all four. The number exists because
+    ``trades._read_journals`` reads ``journal_snapshots.iter_journal_history``,
+    not the live file (#1650).
+
+    The reader-side half of the retention decision recorded in
+    ``control_loop._compact_standalone_stop_journal_lines``: a compactor slot
+    keeping ONE ``trailed`` line per uic cannot answer this reader, which needs
+    the MAXIMUM peak inside one entry-to-exit window. A change that points
+    ``broker trades`` at the live journal instead of the history must make this
+    red."""
+
+    _VST_UIC = 7300542
+    _VST_AVG_ENTRY = 135.11
+    _SNAPSHOT_PEAKS = [139.93, 140.0, 140.53, 141.3]
+
+    @classmethod
+    def _is_vst_trail(cls, record: dict[str, Any]) -> bool:
+        return record.get("kind") == "trailed" and record.get("uic") == cls._VST_UIC
+
+    def test_every_peak_it_reads_lives_only_in_the_compaction_snapshot(self) -> None:
+        root = install_journals(self.home)
+        journal = root / "standalone_stops.jsonl"
+        current = [
+            json.loads(raw)
+            for raw in journal.read_text(encoding="utf-8").splitlines()
+            if raw.strip()
+        ]
+        history = list(journal_snapshots.iter_journal_history(journal))
+        self.assertEqual(
+            [r for r in current if self._is_vst_trail(r)],
+            [],
+            "the boot compaction left no trailed line of this uic in the journal",
+        )
+        self.assertEqual(
+            sorted(r["peak"] for r in history if self._is_vst_trail(r)),
+            self._SNAPSHOT_PEAKS,
+        )
+        record = trade(self.build(pick=VST), VST)
+        self.assertAlmostEqual(
+            value(record["outcome"]["mfe_lower_bound"]),
+            max(self._SNAPSHOT_PEAKS) - self._VST_AVG_ENTRY,
+            places=6,
+        )
+        self.assertEqual(
+            record["outcome"]["mfe_lower_bound"]["ref"], "max(trailed.peak) - avg_entry_price"
+        )
+
+    def test_without_those_snapshot_lines_the_number_is_null(self) -> None:
+        # Power check: dropping the four lines from the history (snapshots
+        # included) is what takes the number away, so the test above is reading
+        # them and not something else.
+        install_journals(self.home, drop=self._is_vst_trail)
+        measured = trade(self.build(pick=VST), VST)["outcome"]["mfe_lower_bound"]
+        self.assertIsNone(value(measured))
+        self.assertEqual(measured["null_reason"], "not_journaled")
 
 
 class DiscriminationCheck(_TradesCase):

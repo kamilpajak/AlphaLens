@@ -8439,6 +8439,82 @@ class TestCompactionSnapshotsTheJournal(IsolatedHomeTestCase):
         self.assertEqual(leftovers, [])
 
 
+class TestTheDropSetIsRecoverableFromTheHistory(IsolatedHomeTestCase):
+    """Every line boot compaction drops is still readable through
+    ``journal_snapshots.iter_journal_history`` — the general form of the SMMT
+    case above, for ANY kind.
+
+    This is the retention the project relies on INSTEAD of a wider keep set.
+    Measured on the LIVE journal on 2026-11-03: 103 lines in the current file
+    against 350 in the history, so 247 records sit only in the snapshots — 56
+    ``trailed`` (each carrying the ``peak`` the high-water-mark reader needs),
+    55 ``amend_ok``, 55 ``amend_seq``, 21 ``tranche_plan``, 18
+    ``tranche_plan_retracted``, 14 ``gen``, 13 ``planned``, 13
+    ``planned_retracted``, 2 ``tranche_fired``. Both readers that need one of
+    those numbers already read the history: ``broker trades``
+    (``trades._read_journals``) and ``broker reconcile-fills``.
+
+    What this does NOT repair: lines compacted before snapshots existed (#1650;
+    the oldest LIVE snapshot is 2026-10-01T20:10:03Z). ``broker trades``
+    reports a pick armed before that horizon as ``unresolved`` /
+    ``compacted`` instead of guessing."""
+
+    def test_every_dropped_line_including_telemetry_is_in_the_history(self) -> None:
+        import json
+
+        from alphalens_pipeline.brokers.automanager import journal_snapshots as js
+
+        def canonical(record: dict[str, Any]) -> str:
+            return json.dumps(record, sort_keys=True, default=str)
+
+        # The three numbers a retention slot was proposed for: a superseded
+        # trail carrying its high-water mark, a bookkeeping outcome record no
+        # fold reads, and the one telemetry kind the compactor does not elect
+        # at all (``envelope_clamped``, stop_journal._journal_envelope_clamped).
+        superseded_trail = {
+            "kind": "trailed",
+            "uic": 222,
+            "level": 29.0,
+            "peak": 33.0,
+            "last_price": 32.0,
+            "ts": 150.0,
+        }
+        older_amend_ok = {"kind": "amend_ok", "uic": 222, "qty": 4.0, "ts": 160.0}
+        clamped = {
+            "kind": "envelope_clamped",
+            "uic": 222,
+            "policy": "never-below-brief-floor",
+            "proposed": 28.0,
+            "clamped": 29.0,
+            "prior_stop": 27.0,
+            "avg_price": 30.0,
+            "ts": 170.0,
+        }
+        original = [
+            *_rich_standalone_stop_journal(),
+            superseded_trail,
+            older_amend_ok,
+            {"kind": "amend_ok", "uic": 222, "qty": 5.0, "ts": 161.0},
+            clamped,
+        ]
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            journal.write_bytes(_journal_bytes(original))
+            with mock.patch.object(sj, "_standalone_stop_journal_path", lambda: journal):
+                outcome = cl._compact_standalone_stop_journal()
+                current = {canonical(line) for line in sj._iter_standalone_stop_journal()}
+            history = {canonical(record) for record in js.iter_journal_history(journal)}
+        self.assertEqual(outcome.status, "compacted")
+        dropped = {canonical(line) for line in original} - current
+        # Power checks: the three lines ARE dropped, so "the history still has
+        # them" is a claim this test could have falsified.
+        self.assertIn(canonical(superseded_trail), dropped, "the peak-bearing trail is dropped")
+        self.assertIn(canonical(older_amend_ok), dropped, "the older amend_ok is dropped")
+        self.assertIn(canonical(clamped), dropped, "envelope_clamped is dropped whole")
+        self.assertEqual(len(dropped), 16, "the compaction of this journal drops 16 lines")
+        self.assertEqual(dropped - history, set(), "every dropped line is still in the history")
+
+
 _AMEND_ON = {"ALPHALENS_BROKER_AMEND_ENABLED": "1"}
 
 
