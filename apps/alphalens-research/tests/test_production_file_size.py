@@ -357,7 +357,15 @@ BASELINE: dict[str, int] = {
     # Counted with ``wc -l`` on the file (8192 before, 8333 after) — the entry it
     # replaces read 8193, one line above the file it recorded, so the entry-to-entry
     # delta is 140 while the file grew 141.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8333,
+    # +34 for #1621 point 11 on the persistent-OCO-lag page, the one operator alert
+    # that named the instrument ``uic <n>`` and nothing else on EVERY send. The room
+    # buys ``_instrument_label`` and its docstring (the policy: the ticker when a
+    # position names one, the uic always, because the uic is the only link to the
+    # Saxo app), the uic -> ticker read of the tick's ``long_positions`` at the one
+    # caller, and the paragraph in ``_track_oco_lag`` saying why the new argument is
+    # required rather than defaulted and why the lookup cannot miss.
+    # Counted with ``wc -l`` on the file (8333 before, 8367 after), after ruff format.
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8367,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     # +24 for PR #1840, to take Sonar python:S3776 off ``select_stop_move_lines``: the
     # four skip guards move into ``_stop_move_window_ts`` with the docstring that names
