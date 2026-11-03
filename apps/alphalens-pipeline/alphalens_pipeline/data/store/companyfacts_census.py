@@ -223,6 +223,14 @@ def census_companyfacts_store(store_dir: Path, *, today: dt.date | None = None) 
     ``Path.home()`` resolved inside a container once pointed the whole pipeline
     at an empty directory — and the caller is a best-effort observability step
     that would otherwise lose the entire emit.
+
+    That behaviour needs no guard here, which is worth stating because an
+    ``is_dir()`` check reads as load-bearing and is not: ``Path.glob`` yields
+    nothing for a missing directory instead of raising. An earlier version of
+    this function carried the check, and removing it killed no test — measured,
+    not assumed. The test stays, because the CONTRACT is what matters and the
+    obvious optimisation of a 6000-file scan is ``os.scandir``, which raises
+    ``FileNotFoundError`` for exactly this input.
     """
     ref = today or dt.date.today()
     counts = {
@@ -233,7 +241,7 @@ def census_companyfacts_store(store_dir: Path, *, today: dt.date | None = None) 
     }
     total = empty = unreadable = crossing = refetched = 0
 
-    for path in sorted(store_dir.glob("*.parquet")) if store_dir.is_dir() else []:
+    for path in sorted(store_dir.glob("*.parquet")):
         total += 1
         if _written_within(path, ref, WRITER_LIVENESS_DAYS):
             refetched += 1

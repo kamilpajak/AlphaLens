@@ -258,6 +258,13 @@ class TestFileStates(_StoreFixture):
         # exist is a real condition the gauges must be able to REPORT (it is
         # the Path.home()-in-Docker failure), not an exception that loses the
         # whole emit.
+        #
+        # This test is TRUE AND, against today's implementation, EMPTY:
+        # `Path.glob` already yields nothing for a missing directory, so the
+        # explicit `is_dir()` guard this once had was dead code and deleting it
+        # killed no test. It is kept because it pins the contract rather than
+        # the mechanism, and the obvious way to speed up a 6000-file scan is
+        # `os.scandir`, which raises FileNotFoundError here.
         census = census_companyfacts_store(self.store / "does-not-exist", today=TODAY)
 
         self.assertEqual(census.total_files, 0)
