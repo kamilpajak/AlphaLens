@@ -808,10 +808,18 @@ def compact_entry_trail_lines(raw_lines: Iterable[str]) -> list[str]:
     fold — it carries the bid the touch was detected on, which no other line
     holds on the native path; see ``_CompactionTracker.latest_touched``), the
     latest non-terminal state record, and the latest terminal record — :data:`COMPACTED_LINES_PER_CRID_BOUND` lines at
-    most, however long the input. UNKNOWN kinds and malformed/missing-crid
-    lines are PRESERVED VERBATIM (memo G4 — dropping a malformed line would
-    silently clear the fold's fail-closed count; dropping an unknown kind is
-    the standalone-stops compactor bug this journal must never inherit).
+    most per crid, however many lines of KNOWN kinds the input holds.
+
+    UNKNOWN kinds and malformed/missing-crid lines are PRESERVED VERBATIM
+    (memo G4 — dropping a malformed line would silently clear the fold's
+    fail-closed count; dropping an unknown kind is the standalone-stops
+    compactor bug this journal must never inherit), and that retention is NOT
+    bounded: a crid carrying N lines of one unknown kind compacts to N plus its
+    known-kind set, measured 1001 kept for 1001 input lines on 2026-11-03. That
+    is the trade memo G4 made deliberately — never lose a line here — and it is
+    the reason the sibling standalone-stops compactor made the opposite choice
+    and drops an unknown kind whole. An unknown kind also folds to nothing, so
+    the growth is silent in both directions until someone reads the file.
     Blank lines are dropped. Pure: no I/O, input never mutated."""
     materialized = [raw_line.rstrip("\n") for raw_line in raw_lines]
     keep: set[int] = set()
