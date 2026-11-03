@@ -5334,6 +5334,27 @@ def _stop_move_blocks(
     return front, tail
 
 
+# Compaction growth bound, the standalone-stop sibling of
+# ``entry_trails.COMPACTED_LINES_PER_CRID_BOUND``: per uic the kept set holds at
+# most these FIXED slots, one per keep reason, so no ordering of the input can
+# produce a fifteenth — the elected ``reanchored`` marker, the stop's newest
+# move and its closer (#1669), the elected ``trailed`` marker,
+# ``oco_unsupported``, the newest ``oco_placed`` / ``amend_failed`` /
+# ``oco_too_far`` / ``stop_placed`` / ``amend_ok``, the ``stop_filled`` matching
+# the kept stop's order id, the max-seq ``amend_seq``, and the governing plus
+# latest ``tranche_plan``.
+#
+# On top of them the kept set grows with the input's KEYS, never with the
+# journal's LENGTH (which is what #895 was): one ``planned`` per
+# client_request_id, one ``stop_filled`` per stopped-out pick key (#1327) and
+# per closure ref key (#1223), and one ``tranche_fired`` per fired line still
+# inside the fold's accumulator. That last term is per LINE while the fold reads
+# only the TAG; it was 4 lines in the whole LIVE history on 2026-11-03.
+# Reached exactly, and held from above over the randomized battery, by
+# ``test_compaction_fold_identity.TestTheKeptSetGrowsWithKEYSNotWithTheJOURNAL``.
+COMPACTED_FIXED_LINES_PER_UIC_BOUND = 14
+
+
 def _compact_standalone_stop_journal_lines(
     lines: Iterable[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -5401,9 +5422,41 @@ def _compact_standalone_stop_journal_lines(
     ``gen`` markers are the one DELIBERATE exception to fold-identity: they are
     read only by ``stop_journal._read_persisted_gen``, and the reset to the initial gen is
     harmless (post-restart re-emits are past Saxo's 15s request-id dedup window,
-    and protection is broker-state-truth not journal-derived). Every other line
-    — unknown kinds and malformed lines — is dropped; none contributes to the
-    folds above.
+    and protection is broker-state-truth not journal-derived); the generation
+    itself is still recoverable from the kept ``stop_placed``, whose ``ref`` is
+    ``<entry_crid>-stop-<gen>``.
+
+    EVERY OTHER LINE IS DROPPED, and dropping it is not the same as losing it.
+    A dropped line contributes to no fold above, but it is often the only
+    record of its numbers, so the caller snapshots the pre-compaction bytes
+    (#1650) and ``journal_snapshots.iter_journal_history`` rebuilds the full
+    history from them. Both readers that need a dropped number already read
+    that history, NOT this file: ``broker trades`` (``trades._read_journals``)
+    for ``max(trailed.peak)`` and the windowed stop-move marker, and ``broker
+    reconcile-fills`` for a closed position's ``tranche_fired`` telemetry. That
+    is why no slot here is wider than fold-equivalence except the #1669
+    stop-move block above: retention cannot serve those readers anyway (the
+    peak reader needs the MAXIMUM inside one entry-to-exit window, and a uic
+    that held two positions keeps no line inside the earlier one), while a
+    re-kept ``tranche_fired`` WOULD re-enter
+    ``stop_journal._fold_fired_since_latest_plan`` and tell the real-money
+    daemon a take-profit had already fired. Measured on the LIVE journal
+    2026-11-03: 103 lines here, 350 in the history. Lines compacted BEFORE the
+    first snapshot (2026-10-01T20:10:03Z) are gone for good, which is why
+    ``broker trades`` reports a pick armed before that horizon as
+    ``unresolved`` / ``compacted`` rather than guessing.
+
+    UNKNOWN KINDS are dropped whole (today just ``envelope_clamped``, pure
+    reanchor telemetry no fold and no CLI reads). Unlike the sibling
+    ``entry_trails.compact_entry_trail_lines``, this compactor does NOT
+    preserve them verbatim: an unknown kind appended per tick would never
+    compact, turning the bounded keep set below into the unbounded growth #895
+    exists to stop and :data:`COMPACTED_FIXED_LINES_PER_UIC_BOUND` would stop
+    holding. MALFORMED LINES never reach this function at all —
+    ``stop_journal._parse_standalone_stop_lines`` drops them one layer up, in
+    ``_compact_standalone_stop_journal``, because this function takes parsed
+    mappings while the entry-trails one takes raw strings. They are still in
+    the snapshot, byte for byte.
 
     Also kept: per pick key, the ``stop_filled`` ``stop_journal._elect_owed_stop_fill_lines``
     elects (#1327), so ``_derive_owed_sibling_retires`` is unchanged. Its
