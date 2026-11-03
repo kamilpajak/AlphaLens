@@ -730,6 +730,13 @@ window and its row count.
 | `stop_amend_history_unavailable` | offline, and the stop's moves cannot be known |
 | `account_amount_not_reported` | the report row is there, but the account-currency amount on it is not: no `BookedAmountAccountCurrency` on a trades row, or no `AmountAccountCurrency` on a fee booking row. Distinct from `report_row_missing`, where there is no row at all. One such row nulls the whole member rather than leaving a sum over the others |
 
+A null is binding on every other surface. An operator alert may state a trade's R only
+where this command would state one: where the command publishes a null, the alert says
+nothing. A page carrying a number against a null is worse than a page carrying none,
+because the reader cannot tell which of the two surfaces is wrong. The alert must also
+use this command's denominator — `spec.disaster_stop`, not the level a trailed stop was
+resting at when it filled — or the two publish different numbers under one name.
+
 #### Exit reasons
 
 Checked in this order in broker mode. Offline, a reason comes from journal

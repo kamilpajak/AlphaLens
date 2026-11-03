@@ -673,11 +673,14 @@ class TestLiveExitsFlagOnFires(_JournalCase):
             cl._run_live_exits_pass(deps, report)
         self.assertEqual(len(seen), 1)
         msg, reason = seen[0]
-        # #1621: the SELL was SENT; no fill was read back, so no price and no
-        # "sold". Half of the position remains.
+        # #1621: the SELL was SENT; no fill was read back, so no fill price and
+        # no "sold". Half of the position remains. The 16.00 is the TARGET the
+        # tranche was sent at, carried out of the engine on ``FiredTranche`` —
+        # this is the end-to-end pin that the plan's tp price reaches the page,
+        # so a target dropped anywhere between the two reddens here.
         self.assertRegex(
             msg,
-            r"^SELL KO TP1 50 - take-profit, market sell sent - position still open "
+            r"^SELL KO TP1 50 - take-profit 16\.00, market sell sent - position still open "
             r"\(order \S+\)$",
         )
         self.assertEqual(reason, f"tranche-fired:{uic}:tp1")

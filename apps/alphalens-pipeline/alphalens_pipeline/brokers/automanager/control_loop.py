@@ -1709,6 +1709,8 @@ def _announce_fired_tranches(
             label=tp_label_from_tag(tranche.tag),
             qty=tranche.qty,
             reason=trade_alerts.ExitReason.TAKE_PROFIT,
+            # The target the sell was sent at — the page's only honest price.
+            level=tranche.target_price,
             order_id=tranche.sell_order_id or None,
             position_closed=tranche.position_closed,
         )
@@ -3394,6 +3396,83 @@ def _run_stop_fill_reconcile_pass(deps: LoopDeps, report: TickReport) -> None:
         )
 
 
+def _exit_result_r(
+    uic: int,
+    stop: _StandingStop,
+    journal_lines: Sequence[Mapping[str, Any]],
+    plan_pick_keys: Mapping[int, str | None],
+    qty: float | None,
+    price: float | None,
+    *,
+    partial: bool,
+) -> float | None:
+    """What this stop fill MADE, in R, or ``None`` when it must not be stated.
+
+    ``alphalens broker trades`` already publishes an ``r_multiple`` per pick,
+    and the page must not become a second, disagreeing number under the same
+    name. So this refuses on every shape where that command publishes a NULL
+    instead of a number — printing a number against a null is the worse of the
+    two failures, because the operator cannot tell which surface is wrong:
+
+    * a PARTIAL fill: the pick is not ``closed``, so the command nulls its
+      whole exit family (``not_closed``);
+    * a COMPLETE fill covering LESS than the pick's realized entry. The
+      ``partial`` flag answers a per-ORDER question; ``trades._state`` asks a
+      per-PICK one -- ``abs(entry_qty - exit_qty) <= _QTY_EPS`` over EVERY exit
+      -- and nulls the whole exit family as ``not_closed`` when it fails. With
+      amend off the grow arm places an ADDITIVE second stop and KEEPS the
+      first, so each stop fills FULLY as its own order while the pick stays
+      open: two tiers of 6 @ 135.11 and 4 @ 141.11 with a 4-share stop filling
+      at 138.60 would print ``+0.0935R`` off the 137.51 blend, for shares
+      bought at 141.11 that actually made -0.1645R. The tolerance is the
+      command's own, so the two surfaces agree on WHEN a pick is closed and
+      not only on the arithmetic;
+    * a pick that already fired a take-profit tranche: the market sell's fill
+      price is never journaled, so the command nulls the exit family for the
+      WHOLE pick, this stop fill included;
+    * a stop whose ref names no pick, or a pick with no priceable entry-trail
+      fill (:func:`entry_trails.realized_entry`);
+    * a uic whose GOVERNING plan now names a different pick than this stop's
+      ref does. ``_fold_fired_since_latest_plan`` resets its per-uic
+      accumulator on a new generation (a different ``pick_key``, a keyless
+      bracket line, a retraction), so on a re-planned uic that fold can report
+      no fired tranche while the pick's own ``tranche_fired`` line is still in
+      the journal and still nulls the command's number. Comparing the two keys
+      catches the generations; it is free, because the pass already folded them.
+    * an EMPTY ``journal_lines``: an absent snapshot cannot show that no
+      take-profit fired, and "cannot show" is not "did not".
+
+    One extra journal read, paid only when a stop actually filled — a handful
+    of times a day, in a function that has already done two broker round trips
+    (the open-orders probe and the budgeted audit resolution) by the time it
+    gets here.
+
+    Residual, unverified and deliberately not papered over: a take-profit that
+    fired and was then RETRACTED with no successor plan on the uic leaves the
+    governing key ``None`` and the fold reset, so neither guard above sees it.
+    No LIVE pick of that shape has been observed; if one appears, the page
+    overstates while the command nulls.
+    """
+    if partial or qty is None or price is None or not journal_lines:
+        return None
+    pick_key = stop_journal._pick_key_from_stop_ref(stop.ref)
+    if pick_key is None:
+        return None
+    governing = plan_pick_keys.get(uic)
+    if governing is not None and governing != pick_key:
+        return None
+    if stop_journal._fold_fired_since_latest_plan(journal_lines).get(uic):
+        return None
+    entry = entry_trails.realized_entry(entry_trails.read_entry_trail_fold(), pick_key)
+    if entry is None:
+        return None
+    if abs(entry.qty - qty) > _QTY_EPS:
+        return None
+    return trade_alerts.result_r(
+        avg_entry=entry.avg_price, plan_stop=entry.plan_stop, exit_qty=qty, exit_price=price
+    )
+
+
 def _reconcile_one_standing_stop(
     deps: LoopDeps,
     broker: Any,
@@ -3448,6 +3527,9 @@ def _reconcile_one_standing_stop(
         level=marker.level if marker else stop.placed_level,
         order_id=stop.order_id,
         position_closed=not partial,
+        result_r=_exit_result_r(
+            uic, stop, journal_lines, plan_pick_keys, filled_qty, avg_price, partial=partial
+        ),
     )
     if deps.alert_throttled(trade_alerts.render(event), f"stop-fill:{stop.order_id}"):
         report.alerts += 1

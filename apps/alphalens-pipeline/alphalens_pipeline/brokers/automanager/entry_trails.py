@@ -573,6 +573,72 @@ def _entry_trail_journal_path() -> Path:
     return state_paths.entry_trails_path()
 
 
+@dataclass(frozen=True)
+class RealizedEntry:
+    """What one pick actually paid, and the risk it was sized against (#1621).
+
+    The two facts an exit page needs to state a result in R, both read off the
+    SAME journal lines: ``avg_price``/``qty`` from the ``fired`` terminals of
+    the pick's tiers, ``plan_stop`` from the ``disaster_stop`` its arm-time
+    ``watch_open`` lines stamped (``control_loop`` writes it there from
+    ``TradeSetupPlan.disaster_stop``, which ``sizing`` takes verbatim from
+    ``spec.disaster_stop`` — the same number ``broker trades`` divides by)."""
+
+    avg_price: float
+    qty: float
+    plan_stop: float
+
+
+def realized_entry(fold: EntryTrailFold, pick_key: str) -> RealizedEntry | None:
+    """``pick_key``'s realized entry blended over its FILLED tiers, or ``None``.
+
+    Pure: folds an already-read :class:`EntryTrailFold`. The blend is
+    quantity-weighted over every tier whose terminal is ``fired``, which is
+    what ``broker trades`` means by ``avg_entry_price`` — a pick whose E1
+    filled and whose E2 was cancelled is priced on E1 alone, and a two-tier
+    fill on one blend, never on the first tier.
+
+    ``None`` — the caller then states no result — on every shape this cannot
+    price honestly:
+
+    * no fired tier (a bracket pick places client geometry and opens no
+      entry-trail watch at all, so its tiers are simply absent here);
+    * a fired tier missing or corrupting either fill fact, mirroring
+      ``broker trades``, which nulls the whole entry family rather than
+      blending the tiers it happens to have;
+    * tiers stamping DIFFERENT plan stops. One pick has one disaster stop, so
+      that is a journal this function does not understand; it refuses instead
+      of electing a winner, because the wrong denominator is the one defect
+      this whole path exists to avoid.
+    """
+    stops: set[float] = set()
+    pairs: list[tuple[float, float]] = []
+    for state in fold.tiers.values():
+        opened = state.watch_open or {}
+        if opened.get("pick_key") != pick_key:
+            continue
+        stop = _finite_positive_float(opened.get("disaster_stop"))
+        if stop is None:
+            return None
+        stops.add(stop)
+        if state.terminal_kind != KIND_FIRED:
+            continue
+        terminal = state.terminal_record or {}
+        price = _finite_positive_float(terminal.get("avg_price"))
+        qty = _finite_positive_float(terminal.get("realized_qty"))
+        if price is None or qty is None:
+            return None
+        pairs.append((qty, price))
+    if len(stops) != 1 or not pairs:
+        return None
+    total = sum(qty for qty, _ in pairs)
+    return RealizedEntry(
+        avg_price=sum(qty * price for qty, price in pairs) / total,
+        qty=total,
+        plan_stop=stops.pop(),
+    )
+
+
 def read_entry_trail_fold(*, path: Path | None = None) -> EntryTrailFold:
     """The fold of the current journal; a missing file folds empty (PR-T0
     inertness: no journal -> zero watching reservation, zero malformed).

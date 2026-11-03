@@ -536,6 +536,12 @@ class FiredTranche:
     qty: float
     sell_order_id: str | None
     position_closed: bool = False
+    # The ladder target this tranche was sent AT (#1621 point 7). The page
+    # carries no fill price — ``place_market_order`` reads none back — so the
+    # target is the only price it can honestly state, and ``_fire_telemetry``
+    # already journals it one statement away. ``None`` only where the caller
+    # does not know it, never as a stand-in for the fill.
+    target_price: float | None = None
 
 
 # Why a uic did or did not get an exit evaluation this pass (#1392). Named
@@ -676,6 +682,7 @@ def run_live_exits(
                         qty=ex.qty,
                         sell_order_id=result.sell_order_id,
                         position_closed=result.position_closed,
+                        target_price=ex.target_price,
                     )
                 )
     return fired

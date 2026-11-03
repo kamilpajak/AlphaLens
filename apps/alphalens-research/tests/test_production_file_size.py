@@ -357,7 +357,23 @@ BASELINE: dict[str, int] = {
     # Counted with ``wc -l`` on the file (8192 before, 8333 after) — the entry it
     # replaces read 8193, one line above the file it recorded, so the entry-to-entry
     # delta is 140 while the file grew 141.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8333,
+    # +69 for ``_exit_result_r`` (#1621), which decides whether a stop-fill page may
+    # state the trade's R at all. Sixteen lines are the decision — five refusals and
+    # the call — plus three at the call site; the other fifty are the docstring, and
+    # that is what the room buys. Each refusal exists because ``alphalens broker
+    # trades`` publishes a NULL r_multiple for that same shape (a partial fill, a pick
+    # that already fired a take-profit, a re-planned uic, a ref naming no pick, no
+    # priceable entry-trail fill), and a page printing a number against one of those
+    # nulls is worse than a page printing none: the operator cannot tell which of the
+    # two surfaces is wrong. Without the list a later author reads five early returns
+    # as defensiveness and deletes one. The docstring also records the one residual
+    # shape still unguarded, so nobody has to rediscover it.
+    # A thirteenth line pair is the per-PICK quantity guard: ``trades._state`` calls a
+    # pick closed only when its exits cover its entry, so a COMPLETE stop fill covering
+    # less than the pick is a null there, and without the guard the page printed
+    # ``+0.0935R`` for shares that lost 0.1645R.
+    # Counted with ``wc -l`` on the file (8333 before, 8415 after), after ruff format.
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8415,
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/position_manager.py": 1406,
     # +24 for PR #1840, to take Sonar python:S3776 off ``select_stop_move_lines``: the
     # four skip guards move into ``_stop_move_window_ts`` with the docstring that names
