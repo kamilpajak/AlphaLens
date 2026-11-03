@@ -94,6 +94,22 @@ alphalens thematic score
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] thematic brief"
 alphalens thematic brief
 
+# Census the companyfacts parquet store and emit its health gauges (#1335).
+# Runs AFTER brief on purpose: `score` is what calls `preload`, so this reads
+# the state the day's refetch pass left behind, from the same store in the same
+# container. It writes nothing but metrics, so it is best-effort — a build whose
+# brief is already published must not fail over observability.
+#
+# The gauges are the half PR #1636 deferred: nothing else watches the store
+# ageing out of the 270-day TTM staleness gate, and when 2612 cached tables
+# crossed it together on 2026-09-28 every EDGAR-derived column for them went
+# blank with no error anywhere. The alert rules that read these gauges reach
+# the VPS on their own within an hour of a merge; THIS script does not, so the
+# rules ship in a later PR than the code that feeds them.
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] cache companyfacts-census"
+alphalens cache companyfacts-census \
+    || echo "WARN: companyfacts census failed; store-staleness gauges go unwritten" >&2
+
 # The expert-panel qualitative layer used to run here, after `brief`. It moved
 # to deploy/docker/run_experts_enrich.sh, which the systemd unit invokes as an
 # ExecStartPost AFTER the publish chain — see that script's header for why. The

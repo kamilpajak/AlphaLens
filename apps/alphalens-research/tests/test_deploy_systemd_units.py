@@ -860,7 +860,7 @@ class TestRunThematicDayChainContract(unittest.TestCase):
     # skipped the publish chain and lost an already-written brief. They now run
     # as an ExecStartPost AFTER publication and are pinned by
     # TestPublicationRunsBeforeTheOptionalEnrichment.
-    BEST_EFFORT = ("cache refresh-vix",)
+    BEST_EFFORT = ("cache refresh-vix", "cache companyfacts-census")
 
     def setUp(self):
         self.text = RUN_THEMATIC_SCRIPT.read_text()

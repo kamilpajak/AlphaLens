@@ -1,6 +1,12 @@
 """CLI: ``alphalens cache`` subcommands for server-side data caches.
 
-v2 PR-2 ships ``refresh-vix`` only — pulls VIXCLS from FRED and writes the
+Two commands today, and they do opposite things. ``refresh-vix`` WRITES a
+cache; ``companyfacts-census`` only READS one and reports how much of it is
+still usable, as Prometheus gauges plus a line of text. Both run as
+best-effort steps inside the daily thematic build, so neither may fail a build
+whose brief is already written.
+
+``refresh-vix`` pulls VIXCLS from FRED and writes the
 tiny JSON VIX regime cache that the Django feedback POST path reads on the
 hot path (see ``alphalens_feedback.regime.get_cached_vix``). Wired
 into the daily thematic build (``deploy/docker/run_thematic_day.sh``) so a
@@ -30,12 +36,13 @@ from alphalens_pipeline.observability.textfile import emit_domain_metrics
 
 if TYPE_CHECKING:
     import pandas as pd
+    from alphalens_pipeline.data.store.companyfacts_census import StoreCensus
 
 logger = logging.getLogger(__name__)
 
 cache_app = typer.Typer(
     name="cache",
-    help="Server-side data cache refresh tools (VIX regime, ...).",
+    help="Server-side data cache tools: refresh a cache, or report on one.",
     no_args_is_help=True,
 )
 
@@ -53,6 +60,15 @@ _VIX_METRIC = "alphalens_vix_cache_fetched_at_timestamp_seconds"
 #: AlphalensFredSeries{Stale,ObservationMetricMissing}.
 _OBSERVATION_METRIC = "alphalens_fred_series_last_observation_timestamp_seconds"
 _VIX_JOB = "vix-cache-refresh"
+
+#: Store-health gauges for the companyfacts parquet cache (#1335). Domain job
+#: name for the same reason as ``_VIX_JOB``: the census runs inline in
+#: run_thematic_day.sh, not as a cron systemd unit, so it has no ExecStopPost
+#: emit hook and must stay out of the cron job enumerations. The gauge NAMES
+#: live beside the census in
+#: ``alphalens_pipeline.data.store.companyfacts_census.census_metrics``, so a
+#: band cannot be added to the measurement without its series coming with it.
+_CENSUS_JOB = "companyfacts-store"
 
 
 def _fetch_vixcls() -> pd.Series:
@@ -143,6 +159,99 @@ def refresh_vix_cache(
     except Exception:
         logger.exception("emit_domain_metrics failed; vix-cache-refresh run succeeded")
     return payload
+
+
+def companyfacts_census(store_dir: Path | None = None) -> StoreCensus:
+    """Census the companyfacts parquet store and emit its health gauges.
+
+    The gauges are the product here, not a side effect: nothing else watches
+    the store ageing out of the TTM staleness gate, which is the half of #1335
+    that PR #1636 deferred. Returned as well as emitted so the command can
+    print it and a caller can assert on it.
+
+    One ``emit_domain_metrics`` call for all nine series. The emitter rewrites
+    the whole ``alphalens_domain_<job>.prom`` per call, so a second call under
+    this job would clobber the first one's series.
+
+    Any emit failure is swallowed, broad ``Exception`` like the other call
+    sites: this runs as a best-effort step after the brief is written, and a
+    malformed metrics dict must not fail a build that has already published.
+    """
+    from alphalens_pipeline.data.store.companyfacts_census import (
+        census_companyfacts_store,
+        census_metrics,
+    )
+    from alphalens_pipeline.data.store.edgar_fundamentals import DEFAULT_PARQUET_DIR
+
+    census = census_companyfacts_store(store_dir or DEFAULT_PARQUET_DIR)
+    try:
+        emit_domain_metrics(job=_CENSUS_JOB, metrics=census_metrics(census))
+    except Exception:
+        logger.exception("emit_domain_metrics failed; companyfacts-census run succeeded")
+    return census
+
+
+@cache_app.command(name="companyfacts-census")
+def companyfacts_census_command(
+    store_dir: Path = typer.Option(
+        None,
+        "--store-dir",
+        help="Override the companyfacts store (default: ~/.alphalens/companyfacts_parquet).",
+    ),
+    output_format: str = typer.Option(
+        "human",
+        "--format",
+        help="human|json",
+    ),
+) -> None:
+    """Report how much of the companyfacts store the FCFF path can still read.
+
+    A MEASUREMENT, not a check: it exits 0 whenever the census completed,
+    however bad the reading, the same contract as the systemd drift check. The
+    numbers reach Prometheus as gauges; stdout is for a human or a script
+    asking the same question by hand.
+    """
+    if output_format not in ("human", "json"):
+        typer.echo(f"--format must be human or json, got {output_format!r}", err=True)
+        raise typer.Exit(code=2)
+
+    from alphalens_pipeline.data.store.companyfacts_census import CENSUS_SCHEMA
+
+    census = companyfacts_census(store_dir)
+    if output_format == "json":
+        typer.echo(
+            json.dumps(
+                {
+                    "schema": CENSUS_SCHEMA,
+                    "asof": census.asof.isoformat(),
+                    "total_files": census.total_files,
+                    "readable": census.readable,
+                    "empty": census.empty,
+                    "unreadable": census.unreadable,
+                    "fresh": census.fresh,
+                    "refetching": census.refetching,
+                    "past_gate": census.past_gate,
+                    "chain_absent": census.chain_absent,
+                    "crossing_gate_within_horizon": census.crossing_gate_within_horizon,
+                    "refetched_recently": census.refetched_recently,
+                },
+                separators=(",", ":"),
+            )
+        )
+        return
+
+    typer.echo(
+        f"companyfacts-census {census.asof}: {census.total_files} files "
+        f"({census.readable} readable, {census.empty} empty, {census.unreadable} unreadable)"
+    )
+    typer.echo(
+        f"  fcff age: {census.fresh} fresh, {census.refetching} refetching, "
+        f"{census.past_gate} past gate, {census.chain_absent} no chain"
+    )
+    typer.echo(
+        f"  {census.crossing_gate_within_horizon} crossing the gate soon, "
+        f"{census.refetched_recently} written recently"
+    )
 
 
 @cache_app.command(name="refresh-vix")
