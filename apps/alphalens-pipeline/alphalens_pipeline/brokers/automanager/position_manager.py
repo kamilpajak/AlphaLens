@@ -185,8 +185,9 @@ class AlertOnly:
 
 # Reason tag the M1 OCO-lag guard stamps on its hold NoOp (issue #5). The control
 # loop keys a daemon-lifetime per-uic consecutive counter on this exact string to
-# surface a genuinely-stuck Q9 propagation lag; a wording change here fails the
-# control-loop tests loudly rather than silently blinding the monitor.
+# surface a genuinely-stuck Q9 propagation lag. A rename is caught by THIS package's
+# own tests, which assert the literal; the control-loop tests read the symbol by
+# name and follow a rename silently, so they are not what protects the monitor.
 _OCO_LAG_HOLD_REASON = "oco-lag-hold"
 
 

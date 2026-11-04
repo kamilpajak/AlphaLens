@@ -2074,17 +2074,50 @@ def _run_protection_pass(
             ):
                 report.alerts += 1
     if track_oco_lag:
-        _track_oco_lag(deps, actions, report)
+        _track_oco_lag(
+            deps,
+            actions,
+            report,
+            ticker_by_uic={
+                uic: pos.instrument.ticker for uic, pos in protection_view.long_positions.items()
+            },
+        )
 
 
-def _track_oco_lag(deps: LoopDeps, actions: list[Action], report: TickReport) -> None:
+def _instrument_label(uic: int, ticker_by_uic: Mapping[int, str]) -> str:
+    """Name an instrument for the operator: the TICKER when this tick's positions
+    supply one, and the uic ALWAYS (#1621 point 11). The uic is never traded away
+    for the ticker — it is the only link to the instrument in the Saxo app, the
+    same reason the order id stays in the fill pages. With no ticker for the uic
+    the page keeps exactly the shape it had before that point: the uic alone,
+    never an invented name and never a bare ``None``."""
+    ticker = ticker_by_uic.get(uic)
+    return f"{ticker} (uic {uic})" if ticker else f"uic {uic}"
+
+
+def _track_oco_lag(
+    deps: LoopDeps,
+    actions: list[Action],
+    report: TickReport,
+    *,
+    ticker_by_uic: Mapping[int, str],
+) -> None:
     """Daemon-lifetime per-uic monitor for a persistently-stuck OCO propagation lag
     (issue #5). The M1 guard NoOp'ing a clean over-covered OCO pair is SAFE for a
     tick or two but must not be invisible if Q9 never propagates. Increment a uic's
     consecutive-hold count each tick it emits an ``oco-lag-hold`` NoOp; RESET (drop
     the key) the moment that uic emits ANY other action — a real place/amend/cancel
     means the lag cleared. Crossing ``_OCO_LAG_ALERT_TICKS`` pages ONCE (the shared
-    throttle dedups the repeat per-tick calls into a single alert per interval)."""
+    throttle dedups the repeat per-tick calls into a single alert per interval).
+
+    ``ticker_by_uic`` is the tick's ``long_positions`` read as uic -> ticker, and it
+    is REQUIRED rather than defaulted: this page used to name the instrument ``uic
+    <n>`` and nothing else (#1621 point 11), so a caller that cannot name the
+    instrument has to say so explicitly instead of inheriting the old page. The
+    lookup cannot miss for a real lag: the hold NoOp is emitted only from
+    ``position_manager._reconcile_long``, which ``reconcile_protection`` calls only
+    while iterating ``long_positions``, so every uic that can reach the branch below
+    is a key of this map."""
     counts = deps.oco_lag_counts
     lag_uics: set[int] = set()
     resolved_uics: set[int] = set()
@@ -2104,7 +2137,8 @@ def _track_oco_lag(deps: LoopDeps, actions: list[Action], report: TickReport) ->
     for uic in lag_uics:
         counts[uic] = counts.get(uic, 0) + 1
         if counts[uic] >= _OCO_LAG_ALERT_TICKS and deps.alert_throttled(
-            f"uic {uic}: OCO exit propagation lag held {counts[uic]} consecutive ticks "
+            f"{_instrument_label(uic, ticker_by_uic)}: OCO exit propagation lag held "
+            f"{counts[uic]} consecutive ticks "
             f"(>= {_OCO_LAG_ALERT_TICKS}) — Q9 may be stalled, check the resting OCO pair",
             f"oco-lag-persistent:{uic}",
         ):
