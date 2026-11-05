@@ -73,6 +73,8 @@ Four closed picks agree on the exit LEG, and three never-filled picks agree that
 
 ### The exit fires EARLY in four of four, by 1.0 to 106.5 minutes
 
+**SUPERSEDED IN PART by section 10 (2026-11-03): the DIRECTION holds on 13 of 13, but the range below does not survive at either end. The bars are 1-minute and the replay stamps the bar start, so 9 of the 13 are inside one bar and cannot be sized from this tape; the panel median is -0.84 min. Read section 10.5 before quoting a magnitude.**
+
 | pick | replay closed | venue filled | Δ |
 |---|---|---|---:|
 | `SMMT:2026-09-23` | 2026-09-29 13:30Z | 2026-09-29 13:30Z | −1.0 min |
@@ -171,7 +173,7 @@ Every figure in sections 1 to 6 was measured on 2026-10-11 against the report as
 
 ## 9. Correction, 2026-10-28: VCYT closed, and the outcome word no longer agrees
 
-Status: **MEASURED**, 2026-10-28. It builds on section 8 (2026-10-12), which reports the two section 7 items landing and changes nothing measured here. The `Status:` word is the one this file's own header uses, not one of the four in [`CLAUDE.md`](CLAUDE.md) — those four describe a design decision, and this file is a measurement record. Sections 3, 4 and 6 are SUPERSEDED IN PART by this section. Sections 1, 2, 5, 7 and 8 do not move.
+Status: **MEASURED**, 2026-10-28. It builds on section 8 (2026-10-12), which reports the two section 7 items landing and changes nothing measured here. The `Status:` word is the one this file's own header uses, not one of the four in [`CLAUDE.md`](CLAUDE.md) — those four describe a design decision, and this file is a measurement record. Sections 3, 4 and 6 are SUPERSEDED IN PART by this section. Sections 1, 2, 5, 7 and 8 do not move. Section 10 (2026-11-03) later measured a 13-pick panel and reconciled 9.2's bound with it; 9.2 stands over its own 8 picks.
 
 ### 9.1 Section 3's "The outcome word agrees on 7 of 7" now has a counterexample
 
@@ -366,3 +368,206 @@ falsified by `AUR:2026-10-06-g2`, touched 2026-10-13T20:01:17.519Z (77 seconds a
 XNAS close) and fired 2026-10-14T13:30:05.242Z, the next session — and replaces an uncheckable
 "memo trap #8" citation in `entry_watch.py` and `entry_trail_watcher.py` with the fact it stood
 for.
+
+## 10. Refresh, 2026-11-03: the panel on thirteen comparable closed picks
+
+Status: **MEASURED**, 2026-11-03. Section 9 measured one pick against the LIVE record; this section
+measures thirteen, every closed pick the report calls comparable. It SUPERSEDES IN PART section 3
+(the exit-timing range and the non-flipping bound) and extends section 9.2 with the panel it was
+missing. Sections 1, 2, 4, 5, 6, 7, 8, 9.1 and 9.3 to 9.8 do not move, and 10.9 says which claims
+of theirs this section deliberately did not re-derive.
+
+The occasion was a different question: two LIVE positions closed on 2026-11-02 and neither can be
+replayed at all. `NVDA:2026-10-30` and `AVGO:2026-10-30` both carry `entry_mode: "immediate"`, and
+the replay refuses that shape with `entry_mode_unsupported` by the §8.1 decision in the spec. Three
+of the four picks armed on 2026-10-30 are `immediate`; only `MSFT:2026-10-30` is not, and it is
+still open. So the panel below is the newest measurement available, and it will not grow from the
+2026-10-30 cohort.
+
+### 10.1 What was run, and why its counts are not section 1's
+
+```bash
+# on the VPS, read-only
+alphalens broker trades --env live --format json --all     # 2026-11-03T13:37:38.075Z
+# locally, per pick, SERIALLY (the vendor allows 5 requests a minute for the whole project key)
+python -m scripts.replay_from_pick <report.json> <PICK> --out <dir> \
+    --bar-cache ~/.alphalens/replay_bars --entry-trails <live entry_trails.jsonl> --format json
+python -m intent_replay run <dir>/<stem>.document.json \
+    --config <dir>/<stem>.config.json --bars <dir>/<stem>.bars.json
+```
+
+The report holds **53 records**: 27 closed, 2 open, 24 never_filled. **23** carry an empty
+`replay_exclusions`, and the **13 of those that are closed** are this panel. Exclusion counts over
+all 53, a record able to carry more than one: `legacy_plan_shape` 21, `entry_mode_unsupported` 6,
+`placed_late` 4, `not_final` 3, `manual_close` 3.
+
+**Do not compare these counts with section 1's.** Section 1 built its report from the frozen fixture
+`tests/brokers/automanager/fixtures/trades/live_2026_10_03/` at `NOW = 2026-10-03T15:30:00Z`; this
+one is a live read five weeks later. Different corpus, different construction, and the arithmetic
+between them means nothing.
+
+The trail distance each run needs comes from the pick's own `watch_open` line, and
+`replay_from_pick.py:2566` reads the journal FILE rather than its history — so a distance boot
+compaction removed would refuse the pick. Checked before the run rather than assumed: the live
+journal holds 193 lines, its full history through `journal_snapshots.iter_journal_history` holds 224
+records, both fold to 63 tiers, and the two folds agree on all 63 shared crids except
+`AUR-2026-10-06-g2-entry-t0`, a never_filled pick outside this panel. So compaction removed nothing
+this panel needs, and either source gives the same distance.
+
+Bars are 1-minute and raw (`adjusted=false`) on each venue's half-open session grid. Nine windows
+came from the cache; four were fetched (ASTS, SMMT, TNGX, VST). The corporate-action verdict is
+`none` on all thirteen, from `polygon /v3/reference/{splits,dividends}`.
+
+### 10.2 The thirteen rows
+
+`ΔR` and `Δ price` are REPLAY MINUS LIVE, so a positive number means the replay said more. `ΔT` is
+in minutes. The LIVE side is `outcome.*` and `exits[].venue_time` from the report (source
+`venue.audit`); the replay side is its own `summary`.
+
+| pick | LIVE exit | replay exit | LIVE R | replay R | ΔR | ΔT exit | ΔT entry | Δ entry px | Δ exit px |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `ALAB:2026-10-05` | disaster_stop | stop | −1.0116 | −1.0000 | +0.0116 | −0.8 | −0.5 | −0.4880 | +0.5100 |
+| `ASTS:2026-09-23` | stop (kind unknown) | stop | +0.3580 | +0.4036 | +0.0456 | −1.6 | −0.5 | +0.2285 | +0.7144 |
+| `BE:2026-09-30` | disaster_stop | stop | −1.0363 | −1.0684 | −0.0322 | −0.4 | −2.8 | +1.6997 | −1.4762 |
+| `CRDO:2026-10-05` | disaster_stop | stop | −1.2188 | −1.2241 | −0.0053 | −0.2 | −1.2 | +0.1019 | −0.1800 |
+| `EWTX:2026-09-25` | stop (kind unknown) | stop | +0.3404 | +0.4174 | +0.0770 | −106.5 | −0.1 | −0.1558 | +0.1427 |
+| `FLY:2026-10-06` | disaster_stop | stop | −1.0181 | −1.0000 | +0.0181 | −0.6 | +1.9 | +0.0151 | +0.0600 |
+| `HUT:2026-10-06` | disaster_stop | stop | −1.0056 | −1.0000 | +0.0056 | −0.1 | −1.0 | −0.0680 | +0.0767 |
+| `NESR:2026-09-30` | disaster_stop | stop | −0.9987 | −1.0000 | −0.0013 | −0.3 | −84.0 | +0.1627 | −0.0041 |
+| `RLAY:2026-10-05` | disaster_stop | stop | −1.0000 | −1.0000 | −0.0000 | −0.2 | −0.3 | +0.0017 | 0.0000 |
+| `SMMT:2026-09-23` | take_profit | tp_complete | +1.0267 | +0.9349 | −0.0918 | −1.0 | −0.7 | −0.0095 | −0.1900 |
+| `TNGX:2026-09-23` | take_profit | tp_complete | +0.7557 | +0.9297 | **+0.1740** | −0.9 | −14.3 | −0.3428 | −0.0103 |
+| `VCYT:2026-09-29` | take_profit | **stop** | +0.9039 | +0.3391 | **−0.5648** | −7219.2 | +1101.8 | −0.6300 | −4.0180 |
+| `VST:2026-09-21` | trailed_stop | stop | +0.3834 | +0.3099 | −0.0734 | −13.4 | −1.6 | +1.1781 | +0.8632 |
+
+### 10.3 The R denominator differs on 13 of 13, so ΔR is not a measure of exit quality
+
+Both sides compute R on `avg_entry_price - placed_stop`, and because the entry fill differs, so does
+the denominator — on **every** pick. The relative difference has a median of **0.09%** and a range
+of **−11.21%** (VCYT) to **+12.72%** (VST). Four picks exceed 5%: NESR +5.08, TNGX −9.16, VCYT
+−11.21, VST +12.72.
+
+That is not a footnote. Three of the four largest `|ΔR|` in the table — VCYT, TNGX, VST — are in
+that same set of four, so on those rows a large ΔR is substantially a different entry anchor rather
+than a different exit. NESR is the counter-case that keeps this from being a rule: a 5.08%
+denominator gap with `ΔR = −0.0013`.
+
+The two columns that ARE like-for-like are the price deltas, and they are stated in the table for
+that reason.
+
+### 10.4 The exit MECHANISM agrees on 12 of 13, and the disagreement is the pick section 9 named
+
+The `state` word in the LIVE record is `closed` for all thirteen, so comparing it against the
+replay's `closed_stop` / `closed_tp` is trivially true and measures nothing. The comparison worth
+making is the mechanism, and it is in the table's first two columns:
+
+| LIVE mechanism | n | replay | agrees |
+|---|---:|---|---|
+| `disaster_stop` | 7 | stop | yes |
+| stop, kind unknown (ASTS, EWTX) | 2 | stop | yes |
+| `trailed_stop` (VST) | 1 | stop | yes |
+| `take_profit` (SMMT, TNGX) | 2 | tp_complete | yes |
+| `take_profit` (VCYT) | 1 | **stop** | **no** |
+
+**12 of 13.** The single disagreement is VCYT, which is the counterexample section 9.1 already
+published; this panel adds no second one. Section 3's heading said "the outcome word agrees on 7 of
+7" while its body scored the exit LEG — the leg is what is scored here too, and on a panel almost
+twice the size.
+
+### 10.5 The exit fires early on 13 of 13, and within one bar on 9
+
+Every row is negative: the replay exits no later than the LIVE record on all thirteen, which
+extends section 3's "four of four" to a panel three times the size and makes the direction the
+firmest thing in this file.
+
+The MAGNITUDE is a different claim, and section 3's "by 1.0 to 106.5 minutes" does not survive at
+either end. The bars are 1-minute and the replay stamps the bar START, so anything inside 1 minute
+is below the instrument's resolution. **Nine of thirteen are within one bar** (|ΔT| ≤ 1.0), with a
+panel median of **−0.84 min**. Only four exceed it: VCYT −7219.2, EWTX −106.5, VST −13.4, ASTS
+−1.6.
+
+So the early-exit gap is real in direction and, on 9 of 13 picks, too small for this tape to size.
+
+### 10.6 The money gap is still not systematically signed
+
+`ΔR` is **above zero on 6** and below on **7**. In the like-for-like units: the entry price delta is
+positive on 7 and negative on 6, median **+0.0017 USD**; the exit price delta is positive on 6,
+negative on 6 and exactly zero on 1 (RLAY), median **0.0000 USD**.
+
+Section 3's money claim therefore stands on a panel of 13: **no single-signed correction may be
+applied to an R figure.** The largest `|ΔR|` is 0.5648 (VCYT) and, excluding it, **0.1740** (TNGX).
+
+Section 9.2 reported `max |ΔR| = 0.0322` on BE among the picks that did not flip. TNGX exceeds that
+5.4×, and it is NOT a contradiction: section 9.2's panel was "8 broker-backed, exclusion-free,
+**touched** picks", and exactly 8 of these 13 carry a journaled `touched` line — FLY, HUT, ALAB,
+CRDO, RLAY, BE, NESR and VCYT. The other five (EWTX, ASTS, SMMT, TNGX, VST) are the oldest, armed
+2026-09-21 to 2026-09-25, and their touch lines were compacted away before the first snapshot
+existed on 2026-10-01. So section 9.2's bound holds over its own panel, and TNGX could not have
+been in it. The membership was recovered by counting, not assumed.
+
+### 10.7 VCYT reproduces section 9 to every digit, and the reproduction tests the walker, not the tape
+
+`ΔR = −0.5648` and `ΔP&L = −7.5707 pp`, the figures section 9.1 and 9.2 published, from a LIVE
+report read five days later and a replay re-run.
+
+What that does and does not establish was checked rather than asserted. Both bar caches are still on
+disk, so the two tapes can be differenced directly:
+
+```
+VCYT_1790688600000-1793131200000_1m_raw.json   fetched_at 2026-10-28T13:28:28.183Z   7065 bars
+VCYT_1790688600000-1793304000000_1m_raw.json   fetched_at 2026-11-02T21:27:30.265Z   7804 bars
+overlap 7065   differ in ANY field 208   differ in OHLC 3   {'vw': 206, 'o': 2, 'h': 2, 'l': 3, 'c': 3}
+```
+
+All three OHLC differences are six-decimal to four-decimal rounding (48.142208 → 48.1422), and all
+three fall on 2026-10-26 and 2026-10-27, AFTER the replay's exit at 2026-10-22T14:27:00Z. Inside the
+replay's holding window (entry 2026-10-07T13:31:00Z) the count of OHLC-differing bars is **0**, and
+206 of the 208 differences are in `vw`, which the walker never reads.
+
+So the two runs saw the same prices wherever the result turns on them. The reproduction is evidence
+that the walker is deterministic; it is NOT evidence that the vendor's tape is stable.
+
+### 10.8 One refusal, published
+
+The first `ASTS:2026-09-23` join exited **7** with code `corporate_actions_unanswered`, reason
+`lookup_failed`, vendor message "splits lookup failed for ASTS: POLYGON_API_KEY environment variable
+not set". The cause is the environment, not the pick: a worktree has no `.env`, and the retry
+succeeded after the key was exported from the main checkout. It consumed no vendor request.
+
+It is recorded here because the command block in 10.1 does not reproduce in a fresh worktree without
+that export, and because a refusal inside a run that reports thirteen successes is exactly the kind
+of thing that otherwise disappears.
+
+### 10.9 What this does NOT settle
+
+- **The two newest closed picks are outside every panel.** `NVDA:2026-10-30` and `AVGO:2026-10-30`
+  are `entry_mode: immediate` and the replay refuses them. Nothing here measures the backtester
+  against an immediate entry, and nothing can until that shape has a model — which per the spec
+  needs a drain-time price the bars may not carry.
+
+  How urgent that is was counted rather than inferred from the cohort. Over all 53 records in the
+  same report: **38 picks are pure `pullback`, 3 are pure `immediate`, 1 is mixed**, and 11 carry no
+  `entry_tiers` at all (the legacy plan shape). By declared tier it is **46 `pullback` against 4
+  `immediate`**. Every `immediate` pick sits on ONE trade date, 2026-10-30, against ten trade dates
+  carrying a `pullback` pick. The owner confirms on 2026-11-03 that `immediate` is NOT the default
+  entry mode, so the shape is an exception on one day rather than a drift in how picks are written,
+  and the panel will keep growing from `pullback` picks — `MSFT:2026-10-30` is the next one, still
+  open. Three of four picks on one day is a single-day number and was read as a trend here before it
+  was counted; the counts above are what the question should rest on.
+- **13 of 24 closed picks, not 24.** The other eleven are excluded for `legacy_plan_shape`,
+  `entry_mode_unsupported`, `manual_close` or `placed_late`. This panel describes the subset the
+  tool accepts, and that subset is not a random sample of the owner's trading.
+- **Section 9.5's "11 of 11 touches" was not re-counted and cannot be from this corpus.** Five of
+  the thirteen have no `touched` line left at all, as 10.6 states.
+- **Section 9.1's channel decomposition** (entry channel ΔR −0.5115, exit-fill channel −0.0534) and
+  **section 9.4's tape figures** were not re-derived here. 10.7 re-derives the two totals and
+  nothing finer.
+- **No PLN figure is published.** The record carries `pnl_cash_acct` and `notional_spent_acct`, so an
+  account-currency return is computable for all thirteen, but the replay produces a USD price return
+  and differencing the two would subtract quantities in different units. The ΔP&L column is
+  deliberately absent from 10.2 for the same reason the R columns carry 10.3's warning.
+- **Fees are in neither side's percentage.** `fees` is null on all thirteen LIVE records and
+  `fees_not_included` names financing, dividends and withholding tax.
+- **Nothing here measures the arming-time channel**, which #1848 documented and measured at zero
+  effect on the picks then available. VCYT's `ΔT entry` of +1101.8 minutes is that channel showing
+  up on the one pick where it bites.
