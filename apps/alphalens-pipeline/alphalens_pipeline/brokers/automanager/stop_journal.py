@@ -571,6 +571,58 @@ def _fold_fired_since_latest_plan(lines: Iterable[Mapping[str, Any]]) -> dict[in
     return {u: frozenset(t) for u, t in fired.items()}
 
 
+def fired_tranche_tags_by_pick(lines: Iterable[Mapping[str, Any]]) -> dict[str, frozenset[str]]:
+    """Fired-tranche tags per PICK KEY, attributed in write order and never reset.
+
+    :func:`_fold_fired_since_latest_plan` answers the executor's question — may
+    this uic's ladder still fire tier N — so it RESETS on every new plan
+    generation. An exit page asks a different question: did THIS pick ever take
+    a take-profit, because ``broker trades`` nulls the whole exit family of such
+    a pick for good (the market sell's fill price is never journaled). Those two
+    answers disagree on every shape that resets the accumulator while the pick's
+    own ``tranche_fired`` line stays in the journal: a keyless bracket-path plan
+    line appended afterwards, a different pick taking over the uic, and a
+    retraction. Measured on a hand-built journal, the reset fold reports no fired
+    tranche for all three while the command still lists the take-profit among the
+    pick's exits and publishes a null.
+
+    So this attributes each ``tranche_fired`` to the pick that was GOVERNING when
+    the line was written, which is the same rule ``trades`` uses when it stamps a
+    fired tranche onto a pick, and keeps the attribution for ever. A uic re-used
+    by a later pick is therefore not tainted by the earlier one's ladder: the two
+    picks are separate keys here.
+
+    A ``tranche_fired`` written while no keyed plan governs the uic (the bracket
+    path) has no pick to attribute to and is dropped — those lines belong to no
+    entry-trail pick, so no exit page reads them."""
+    fired: dict[str, set[str]] = {}
+    governing: dict[int, str] = {}
+    for line in lines:
+        uic = _coerce(line, "uic", int)
+        if uic is None:
+            continue
+        kind = line.get("kind")
+        if kind == _TRANCHE_PLAN_KIND:
+            key = line.get("pick_key")
+            if key is None:
+                governing.pop(uic, None)
+            else:
+                governing[uic] = str(key)
+            continue
+        if kind == _TRANCHE_PLAN_RETRACTED_KIND:
+            # The plan is gone, but what already FIRED under it stays attributed:
+            # the retraction cannot un-sell the shares, and the command still
+            # counts that take-profit among the pick's exits.
+            governing.pop(uic, None)
+            continue
+        if kind == "tranche_fired":
+            tag = line.get("tag")
+            pick = governing.get(uic)
+            if tag and pick is not None:
+                fired.setdefault(pick, set()).add(str(tag))
+    return {p: frozenset(t) for p, t in fired.items()}
+
+
 def _fold_round_trip_closures_since_latest_plan(
     lines: Iterable[Mapping[str, Any]],
 ) -> dict[int, frozenset[str | None]]:

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import enum
 import logging
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -36,6 +37,13 @@ _SMALL_PRICE = 1.0
 # The widest a stop MOVE's two levels are ever rendered, when nothing narrower
 # tells them apart. Matches the stop-raised throttle key's precision.
 _MAX_LEVEL_DECIMALS = 6
+# The R is rendered at the width ``alphalens broker trades`` renders its own
+# ``r_multiple`` with (``R {_trades_cell(outcome['r_multiple'], '.4f')}`` in
+# ``alphalens_cli.commands.broker``). The operator reads the page and then
+# checks the command, so one width and one convention: at two decimals
+# +0.4758R and +0.4761R would print the same, and two numbers that print alike
+# read as one number that moved.
+_R_DECIMALS = 4
 
 
 class EventKind(enum.Enum):
@@ -127,12 +135,19 @@ class TradeEvent:
     price: float | None = None
     reason: ExitReason | None = None
     # The stop or target level behind ``reason`` (for example the trailed
-    # level); for the stop-move kinds, the level the stop now sits at.
+    # level, or the take-profit target a submitted market sell was sent at);
+    # for the stop-move kinds, the level the stop now sits at.
     level: float | None = None
     # Where a raised stop came FROM. Only the stop-move kinds carry it.
     previous_level: float | None = None
     order_id: str | None = None
     position_closed: bool | None = None
+    # What the round trip MADE, in R, on the one convention ``broker trades``
+    # publishes (:func:`result_r`). ``None`` wherever that command publishes a
+    # null rather than a number — the call site decides, because only it can
+    # see the shape; a plausible number here would be a second, disagreeing R
+    # under the same name.
+    result_r: float | None = None
 
 
 def stop_reason(marker_kind: str | None) -> ExitReason:
@@ -151,6 +166,60 @@ def stop_reason(marker_kind: str | None) -> ExitReason:
         )
         return ExitReason.STOP
     return reason
+
+
+def result_r(
+    *,
+    avg_entry: float | None,
+    plan_stop: float | None,
+    exit_qty: float | None,
+    exit_price: float | None,
+) -> float | None:
+    """What this exit made, in R, in the ONE convention ``broker trades`` uses.
+
+    That command computes ``risk = avg_entry - spec.disaster_stop`` for a long
+    and ``r_multiple = pnl / (exit_qty * risk)`` (``trades._outcome``). This is
+    the same arithmetic, so the page and the command cannot publish two numbers
+    under one name. Pure: the caller supplies the four facts.
+
+    ``plan_stop`` is the ORIGINAL disaster stop stamped at entry, never the
+    level the stop was RESTING at when it filled. A trailed stop has moved, and
+    it moves toward — past, on a winner — the entry: on the VST round trip of
+    2026-09-21 the resting level (138.82) was above the realized entry
+    (135.11), so a resting-stop denominator is negative and the R changes SIGN.
+    The issue's own R rule says the same thing (#1621, "R rule").
+
+    ``None`` — never a guess — when a fact is missing or the risk is not
+    positive, which is the refusal ``broker trades`` writes as
+    ``non_positive_risk``. The executor is long-only, so the sign convention
+    below is the long one; a short would need the ``trades`` sign factor too.
+
+    Every fact is also checked for FINITENESS, and so is the result. A NaN
+    passes ``risk <= 0`` (every comparison against NaN is False), so without
+    this the page rendered ``+nanR`` — and ``+infR`` for an infinite fill price
+    — where the command publishes a null with reason ``non_finite``. The rest of
+    the path already refuses both (``entry_trails._finite_positive_float``,
+    ``_entry_order_filled_qty``); the exit price arrives straight from the
+    broker's audit row and was the one unguarded input.
+    """
+    if avg_entry is None or plan_stop is None or exit_qty is None or exit_price is None:
+        return None
+    if not all(math.isfinite(v) for v in (avg_entry, plan_stop, exit_qty, exit_price)):
+        return None
+    risk = avg_entry - plan_stop
+    if risk <= 0 or exit_qty <= 0:
+        return None
+    # ``broker trades`` divides the cash P&L of EVERY exit by ``exit_qty *
+    # risk``; for the ONE exit a page reports, the quantity cancels
+    # (``q * (p - avg_entry) / (q * risk)``), which is why a page can agree
+    # with a whole-pick number at all. It is also why ``exit_qty`` still has to
+    # be a positive FACT here rather than be dropped: the shapes where it is
+    # not are the shapes where the command publishes a null.
+    # No finiteness check on the RESULT: with four finite inputs and a positive
+    # risk the quotient is finite for every price a venue quotes, so such a check
+    # was measured UNREACHABLE — no test could redden its removal and no input
+    # could reach it. The guard that carries this is the one on the inputs above.
+    return (exit_price - avg_entry) / risk
 
 
 def format_price(price: float) -> str:
@@ -225,21 +294,38 @@ def _reason_text(event: TradeEvent) -> str | None:
         return _stop_move_text(event)
     if event.reason is None:
         return None
-    text = event.reason.value
+    text = _with_level(event.reason.value, event.level)
     if event.reason is ExitReason.TAKE_PROFIT and event.kind is EventKind.EXIT_SUBMITTED:
+        # The TARGET, in the level slot. This page carries no fill price — the
+        # engine reads none back — so before #1621 point 7 it carried no number
+        # at all, and a ladder's TP1 page was indistinguishable from its TP3
+        # page except by the label. The target is what the sell was sent AT, and
+        # it is the only price this page can honestly state.
         return f"{text}, market sell sent"
-    if event.level is not None:
-        return f"{text} {format_price(event.level)}"
     return text
 
 
 def _outcome_text(event: TradeEvent) -> str | None:
+    # The R leads the outcome slot, as the issue's own target output has it
+    # ("+0.36R, position closed"): the operator scanning a page wants the
+    # verdict before the bookkeeping. An explicit sign, because "0.4758R" and
+    # "-0.4758R" differ by the whole point of the page.
+    made = None
+    if event.result_r is not None:
+        # ``+ 0.0`` turns IEEE ``-0.0`` back into ``0.0``. A breakeven trail
+        # rests the stop AT the entry by construction, so a fill there gives an
+        # R whose sign is float noise, and at four decimals -1e-9 prints
+        # ``-0.0000R`` -- a minus sign on a page whose whole job is the sign.
+        # No other value changes: the rounding is the one the format would have
+        # done anyway.
+        made = f"{round(event.result_r, _R_DECIMALS) + 0.0:+.{_R_DECIMALS}f}R"
     if event.position_closed is None:
-        return None
+        return made
     # "still open" covers both a take-profit tranche that sells part of the
     # position by design and a stop that filled only in part; the quantity says
     # how much went.
-    return "position closed" if event.position_closed else "position still open"
+    closed = "position closed" if event.position_closed else "position still open"
+    return closed if made is None else f"{made}, {closed}"
 
 
 def render(event: TradeEvent) -> str:
@@ -249,7 +335,10 @@ def render(event: TradeEvent) -> str:
         head.append(event.label)
     if event.qty is not None:
         head.append(f"{event.qty:g}")
-    if event.price is not None:
+    if event.price is not None and math.isfinite(event.price):
+        # A non-finite price is not a fact, and this module's rule is that a
+        # field it does not know is LEFT OUT rather than rendered. Before this,
+        # a NaN from the broker's audit row paged ``SELL VST SL 6 @ nan``.
         head.append(f"@ {format_price(event.price)}")
     parts = [" ".join(head)]
     parts.extend(text for text in (_reason_text(event), _outcome_text(event)) if text)
@@ -267,5 +356,6 @@ __all__ = [
     "TradeEvent",
     "format_price",
     "render",
+    "result_r",
     "stop_reason",
 ]

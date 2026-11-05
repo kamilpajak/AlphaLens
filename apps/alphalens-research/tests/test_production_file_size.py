@@ -357,21 +357,36 @@ BASELINE: dict[str, int] = {
     # Counted with ``wc -l`` on the file (8192 before, 8333 after) — the entry it
     # replaces read 8193, one line above the file it recorded, so the entry-to-entry
     # delta is 140 while the file grew 141.
-    # +34 for #1621 point 11 on the persistent-OCO-lag page. Scope, because the
-    # earlier wording over-claimed: counted with ``grep -o 'uic {'`` on
+    # +34 for #1621 point 11 on the persistent-OCO-lag page (#1855). Scope, because
+    # an earlier wording over-claimed: counted with ``grep -o 'uic {'`` on
     # ``origin/main``, 27 strings name an instrument that way across this file (22)
     # and ``position_manager.py`` (5). Four are conditional fallbacks for a failed
     # ticker lookup; the other 23 say ``uic <n>`` on every send. This page is the one
     # of those 23 that fires on the NORMAL protection path — every other one fires
     # only on a failure or a degraded path — so it is the one the operator actually
-    # reads. Point 11 stays open for the rest. The room
-    # buys ``_instrument_label`` and its docstring (the policy: the ticker when a
-    # position names one, the uic always, because the uic is the only link to the
-    # Saxo app), the uic -> ticker read of the tick's ``long_positions`` at the one
-    # caller, and the paragraph in ``_track_oco_lag`` saying why the new argument is
-    # required rather than defaulted and why the lookup cannot miss.
-    # Counted with ``wc -l`` on the file (8333 before, 8367 after), after ruff format.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8367,
+    # reads. Point 11 stays open for the rest. The room buys ``_instrument_label`` and
+    # its docstring (the policy: the ticker when a position names one, the uic always,
+    # because the uic is the only link to the Saxo app), the uic -> ticker read of the
+    # tick's ``long_positions`` at the one caller, and the paragraph in
+    # ``_track_oco_lag`` saying why the new argument is required rather than defaulted
+    # and why the lookup cannot miss.
+    # +79 for ``_exit_result_r`` (#1621, #1856), which decides whether a stop-fill
+    # page may state the trade's R at all. Roughly a quarter of it is the decision —
+    # six refusals, the two local reads and the call, plus three lines at the call
+    # site; the rest is the docstring, and that is what the room buys. Each refusal
+    # exists because ``alphalens broker trades`` publishes a NULL r_multiple for that
+    # same shape, and a page printing a number against one of those nulls is worse
+    # than a page printing none: the operator cannot tell which of the two surfaces is
+    # wrong. Without the list a later author reads six early returns as defensiveness
+    # and deletes one. Two of the six were measured, not imagined: a COMPLETE stop
+    # fill covering less than the pick is ``not_closed`` to the command, and the page
+    # printed ``+0.0935R`` for shares that lost 0.1645R; and a take-profit whose
+    # attribution had been reset by a later keyless plan line or a retraction made the
+    # page print ``+0.3834R`` where the command published a null.
+    # The two changes touch disjoint regions and their growth adds exactly. Counted
+    # with ``wc -l`` on the MERGED file after ruff format: 8333 before either, 8367
+    # after #1855, 8446 after both (8333 + 34 + 79).
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8446,
     # +1 to correct the comment beside ``_OCO_LAG_HOLD_REASON``. It claimed a rename
     # of that literal "fails the control-loop tests loudly"; measured, renaming it to
     # "oco-lag-held" leaves all 552 control-loop tests green, because they read the
@@ -386,7 +401,17 @@ BASELINE: dict[str, int] = {
     # diff and shipped this gate red.
     # +2: ``_journal_envelope_clamped`` said the boot compactor drops the record
     # and stopped there; it now names the snapshot the record then lives in.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1409,
+    # +52 for ``fired_tranche_tags_by_pick`` (#1621), which attributes a fired
+    # take-profit to the pick that was GOVERNING when the line was written and never
+    # forgets it. The existing fold answers the executor's question — may this uic
+    # still fire tier N — and so RESETS on every new plan generation. An exit page
+    # asks whether THIS pick ever took a take-profit, because the command nulls such
+    # a pick's whole exit family for good. Measured, the two answers disagree on a
+    # keyless plan line appended after the fire, on a retraction, and on a later pick
+    # taking over the uic. The docstring is most of the room: a reader who sees two
+    # folds over the same lines will merge them unless it says why they differ.
+    # Counted with ``wc -l`` (1409 before, 1461 after), after ruff format.
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1461,
     # +188 for the first half of this file's SonarCloud complexity cleanup: eight of
     # its sixteen python:S3776 functions, cleared by naming the block each one's
     # surplus sat in. Nineteen new module-level helpers and their docstrings; the

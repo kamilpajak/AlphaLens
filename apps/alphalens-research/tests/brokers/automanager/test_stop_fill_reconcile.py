@@ -314,9 +314,18 @@ class TestStopFillAlertNamesTheStop(unittest.TestCase):
     position on the same uic, because every new stop is placed at the plan
     level."""
 
-    def _alert_for(self, *lines: dict[str, Any], outcome: OrderState) -> str:
+    def _alert_for(
+        self,
+        *lines: dict[str, Any],
+        outcome: OrderState,
+        entries: list[dict[str, Any]] | None = None,
+    ) -> str:
         path = _stop_journal(self)
         _seed(path, *lines)
+        # AFTER _stop_journal, whose hermetic default for the entry journal this
+        # patch has to take precedence over.
+        if entries:
+            _seed(_entry_journal(self), *entries)
         alerts: list[str] = []
         cl._run_stop_fill_reconcile_pass(
             _deps(_StopBroker(outcome=outcome), alerts), cl.TickReport()
@@ -326,6 +335,11 @@ class TestStopFillAlertNamesTheStop(unittest.TestCase):
 
     def test_asts_29_09_real_journal_lines_render_the_trailed_stop(self) -> None:
         # Verbatim LIVE standalone_stops.jsonl lines for ASTS (uic 22312740).
+        # The entry journal `_stop_journal` seeds is EMPTY, so this is the shape
+        # of a pick with no entry-trail watch and the page states no result (a
+        # client-geometry bracket pick is the real example). The sibling test
+        # below is the same stop with an entry pair, which is what a trailed LIVE
+        # pick looks like.
         uic, order_id, ref = 22312740, "5446399206", "ASTS-2026-09-23-entry-t0-fire-stop-0"
         text = self._alert_for(
             {
@@ -354,6 +368,10 @@ class TestStopFillAlertNamesTheStop(unittest.TestCase):
 
     def test_uber_28_09_real_journal_line_renders_the_plan_stop(self) -> None:
         # A stop_placed written before #1621 carries no level: "plan stop" alone.
+        # No entry pair either, so no result. This stop's own quantity (2) also
+        # disagrees with what filled (8); with an entry pair present the per-pick
+        # quantity guard compares the FILLED quantity against the pick's entry, so
+        # it is the 8 that would have to match, not the 2.
         uic, order_id = 13697176, "5440923753"
         text = self._alert_for(
             {
@@ -368,6 +386,54 @@ class TestStopFillAlertNamesTheStop(unittest.TestCase):
         )
         self.assertEqual(
             text, "SELL UBER SL 8 @ 67.99 - plan stop - position closed (order 5440923753)"
+        )
+
+    def test_the_same_asts_stop_states_its_result_once_an_entry_pair_exists(self) -> None:
+        # The production shape of the test above, on the SAME pick's real entry
+        # pair: ``fixtures/trades/live_2026_10_03/entry_trails.jsonl`` holds
+        # ``watch_open`` with ``disaster_stop`` 50.64 and ``fired`` with
+        # ``avg_price`` 59.2776 for crid ASTS-2026-09-23-entry-t0. By hand:
+        # (62.37 - 59.2776) / (59.2776 - 50.64) = 3.0924 / 8.6376 = 0.358016,
+        # which is also what ``broker trades`` publishes for ASTS:2026-09-23.
+        # The denominator is the stamped plan stop, NOT the trailed level 62.42.
+        uic, order_id, ref = 22312740, "5446399206", "ASTS-2026-09-23-entry-t0-fire-stop-0"
+        crid = "ASTS-2026-09-23-entry-t0"
+        text = self._alert_for(
+            {
+                "kind": "stop_placed",
+                "order_id": order_id,
+                "qty": 7.0,
+                "ref": ref,
+                "ts": 1790256634.7613068,
+                "uic": uic,
+            },
+            {
+                "kind": "trailed",
+                "last_price": 64.52,
+                "level": 62.42304,
+                "peak": 64.52,
+                "ts": 1790688665.389362,
+                "uic": uic,
+            },
+            outcome=_filled(order_id, 7.0, 62.37),
+            entries=[
+                {
+                    "kind": "watch_open",
+                    "crid": crid,
+                    "pick_key": "ASTS:2026-09-23",
+                    "ticker": "ASTS",
+                    "disaster_stop": 50.64,
+                    "uic": uic,
+                    "qty": 7.0,
+                    "tier_index": 0,
+                },
+                {"kind": "fired", "crid": crid, "realized_qty": 7.0, "avg_price": 59.2776},
+            ],
+        )
+        self.assertEqual(
+            text,
+            "SELL ASTS SL 7 @ 62.37 - trailed stop 62.42 - +0.3580R, position closed "
+            "(order 5446399206)",
         )
 
     def test_the_placed_level_is_shown_for_the_plan_stop(self) -> None:
