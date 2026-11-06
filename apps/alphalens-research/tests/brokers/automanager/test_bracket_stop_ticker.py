@@ -34,6 +34,8 @@ from alphalens_pipeline.brokers.automanager import state_paths, trades
 from alphalens_pipeline.brokers.automanager import stop_journal as sj
 from alphalens_pipeline.brokers.automanager.position_manager import PlaceStop
 from alphalens_pipeline.brokers.automanager.trades import TradesFilters, build_trades
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from tests.brokers.automanager.home_isolation import (
     IsolatedHomeTestCase,
@@ -169,10 +171,11 @@ class TestEveryInexactJoinFallsBackToTheUic(_BracketStopCase):
         self._write_submissions(records)
         self.assertEqual(self._both_pages(), (_FILL_PAGE_FALLBACK, _PLACED_PAGE_FALLBACK))
 
-    def test_a_reader_that_raises_anything_falls_back(self) -> None:
+    def test_a_reader_that_raises_any_exception_falls_back(self) -> None:
         # A line nested deep enough makes ``json.loads`` raise RecursionError,
         # which is neither an OSError nor a ValueError. The fill page is sent
         # after ``stop_filled`` is journaled, so a raise here would lose it.
+        # ``Exception`` only: a BaseException is pinned to propagate below.
         self._install_real_submissions()
         with mock.patch.object(
             submission_log, "iter_submission_records", side_effect=RecursionError("deep")
@@ -215,6 +218,19 @@ class TestEveryInexactJoinFallsBackToTheUic(_BracketStopCase):
         _bracket_record(records)["ticker"] = 641
         self._write_submissions(records)
         self.assertEqual(self._both_pages(), (_FILL_PAGE_FALLBACK, _PLACED_PAGE_FALLBACK))
+
+    def test_a_uic_string_not_in_the_writers_form_is_no_uic(self) -> None:
+        # The writer stores ``str(int)``, so ``'641'`` is the only spelling a
+        # real record carries. ``int()`` also accepts all of these, and before
+        # this check each one joined RHI. An exact join takes the exact form.
+        for spelling in ("0641", " 641 ", "+641", "6_41", "\u0666\u0664\u0661"):
+            with self.subTest(uic=spelling):
+                record = {
+                    "uic": spelling,
+                    "ticker": "RHI",
+                    "brackets": [{"client_request_id": _RHI_CRID}],
+                }
+                self.assertIsNone(sj._bracket_ticker(_RHI_STOP_REF, _RHI_UIC, [record]))
 
     def test_a_bool_uic_is_no_uic(self) -> None:
         # ``True`` is an int to Python. As a uic it is a corrupt record, and a
@@ -323,6 +339,74 @@ class TestTheBroadCatchCoversOnlyTheRead(unittest.TestCase):
     def test_a_failing_path_resolution_is_not_swallowed(self) -> None:
         with self.assertRaises(OperatorStateReadError):
             cl._stop_page_ticker(_RHI_STOP_REF, _RHI_UIC)
+
+
+class TestWhatTheCatchMustNotSwallow(_BracketStopCase):
+    """The catch around the read is ``except Exception`` and covers the read
+    only. Two things must get through it, and each was a surviving mutant."""
+
+    def test_a_keyboard_interrupt_from_the_reader_propagates(self) -> None:
+        # Widening the catch to BaseException left every test green, and would
+        # swallow a shutdown (SIGTERM arrives as SystemExit) mid-read.
+        self._install_real_submissions()
+        with mock.patch.object(
+            submission_log, "iter_submission_records", side_effect=KeyboardInterrupt
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                cl._stop_page_ticker(_RHI_STOP_REF, _RHI_UIC)
+
+    def test_a_defect_in_the_join_is_not_hidden_by_the_catch(self) -> None:
+        # The join is pure and stays OUTSIDE the catch, so a regression in it
+        # fails loudly instead of quietly naming the uic. Moving it inside the
+        # ``try`` left every test green before this one.
+        self._install_real_submissions()
+        with mock.patch.object(sj, "_bracket_ticker", side_effect=TypeError("join defect")):
+            with self.assertRaises(TypeError):
+                cl._stop_page_ticker(_RHI_STOP_REF, _RHI_UIC)
+
+
+_JSON_SCALAR = (
+    st.none() | st.booleans() | st.integers() | st.floats(allow_nan=True) | st.text(max_size=8)
+)
+_JSON_VALUE = st.recursive(
+    _JSON_SCALAR,
+    lambda inner: (
+        st.lists(inner, max_size=4) | st.dictionaries(st.text(max_size=6), inner, max_size=4)
+    ),
+    max_leaves=12,
+)
+
+
+def _record_strategy() -> st.SearchStrategy[dict[str, Any]]:
+    """A JSON-shaped submission record, with the real crid planted in its
+    ``brackets`` often enough that the join is actually exercised."""
+    bracket = st.one_of(
+        _JSON_VALUE,
+        st.fixed_dictionaries(
+            {"client_request_id": st.just(_RHI_CRID)}, optional={"qty": _JSON_VALUE}
+        ),
+    )
+    return st.fixed_dictionaries(
+        {},
+        optional={
+            "uic": st.one_of(_JSON_VALUE, st.just("641"), st.just(_RHI_UIC)),
+            "ticker": st.one_of(_JSON_VALUE, st.just("RHI")),
+            "brackets": st.one_of(_JSON_VALUE, st.lists(bracket, max_size=3)),
+        },
+    )
+
+
+class TestTheJoinNeverRaises(unittest.TestCase):
+    """Keeping the join outside the catch is safe only if the join cannot raise
+    on anything a JSON journal can hold. A raise there on the stop-FILL path
+    escapes the tick after ``stop_filled`` is latched, so the page is lost and
+    that tick's protection pass is skipped. This holds the property itself."""
+
+    @settings(max_examples=400, deadline=None)
+    @given(records=st.lists(_record_strategy(), max_size=4), uic=st.integers())
+    def test_any_json_shaped_journal(self, records: list[dict[str, Any]], uic: int) -> None:
+        result = sj._bracket_ticker(_RHI_STOP_REF, uic, records)
+        self.assertTrue(result is None or isinstance(result, str))
 
 
 class TestOneRuleForWhoOwnsAStop(unittest.TestCase):

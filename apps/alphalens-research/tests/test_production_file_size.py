@@ -396,7 +396,13 @@ BASELINE: dict[str, int] = {
     # that says why that read may sit in both callers (once per filled stop; the
     # DEFERRED send, never the protection loop). Counted with ``wc -l`` after ruff
     # format: 8446 before, 8477 after.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8477,
+    # +12 more, from the review of #1862: the ``_stop_page_ticker`` docstring now says
+    # what each caller does with a defect (the placed page's drain contains it, the
+    # fill page's tick does not), that a BaseException propagates, and that the
+    # fill-path read is SYNCHRONOUS before the protection pass, at about 4 us a record.
+    # The earlier text said the read was "never the protection loop itself", which is
+    # true of the placed page only. Counted with ``wc -l`` (8477 before, 8489 after).
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8489,
     # +1 to correct the comment beside ``_OCO_LAG_HOLD_REASON``. It claimed a rename
     # of that literal "fails the control-loop tests loudly"; measured, renaming it to
     # "oco-lag-held" leaves all 552 control-loop tests green, because they read the
@@ -430,7 +436,11 @@ BASELINE: dict[str, int] = {
     # ref onto ``submissions.jsonl`` (one bracket in one record, same uic, the uic
     # read as int OR string, never a bool), whose docstring names every shape that
     # refuses. Counted with ``wc -l`` after ruff format: 1461 before, 1526 after.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1526,
+    # +6 more, from the review of #1862: ``_submission_uic`` takes a string only in
+    # the writer's own ``str(int)`` form. ``int()`` also accepted '0641', ' 641 ',
+    # '+641', '6_41' and non-ASCII digits, and each joined uic 641. Counted with
+    # ``wc -l`` (1526 before, 1532 after).
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1532,
     # +188 for the first half of this file's SonarCloud complexity cleanup: eight of
     # its sixteen python:S3776 functions, cleared by naming the block each one's
     # surplus sat in. Nineteen new module-level helpers and their docstrings; the

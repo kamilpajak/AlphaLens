@@ -3511,16 +3511,28 @@ def _stop_page_ticker(ref: str | None, uic: int) -> str:
     (``<uuid>-stop-<n>``, every ``entry_mode: "immediate"`` pick) does not, so
     its ticker is read off the submission that holds that bracket -- only when
     the join is exact (:func:`stop_journal._bracket_ticker`). A journal that is
-    missing, or whose READ raises anything at all (unreadable, not UTF-8, a line
-    nested past the recursion limit), falls back to the uic: the page is
+    missing, or whose READ raises any ``Exception`` (unreadable, not UTF-8, a
+    line nested past the recursion limit), falls back to the uic: the page is
     observability, and the stop-fill page is sent after ``stop_filled`` is
-    journaled, so a raise here would lose it for good. The path resolution and
-    the pure join stay outside that catch, so a defect in either is not hidden.
+    journaled, so a raise here would lose it for good. A ``BaseException``
+    (``KeyboardInterrupt``, the ``SystemExit`` a SIGTERM becomes) propagates, so
+    a shutdown is never swallowed mid-read.
 
-    One ``submissions.jsonl`` read per call, and only for a bracket ref. Both
-    callers may pay it: the stop-fill reconcile runs once per filled stop, and
-    the stop-placed page is the DEFERRED send (:func:`_queue_page`), never the
-    protection loop itself."""
+    The path resolution and the pure join stay OUTSIDE that catch, and the two
+    callers contain a defect differently. On the stop-placed page,
+    :func:`_drain_pages` catches it: that page is lost and a WARNING logged. On
+    the stop-fill page nothing does: it escapes the tick after ``stop_filled``
+    is latched, so the page is lost and that tick's protection pass is skipped.
+    That is why the join is pure and is held never to raise on anything a JSON
+    journal can contain, rather than being wrapped.
+
+    One ``submissions.jsonl`` read per call, and only for a bracket ref. The
+    stop-placed page pays it in the DEFERRED send (:func:`_queue_page`), never
+    between two ``execute_protection`` calls. The stop-fill page pays it
+    SYNCHRONOUSLY: the stop-fill reconcile runs before the protection pass of
+    the same tick, so the read delays that pass by its own cost. Measured at
+    about 4 us a record (0.2 ms for LIVE's 60 today, 40 ms at 10k); the tick
+    already reads the whole same file every time in ``deps.read_records``."""
     ticker = stop_journal._ticker_from_ref(ref)
     if ticker is None and stop_journal._bracket_request_from_stop_ref(ref) is not None:
         from alphalens_pipeline.brokers.submission_log import iter_submission_records

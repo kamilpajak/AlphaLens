@@ -746,7 +746,12 @@ def _bracket_request_from_stop_ref(ref: str | None) -> str | None:
 
 def _submission_uic(record: Mapping[str, Any]) -> int | None:
     """The record's uic as an int. ``submissions.jsonl`` stores it as a STRING
-    (``'212'``) where every other journal stores an int, so both are read."""
+    (``'212'``) where every other journal stores an int, so both are read.
+
+    A string counts only in the writer's own form, ``str(int)``. ``int()`` also
+    accepts ``'0641'``, ``' 641 '``, ``'+641'``, ``'6_41'`` and non-ASCII digits,
+    and each of those joined uic 641 before this check; a join that calls itself
+    exact takes the one spelling a real record carries."""
     raw = record.get("uic")
     if isinstance(raw, bool):  # an int to Python, never a uic
         return None
@@ -754,9 +759,10 @@ def _submission_uic(record: Mapping[str, Any]) -> int | None:
         return raw
     if isinstance(raw, str):
         try:
-            return int(raw)
+            value = int(raw)
         except ValueError:
             return None
+        return value if str(value) == raw else None
     return None
 
 
