@@ -14,40 +14,71 @@ drifted in ways that change a number rather than raise:
 * none of the four pinned ``sel_label_version``, so two label definitions could
   pool into one panel with nothing said.
 
-This module is that chain, once. It owns no frozen constant: the cutoff, the
-population, the status column, the resolved-status token and the arrival dtype
-are all the caller's, because they are pre-registered choices and a default here
-would leave two copies of each to keep frozen.
+This module is that chain, once. Every pre-registered choice stays the caller's,
+and :class:`PanelSpec` has no default on any of its eleven fields. The reason is
+not the same for all of them: the cutoff, the population and the status column
+are pre-registration decisions, and the status column's name carries a horizon,
+so a default would put a second copy of a frozen choice here. The
+resolved-status token, the anchor column and the arrival dtype each have exactly
+one owner in the pipeline tier already, so they are the caller's for symmetry
+rather than because a default would duplicate anything.
+
+Two frozen choices this module does not expose, which is worth stating rather
+than leaving to be discovered: the episode collapse is called bare, so it takes
+``ticker_episode_dedup``'s own defaults — a chained FIVE-session window on
+``XNYS``. The five sessions are ledger rule 5's definition of a ticker-episode.
+They are not promoted to the spec because all four copies call it bare too, so
+the unit here is the unit every recorded number was computed with, and the two
+cases in ``TestTheUnitIsEpisodesNotRows`` pin the window from both sides — a
+near repeat is one episode, a distant repeat is two.
 
 Outcome blindness
 -----------------
 There are two public builders, never one with a boolean. The blind one takes no
 ``outcome`` argument at all, so there is no value a caller could pass to receive
 one and no keyword a ``**kwargs`` dict could flip. Blindness is held in three
-layers, because each has a hole the others close:
+layers:
 
 1. **Signature and allowlist.** The blind path's label columns come from
    :func:`blind_label_columns`, built from :data:`BLIND_STRUCTURE_COLUMNS` plus
    the structural columns the spec names. An allowlist rather than a denylist:
    a ``sel_ar_*`` denylist would still let a held-out SIGNAL column through, and
-   the held-out dependence structure is itself a look.
+   the held-out dependence structure is itself a look. The allowlist is
+   caller-extensible in exactly one place — a ``version_pins`` key is appended
+   to it — which is why a pin key must be a version column. Without that
+   restriction a caller could name any label-store column, have the blind path
+   read it, filter the panel on it and get it back, screened by nothing but the
+   denylist this paragraph rejects as insufficient.
 2. **Argument screening.** A name matching :data:`_OUTCOME_SHAPED` in
-   ``brief_columns`` is refused by name, before any file is opened. That blocks
-   reaching a second held-out label through the feature list.
+   ``brief_columns``, in the ``version_pins`` keys or in the spec's status and
+   anchor columns is refused BY NAME, before any file is opened. That blocks
+   reaching a second held-out label through the feature list, and the refusal
+   has to arrive here rather than from layer 3: measured with this screen
+   removed, two files were opened and the held-out column was read into memory
+   before anything was raised.
 3. **Result assertion.** No column of the blind frame may match that pattern.
-   This is the layer the first two cannot replace: it catches a merge suffix
-   (``sel_ar_20_y``) and a brief store that one day gains an outcome column. The
-   brief store does gain columns after registrations freeze.
+   This is a tripwire against a future edit to the first two layers rather than
+   a layer with a hole of its own. It catches a merge suffix (``sel_ar_20_y``),
+   and through the public API it is reachable today only by widening the
+   allowlist, which is what its test does. A brief store that one day gains an
+   outcome column is caught by layer 1, because the blind path reads the brief
+   side for the join key alone.
 
 The non-ISO arrival guard
 -------------------------
 An unusable ``anchor_session`` is refused rather than dropped, and the reason is
 counter-intuitive enough to state: ``.str.slice`` hands a missing value back as a
-float NaN even after ``astype(str)``, and ``groupby`` drops a NaN key by default.
-So a bad anchor DELETES an episode instead of inflating the cluster count, and
-the panel shrinks with nothing raised anywhere. The guard is checked against the
-rows the panel KEEPS, not against the file: a bad anchor on a row the status or
-population filter excludes is not this panel's problem.
+float NaN even after ``astype(str)``, and ``nunique()`` does not count a NaN. So
+a bad anchor UNDER-COUNTS the arrival clusters while leaving the episode count
+untouched, and a cluster figure measured against a frozen floor shrinks with
+nothing raised. The guard was carried from ``a20_power.py``, where the same
+paragraph says a bad anchor DELETES an episode — true there, because that chain
+ends in ``groupby(...).size()`` and a NaN key drops a whole group. This chain
+ends in ``len()`` and ``nunique()``, so the consequence is re-derived for it
+rather than carried over. The guard is checked against the rows the panel KEEPS,
+which is why it runs after the collapse: a bad anchor on a row the status
+filter, the population filter or the collapse itself discards is not this
+panel's problem.
 
 What this module deliberately does NOT fix
 ------------------------------------------
@@ -123,12 +154,18 @@ ARRIVAL_COLUMN = "arrival"
 #: A label value, by name shape. The stamper writes four families, not one:
 #: ``sel_ar_h`` and ``sel_ar_inc_lo_hi``, the beta-scaled ``sel_zar_h``, and the
 #: path mean ``sel_car_mean_20`` (``selection_label.VALUE_KEYS``). ``car_*``
-#: covers the earlier event-window labels and ``sel_label_value*`` the stored
-#: name. Used to screen caller arguments and to assert the returned frame, never
-#: to decide what to read — that is an allowlist. A name shape goes stale when a
-#: family is added, so ``TestTheScreenCoversEveryStampedLabel`` pins it against
-#: ``VALUE_KEYS`` rather than against these prefixes.
-_OUTCOME_SHAPED = re.compile(r"^(sel_ar_|sel_zar_|sel_car_|car_|sel_label_value)")
+#: covers the earlier event-window labels (``event_car.EVENT_CAR_COLUMNS``), a
+#: family neither store this loader reads holds today. Used to screen caller
+#: arguments and to assert the returned frame, never to decide what to read —
+#: that is an allowlist. A name shape goes stale when a family is added, so
+#: ``TestTheScreenCoversEveryStampedLabel`` pins it against ``VALUE_KEYS`` and
+#: ``EVENT_CAR_COLUMNS`` rather than against these prefixes.
+_OUTCOME_SHAPED = re.compile(r"^(sel_ar_|sel_zar_|sel_car_|car_)")
+
+#: A version column, by name shape. The only caller-extensible part of the
+#: blind allowlist is a ``version_pins`` key, so a key has to be one of these:
+#: ``sel_label_version``, ``mapper_config_version`` and the like.
+_VERSION_COLUMN = re.compile(r"[a-z0-9_]+_version")
 
 #: An arrival session as the label store stamps it: a plain ISO date, exactly ten
 #: characters. Measured 2026-09-24 on 1001 held-out rows, every one matched.
@@ -157,9 +194,11 @@ class PanelError(RuntimeError):
 class PanelSpec:
     """Everything the panel definition needs, all of it the caller's choice.
 
-    No field has a default. Every one of them is either a pre-registered
-    constant or a store layout fact, and a default would put a second copy of it
-    here to keep frozen.
+    No field has a default, and ``TestNoSpecFieldHasADefault`` asserts
+    that over EVERY field rather than over a list of the interesting ones. The
+    cutoff, the population and the horizon-carrying status column are
+    pre-registered choices a default would put a second copy of here; the rest
+    are the caller's for symmetry, so that one rule covers the whole spec.
     """
 
     #: The ``selection_labels`` store root.
@@ -183,7 +222,12 @@ class PanelSpec:
     #: clustering); False returns the stored value verbatim, which is what a
     #: caller passing it to a calendar helper needs.
     arrival_as_str: bool
-    #: column -> required value, applied BEFORE the episode collapse.
+    #: version column -> required value, applied BEFORE the episode collapse
+    #: and before the status and population filters. A key must be a version
+    #: column (``*_version``) and must not be a column the panel already reads
+    #: as structure, because a pin key is appended to the blind read allowlist.
+    #: The maturity status is filtered through :attr:`resolved_status`, never
+    #: through a pin.
     version_pins: Mapping[str, str]
     #: Columns that MUST appear in :attr:`version_pins` or the build is refused.
     #: This is how a caller makes "two label definitions cannot pool" a
@@ -197,12 +241,21 @@ def blind_label_columns(spec: PanelSpec) -> tuple[str, ...]:
     The allowlist, as a function of the spec rather than a literal set, because
     the status and anchor column names belong to the caller. A test can compare
     what was actually requested against this.
+
+    Each column appears once. This function validates nothing itself, so a spec
+    whose status or anchor column is also a pin key would otherwise put a name
+    in the read list twice, and the build then died inside pandas with a message
+    naming neither the pin nor the column.
     """
-    return (
-        *BLIND_STRUCTURE_COLUMNS,
-        spec.anchor_column,
-        spec.status_column,
-        *sorted(spec.version_pins),
+    return tuple(
+        dict.fromkeys(
+            (
+                *BLIND_STRUCTURE_COLUMNS,
+                spec.anchor_column,
+                spec.status_column,
+                *sorted(spec.version_pins),
+            )
+        )
     )
 
 
@@ -214,7 +267,7 @@ def episode_panel_blind(spec: PanelSpec) -> pd.DataFrame:
     columns. The brief store is read for the JOIN KEY alone, so a brief feature
     cannot arrive here even by accident.
     """
-    return _build(spec, outcome=None, brief_columns=(), optional_brief_columns=())
+    return _build(spec, outcome=None, brief_columns=())
 
 
 def episode_panel_with_outcome(
@@ -222,7 +275,6 @@ def episode_panel_with_outcome(
     *,
     outcome: str,
     brief_columns: Sequence[str],
-    optional_brief_columns: Sequence[str] = (),
 ) -> pd.DataFrame:
     """The same panel plus one label column and the named brief features.
 
@@ -233,26 +285,32 @@ def episode_panel_with_outcome(
 
     ``brief_columns`` lives here rather than on :class:`PanelSpec` on purpose:
     that makes "a blind caller cannot name a brief feature column" true by
-    signature instead of by a runtime check. ``optional_brief_columns`` are read
-    from the files whose schema carries them and come back null elsewhere, which
-    is what a column added to the brief store mid-history needs.
+    signature instead of by a runtime check. Every named column is required in
+    every file: a column added to the brief store mid-history needs an optional
+    read, and that has no caller yet, so it is not offered. A name no file
+    carries is refused rather than returned as a null column.
     """
-    return _build(
-        spec,
-        outcome=outcome,
-        brief_columns=tuple(brief_columns),
-        optional_brief_columns=tuple(optional_brief_columns),
-    )
+    return _build(spec, outcome=outcome, brief_columns=tuple(brief_columns))
 
 
 def episode_counts(spec: PanelSpec) -> tuple[int, int]:
     """``(episodes, arrival clusters)``, outcome-blind.
 
-    An UPPER bound on what :func:`episode_panel_with_outcome` would return on the
-    same spec, by however many resolved rows carry a null outcome or a null
-    feature. The bound points the safe way: a preflight can refute a run and
-    never promise one. A store defect still raises, because "the keys do not
-    match" must not be reported as "not enough data yet".
+    The blind panel keeps at least as many resolved ROWS as
+    :func:`episode_panel_with_outcome` would on the same spec, by however many
+    carry a null outcome or a null feature. The two COUNTS can move either way,
+    though, and that is not an upper bound: dropping a row can UN-CHAIN an
+    episode, so the outcome path can return MORE episodes and MORE clusters than
+    this preflight does. Measured case — one ticker on sessions 0, 5 and 10 is
+    one blind episode in one cluster and two outcome episodes in two clusters,
+    because the middle row is what held the two ends inside one chain window.
+
+    Zero is an absence of data, not a defect: it means no row on this side has
+    matured or was briefed. It cannot be told apart from a mistyped
+    :attr:`PanelSpec.resolved_status` token, because both look like "no row
+    carries it". A store defect still raises — a pin that matches nothing, a key
+    mismatch — because "the keys do not match" must not be reported as "not
+    enough data yet".
     """
     panel = episode_panel_blind(spec)
     return len(panel), int(panel[ARRIVAL_COLUMN].nunique())
@@ -275,14 +333,55 @@ def _validated(spec: PanelSpec) -> None:
         raise PanelError(f"unknown side {spec.side!r}")
     if spec.population not in (POPULATION_BRIEFED, POPULATION_ALL):
         raise PanelError(f"unknown population {spec.population!r}")
+    # The by-name screens come first, so that an outcome-shaped argument is
+    # always reported as what it is rather than as the wrong column shape.
+    _screen_names((spec.status_column, spec.anchor_column), role="the spec")
+    _screen_names(tuple(spec.version_pins), role="version_pins")
+    if not isinstance(spec.cutoff, str) or not _ISO_DATE.fullmatch(spec.cutoff):
+        raise PanelError(
+            f"cutoff must be ISO text (YYYY-MM-DD), got {spec.cutoff!r}; it is "
+            f"compared against the parquet stem as TEXT, so anything else moves "
+            f"the discovery boundary instead of raising"
+        )
+    if Path(spec.labels_dir).resolve() == Path(spec.briefs_dir).resolve():
+        raise PanelError(
+            f"the label store and the brief store are the same directory "
+            f"({spec.labels_dir}); the join to the brief side is what keeps the "
+            f"panel to the names the brief carried, and it would stop doing so"
+        )
     missing_pins = sorted(spec.require_pinned - set(spec.version_pins))
     if missing_pins:
         raise PanelError(
             f"these columns must be pinned and are not: {missing_pins}. Two "
             f"definitions of the same quantity would otherwise pool silently."
         )
-    _screen_names((spec.status_column, spec.anchor_column), role="the spec")
-    _screen_names(tuple(spec.version_pins), role="version_pins")
+    _validated_pin_keys(spec)
+
+
+def _validated_pin_keys(spec: PanelSpec) -> None:
+    """A pin key is the only caller-extensible part of the blind allowlist.
+
+    So it has to be a version column, and it must not be a column the panel
+    already reads as structure: the first keeps layer 1 an allowlist, the second
+    stops a duplicated name in the read list and tells the caller what the
+    status filter is for.
+    """
+    not_versions = sorted(key for key in spec.version_pins if not _VERSION_COLUMN.fullmatch(key))
+    if not_versions:
+        raise PanelError(
+            f"version_pins may only name a version column (*_version): "
+            f"{not_versions}. A pin key is appended to the blind read allowlist, "
+            f"so any other column would be read back and the panel filtered on it."
+        )
+    structural = sorted(
+        set(spec.version_pins) & {*BLIND_STRUCTURE_COLUMNS, spec.status_column, spec.anchor_column}
+    )
+    if structural:
+        raise PanelError(
+            f"version_pins names {structural}, which the panel already reads as "
+            f"structure. The maturity status is filtered through resolved_status, "
+            f"not through a pin."
+        )
 
 
 def _paths(root: Any, spec: PanelSpec) -> list[Path]:
@@ -331,12 +430,7 @@ def _read_labels(paths: Sequence[Path], columns: Sequence[str]) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
-def _read_briefs(
-    paths: Sequence[Path],
-    *,
-    brief_columns: Sequence[str],
-    optional_brief_columns: Sequence[str],
-) -> pd.DataFrame:
+def _read_briefs(paths: Sequence[Path], *, brief_columns: Sequence[str]) -> pd.DataFrame:
     """The brief side, keyed from the FILENAME.
 
     A brief parquet carries no ``brief_date`` column, so there is no other key
@@ -349,11 +443,7 @@ def _read_briefs(
         missing = sorted(set(brief_columns) - available)
         if missing:
             raise PanelError(f"{path.name} does not carry {missing}")
-        wanted = [
-            BRIEF_KEY_COLUMN,
-            *brief_columns,
-            *[column for column in optional_brief_columns if column in available],
-        ]
+        wanted = [BRIEF_KEY_COLUMN, *brief_columns]
         frames.append(pd.read_parquet(path, columns=wanted).assign(brief_date=path.stem))
     return pd.concat(frames, ignore_index=True)
 
@@ -362,7 +452,14 @@ def _apply_pins(panel: pd.DataFrame, pins: Mapping[str, str]) -> pd.DataFrame:
     """Keep the rows matching every pin, refusing a pin that matches nothing.
 
     A pin matching nothing is a defect, not an empty result: it means the store
-    never held the version the caller believes it is reading.
+    never held the version the caller believes it is reading. That is why the
+    pins run before the status and population filters, which CAN legitimately
+    keep nothing.
+
+    The missing-column branch is not reachable through the public API, because a
+    pin key goes into the read list and :func:`_read_labels` reports it against
+    the FILE first, by name. It is kept for a direct caller and is mutated
+    directly by its own test.
     """
     for column, value in pins.items():
         if column not in panel.columns:
@@ -380,15 +477,23 @@ def _apply_pins(panel: pd.DataFrame, pins: Mapping[str, str]) -> pd.DataFrame:
 def _arrival(panel: pd.DataFrame, spec: PanelSpec) -> pd.DataFrame:
     """Validate the stored anchor, then expose it as ``arrival``."""
     text = panel[spec.anchor_column].astype(str).str.slice(0, _ISO_DATE_LENGTH)
+    # ``repr`` INSIDE the comprehension, not around the sorted result: after
+    # ``astype(str)`` a missing value comes back as a float NaN, so a panel
+    # carrying one null and one non-ISO anchor would sort a float against a str
+    # and raise TypeError instead of the message meant for the caller.
     unusable = sorted(
-        {value for value in text if not (isinstance(value, str) and _ISO_DATE.fullmatch(value))}
+        {
+            repr(value)
+            for value in text
+            if not (isinstance(value, str) and _ISO_DATE.fullmatch(value))
+        }
     )
     if unusable:
         raise PanelError(
             f"{spec.anchor_column} is unusable on {len(unusable)} value(s) in the "
-            f"panel: {list(map(repr, unusable))[:_SAMPLE_SIZE]}. An arrival session "
-            f"must be an ISO date; an unusable one would DELETE an episode rather "
-            f"than raise, because groupby drops a null key."
+            f"panel: {unusable[:_SAMPLE_SIZE]}. An arrival session must be an ISO "
+            f"date; a null one is not counted by nunique(), so it would "
+            f"UNDER-COUNT the arrival clusters rather than raise."
         )
     stored = panel[spec.anchor_column]
     panel = panel.drop(columns=[spec.anchor_column])
@@ -399,19 +504,12 @@ def _arrival(panel: pd.DataFrame, spec: PanelSpec) -> pd.DataFrame:
     return panel
 
 
-def _build(
-    spec: PanelSpec,
-    *,
-    outcome: str | None,
-    brief_columns: Sequence[str],
-    optional_brief_columns: Sequence[str],
-) -> pd.DataFrame:
+def _build(spec: PanelSpec, *, outcome: str | None, brief_columns: Sequence[str]) -> pd.DataFrame:
     """The one chain. Order is load-bearing and is stated step by step below."""
     from alphalens_research.diagnostics.options_retro import ticker_episode_dedup
 
     _validated(spec)
     _screen_names(brief_columns, role="brief_columns")
-    _screen_names(optional_brief_columns, role="optional_brief_columns")
 
     label_paths = _paths(spec.labels_dir, spec)
     brief_paths = _paths(spec.briefs_dir, spec)
@@ -425,11 +523,7 @@ def _build(
     if outcome is not None and outcome not in label_columns:
         label_columns.append(outcome)
     labels = _read_labels(label_paths, label_columns)
-    briefs = _read_briefs(
-        brief_paths,
-        brief_columns=brief_columns,
-        optional_brief_columns=optional_brief_columns,
-    )
+    briefs = _read_briefs(brief_paths, brief_columns=brief_columns)
 
     # The join key is a string on both sides deliberately. The label store stamps
     # a native date and the brief key can only come from a filename; a silent type
@@ -448,19 +542,34 @@ def _build(
             "check that the two stores agree on brief_date and ticker."
         )
 
-    # EVERY filter runs BEFORE the collapse. The chained collapse keeps the FIRST
-    # row of an episode, so filtering afterwards represents an episode by a row
-    # that was dropped — measured as an empty panel, not as a smaller one.
+    # The pin runs FIRST of the four row filters, because it is the only one
+    # whose empty result is a DEFECT. After the status or population filter it
+    # would see an already-empty panel and report the label version as the
+    # reason nothing is left, which is false about the store.
+    panel = _apply_pins(panel, spec.version_pins)
+
+    # EVERY row filter runs BEFORE the collapse, the pin above included. The
+    # chained collapse keeps the FIRST row of an episode, so filtering after it
+    # represents an episode by a row that was dropped — measured as an empty
+    # panel, not as a smaller one.
     panel = panel[panel[spec.status_column].astype(str) == spec.resolved_status]
     if spec.population == POPULATION_BRIEFED:
+        # A null flag is not briefed. The store writes this column nullable, so
+        # a row the stamper never resolved arrives as null, and treating that as
+        # briefed would widen the population a registration froze.
         panel = panel[panel["briefed_any_theme"].fillna(False).astype(bool)]
-    panel = _apply_pins(panel, spec.version_pins)
     if outcome is not None:
         panel = panel.dropna(subset=[outcome, *brief_columns])
 
-    panel = _arrival(panel, spec)
-    panel = panel.drop_duplicates(subset=["brief_date", "ticker"])
+    # The collapse is the only de-duplication. Two rows sharing a
+    # (brief_date, ticker) share one arrival, so the chained rule sees distance
+    # zero and drops the second; a drop_duplicates before it would remove rows
+    # this never keeps, and read as a second mechanism.
     panel = ticker_episode_dedup(panel).reset_index(drop=True)
+    # The anchor guard comes after the collapse so that its scope is the rows
+    # the panel KEEPS, which is what its message claims. The collapse itself
+    # keys on brief_date and never reads the anchor.
+    panel = _arrival(panel, spec)
 
     _assert_blind(panel, outcome=outcome)
     return panel
