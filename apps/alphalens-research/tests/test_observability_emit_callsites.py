@@ -1567,5 +1567,112 @@ class TestBackfillRefreshesPopulationLadders(unittest.TestCase):
         self.assertEqual(recorded, [briefs_dir])
 
 
+class TestCompanyfactsCensusEmitsDomainMetrics(unittest.TestCase):
+    """``alphalens cache companyfacts-census`` emits the store-health gauges.
+
+    #1335: PR #1636 gave the companyfacts cache a lifetime and deferred the
+    watching. These gauges are that watching. The emit is the whole point of
+    the command — a census nobody scrapes answers nothing — so a refactor that
+    drops it must turn this red.
+
+    All nine series come from ONE ``emit_domain_metrics`` call, because the
+    emitter rewrites the whole ``alphalens_domain_<job>.prom`` file per call: a
+    second call under the same job would clobber the first one's series, and one
+    call is also what lets a single ``absent()`` rule cover the family.
+    """
+
+    def _store_with_one_fresh_cik(self, root: Path) -> Path:
+        import datetime as dt
+
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+        from alphalens_pipeline.data.fundamentals import concept_chains as chains
+        from alphalens_pipeline.data.fundamentals.companyfacts_parquet import SCHEMA
+
+        store = root / "companyfacts_parquet"
+        store.mkdir()
+        end = dt.date.today() - dt.timedelta(days=40)
+        specs = [(chains.OPERATING_CASH_FLOW[0], end), (chains.CAPEX[0], end)]
+        pq.write_table(
+            pa.table(
+                {
+                    "taxonomy": ["us-gaap"] * 2,
+                    "concept": [c for c, _ in specs],
+                    "unit": ["USD"] * 2,
+                    "period_start": [e - dt.timedelta(days=90) for _, e in specs],
+                    "period_end": [e for _, e in specs],
+                    "val": [1.0] * 2,
+                    "accn": ["0000000000-26-000001"] * 2,
+                    "fy": [e.year for _, e in specs],
+                    "fp": ["Q1"] * 2,
+                    "form": ["10-Q"] * 2,
+                    "filed_date": [e + dt.timedelta(days=30) for _, e in specs],
+                    "frame": [None] * 2,
+                },
+                schema=SCHEMA,
+            ),
+            store / "0000000001.parquet",
+        )
+        return store
+
+    def test_census_emits_every_series_in_one_call(self) -> None:
+        from alphalens_cli.commands import cache
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store_with_one_fresh_cik(Path(tmp))
+            with patch.object(cache, "emit_domain_metrics") as emit:
+                census = cache.companyfacts_census(store)
+
+        self.assertEqual(census.readable, 1)
+        emit.assert_called_once()
+        kwargs = emit.call_args.kwargs
+        self.assertEqual(kwargs["job"], "companyfacts-store")
+        self.assertEqual(len(kwargs["metrics"]), 9)
+
+    def test_census_emits_the_band_the_planted_cik_lands_in(self) -> None:
+        from alphalens_cli.commands import cache
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store_with_one_fresh_cik(Path(tmp))
+            with patch.object(cache, "emit_domain_metrics") as emit:
+                cache.companyfacts_census(store)
+
+        metrics = emit.call_args.kwargs["metrics"]
+        self.assertEqual(metrics['alphalens_companyfacts_fcff_age_files{band="fresh"}'], 1)
+        self.assertEqual(metrics['alphalens_companyfacts_cached_files{state="readable"}'], 1)
+
+    def test_an_empty_store_still_emits_every_series(self) -> None:
+        # The reading that matters most for an absent() companion: a store that
+        # reads zero must produce the series, not nothing. A missing file and a
+        # zeroed one mean opposite things, and only one of them is a defect.
+        from alphalens_cli.commands import cache
+
+        with tempfile.TemporaryDirectory() as tmp:
+            empty = Path(tmp) / "companyfacts_parquet"
+            empty.mkdir()
+            with patch.object(cache, "emit_domain_metrics") as emit:
+                cache.companyfacts_census(empty)
+
+        metrics = emit.call_args.kwargs["metrics"]
+        self.assertEqual(len(metrics), 9)
+        self.assertEqual(set(metrics.values()), {0})
+
+    def test_census_swallows_emit_error(self) -> None:
+        # The census itself is the cheap part and the gauges are the product,
+        # but the command runs as a best-effort `|| echo WARN` step in
+        # run_thematic_day.sh and must not fail the build whose brief is
+        # already written. Non-OSError, to pin the broad `except Exception`.
+        from alphalens_cli.commands import cache
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store_with_one_fresh_cik(Path(tmp))
+            with patch.object(
+                cache, "emit_domain_metrics", side_effect=RuntimeError("bad metrics dict")
+            ):
+                census = cache.companyfacts_census(store)
+
+        self.assertEqual(census.readable, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
