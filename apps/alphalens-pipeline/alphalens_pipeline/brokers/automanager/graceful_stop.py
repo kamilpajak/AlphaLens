@@ -39,11 +39,21 @@ import logging
 import math
 import signal
 import threading
+from collections.abc import Callable
 from types import FrameType
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["GracefulStop"]
+__all__ = ["STREAM_STOP_BUDGET_S", "GracefulStop", "run_within"]
+
+# How long the stream reader's best-effort cleanup may hold the exit. Its DELETE
+# goes through the Saxo client (30 s per phase, a 4-attempt retry ladder, a 429
+# Retry-After of up to 120 s, no bound on DNS), and before #1864 a SIGTERM never
+# reached it, so the stop was instant. Well under systemd's 90 s
+# TimeoutStopSec minus a tick: an abandoned DELETE leaves exactly the
+# subscriptions main left on every stop, and the next boot mints a fresh
+# contextId.
+STREAM_STOP_BUDGET_S = 10.0
 
 _RELAY_THREAD_NAME = "graceful-stop-relay"
 
@@ -128,3 +138,30 @@ class GracefulStop:
         self._interrupt.set()
         if self._wake_event is not None:
             self._wake_event.set()
+
+
+def run_within(fn: Callable[[], object], *, budget_s: float, what: str) -> bool:
+    """Run best-effort cleanup ``fn`` for at most ``budget_s`` seconds.
+
+    ``fn`` runs on a daemon thread, so an abandoned call cannot keep the
+    interpreter alive. Returns True when it finished, failure included: an
+    exception is logged and swallowed, because cleanup on the way out must not
+    replace the exit. Returns False, with one WARNING, when it was abandoned.
+    A ``requests`` timeout alone would not do this: it bounds neither DNS nor
+    the client's retry and Retry-After sleeps."""
+
+    def _run() -> None:
+        try:
+            fn()
+        except Exception:  # broad on purpose: best-effort cleanup on the way out
+            logger.warning("%s failed -- continuing the exit", what, exc_info=True)
+
+    worker = threading.Thread(target=_run, name=f"bounded-{what}", daemon=True)
+    worker.start()
+    worker.join(budget_s)
+    if worker.is_alive():
+        logger.warning(
+            "%s did not finish within %.0f s -- abandoned, continuing the exit", what, budget_s
+        )
+        return False
+    return True

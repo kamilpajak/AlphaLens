@@ -1045,6 +1045,90 @@ def _tier(
     return mock.Mock(crid=crid, watch_open=record, terminal_kind=terminal)
 
 
+class AStopRequestStartsNoNewPlacementTest(_CapitalWaitCase):
+    """After SIGTERM the tick in progress runs to completion (#1864), so the
+    drain must not START a placement it would not have reached on main, where
+    the signal killed the process at once. A placement that is begun and then
+    cut by systemd's SIGKILL at 90 s is left between its broker POST and its
+    journal record. The check sits before each pick; a pick it skips stays
+    armed and is drained by the next process."""
+
+    def _drain(
+        self, picks_in_order: list[Any], place: Callable[[Any], bool], keep_placing: Any
+    ) -> None:
+        from tests.brokers.automanager.test_control_loop import _deps, _StubBroker
+
+        deps = _deps(
+            _StubBroker(), kill_file=self.home / "KILL", verdicts=[], place_calls=[], alerts=[]
+        )
+        deps = cl.LoopDeps(
+            **{
+                **deps.__dict__,
+                "iter_picks": lambda: iter(picks_in_order),
+                "place_pick": place,
+                "read_records": list,
+            }
+        )
+        cl._run_placement_drain(deps, cl.TickReport(), enabled=True, keep_placing=keep_placing)
+
+    def _three(self) -> list[Any]:
+        return [
+            _doc("KO", armed_ts="2026-09-30T11:00:00+00:00"),
+            _doc("MU", armed_ts="2026-09-30T12:00:00+00:00"),
+            _doc("AA", armed_ts="2026-09-30T13:00:00+00:00"),
+        ]
+
+    def test_a_stop_requested_before_the_drain_places_nothing(self) -> None:
+        seen: list[str] = []
+        self._drain(self._three(), lambda p: bool(seen.append(p.instrument.ticker)), lambda: False)
+        self.assertEqual(seen, [])
+
+    def test_a_stop_requested_mid_drain_stops_before_the_next_pick(self) -> None:
+        # The pick in flight completes; the next one is not begun.
+        seen: list[str] = []
+        stopping = [False]
+
+        def _place(pick: Any) -> bool:
+            seen.append(pick.instrument.ticker)
+            stopping[0] = True  # the signal lands while this pick is being placed
+            return True
+
+        self._drain(self._three(), _place, lambda: not stopping[0])
+        self.assertEqual(seen, ["KO"])
+
+    def test_the_skipped_picks_are_left_for_the_next_process(self) -> None:
+        # Nothing about a skipped pick is touched, so a later drain, which is the
+        # next boot, places every one of them in armed order.
+        docs = self._three()
+        self._drain(docs, lambda p: True, lambda: False)
+        seen: list[str] = []
+        self._drain(docs, lambda p: bool(seen.append(p.instrument.ticker)), lambda: True)
+        self.assertEqual(seen, ["KO", "MU", "AA"])
+
+    def test_run_daemon_hands_its_stop_check_to_the_tick(self) -> None:
+        # The same callable that ends the loop also gates the drain, so a stop
+        # seen between ticks and a stop seen mid-tick are one fact.
+        from tests.brokers.automanager.test_control_loop import _deps, _StubBroker
+
+        deps = _deps(
+            _StubBroker(), kill_file=self.home / "KILL", verdicts=[], place_calls=[], alerts=[]
+        )
+        seen: dict[str, Any] = {}
+
+        def _fake_run_once(_deps: Any, **kw: Any) -> cl.TickReport:
+            seen.update(kw)
+            return cl.TickReport()
+
+        def keep() -> bool:
+            return True
+
+        with mock.patch.object(cl, "run_once", _fake_run_once):
+            cl.run_daemon(
+                deps, once=True, poll_seconds=0.0, is_running=keep, heartbeat_fn=lambda *a: None
+            )
+        self.assertIs(seen.get("keep_placing"), keep)
+
+
 class TickAdmissionsTest(unittest.TestCase):
     def test_an_admission_nothing_shows_yet_counts_in_full(self) -> None:
         admissions = capital_wait.TickAdmissions()

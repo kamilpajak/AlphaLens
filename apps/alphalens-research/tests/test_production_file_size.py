@@ -180,7 +180,12 @@ BASELINE: dict[str, int] = {
     # why the handlers go in AFTER the deps are built and why ``--once`` ignores a
     # stop until its one tick ran. Counted with ``wc -l`` after ruff format (3319
     # before, 3341 after).
-    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3341,
+    # +10 more, from the review of #1864: the stream reader stop runs through
+    # ``graceful_stop.run_within`` with a 10 s budget. It now runs on a real stop,
+    # and its DELETE (Saxo retry ladder, 429 Retry-After up to 120 s, no DNS bound)
+    # could otherwise hold the exit until SIGKILL. Counted with ``wc -l``
+    # (3341 before, 3351 after).
+    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3351,
     # Raised by 8: the score stage now also stamps the three raw broad-index
     # 5-session returns beside the market-state label. The room is 1 line of
     # lazy call and 7 of comment saying why the family is separate from the
@@ -416,7 +421,12 @@ BASELINE: dict[str, int] = {
     # deadline), and the ``run_daemon`` docstring says that a caller stopping on a
     # signal must make the sleep and the wake Event wake too. Counted with ``wc -l``
     # after ruff format (8489 before, 8503 after).
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8503,
+    # +24 more, from the review of #1864: the placement drain checks the stop flag
+    # before each pick (``keep_placing``, threaded from ``run_daemon`` through
+    # ``run_once``), so a stop never STARTS a placement that systemd's SIGKILL at
+    # 90 s could cut between its broker POST and its journal record. Main never
+    # began one after the signal. Counted with ``wc -l`` (8503 before, 8527 after).
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8527,
     # +1 to correct the comment beside ``_OCO_LAG_HOLD_REASON``. It claimed a rename
     # of that literal "fails the control-loop tests loudly"; measured, renaming it to
     # "oco-lag-held" leaves all 552 control-loop tests green, because they read the

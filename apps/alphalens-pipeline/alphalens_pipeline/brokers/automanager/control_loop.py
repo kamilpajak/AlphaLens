@@ -614,7 +614,12 @@ def _kill_active(deps: LoopDeps) -> bool:
     )
 
 
-def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
+def run_once(
+    deps: LoopDeps,
+    *,
+    sweep_orphans: bool = False,
+    keep_placing: Callable[[], bool] = _always,
+) -> TickReport:
     """One control-loop tick. Placement is gated on (no KILL) AND (chain alive);
     reconcile + Action execution ALWAYS run so a KILL still cancels and a dead
     chain still surfaces terminal state. The tick is a sequence of independent
@@ -663,7 +668,7 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
     # inline retire self-heals here; idempotent, quiet in steady state).
     _sweep_owed_sibling_retires(deps, report)
 
-    _run_placement_drain(deps, report, enabled=not kill and alive)
+    _run_placement_drain(deps, report, enabled=not kill and alive, keep_placing=keep_placing)
 
     # Entry-trailing watcher pass: advance each open watch's
     # state machine off the shared INC-2 price stream. KILL-GATED internally
@@ -810,7 +815,13 @@ def _run_orphan_sweep(deps: LoopDeps, report: TickReport) -> None:
         report.orphans += 1
 
 
-def _run_placement_drain(deps: LoopDeps, report: TickReport, *, enabled: bool) -> None:
+def _run_placement_drain(
+    deps: LoopDeps,
+    report: TickReport,
+    *,
+    enabled: bool,
+    keep_placing: Callable[[], bool] = _always,
+) -> None:
     # #1315: the drain OWNS the pass-level now-entry feed scope. Gated (KILL /
     # dead chain) releases it — the precedent every other pass follows on its
     # early returns (_release_feed_scope); otherwise the tick's visits hold
@@ -868,7 +879,20 @@ def _run_placement_drain(deps: LoopDeps, report: TickReport, *, enabled: bool) -
             picks.pick_key(pick) for pick in queued if picks.is_now_only_ladder(pick)
         },
     )
-    for pick in queued:
+    for index, pick in enumerate(queued):
+        # #1864: a stop requested by a signal lets the tick in progress run to
+        # completion, so this is where it must not START a placement main would
+        # never have reached (main died at the signal). A placement begun here
+        # and then cut by systemd's SIGKILL at 90 s would be left between its
+        # broker POST and its journal record. A ``break``, not a ``return``: the
+        # tick bookkeeping below still runs, and a pick not reached stays armed
+        # and untouched for the next process.
+        if not keep_placing():
+            logger.info(
+                "placement drain: stop requested -- leaving %d armed pick(s) for the next process",
+                len(queued) - index,
+            )
+            break
         key = picks.pick_key(pick)
         if key in retired or key in placed_this_tick:
             continue
@@ -4537,7 +4561,7 @@ def run_daemon(
     first = True
     deadline = monotonic() + poll_seconds if wake_event is not None else 0.0
     while is_running():
-        run_once(deps, sweep_orphans=first)
+        run_once(deps, sweep_orphans=first, keep_placing=is_running)
         # Anchor the backstop to the moment protection COMPLETED (before on_tick),
         # NOT to a clock read taken after on_tick. A slow on_tick (a hung Telegram
         # POST inside the stale/breaker alert can block ~tens of seconds) must only

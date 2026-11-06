@@ -3151,7 +3151,11 @@ def manage_command(
         build_entry_fill_probe,
         run_daemon,
     )
-    from alphalens_pipeline.brokers.automanager.graceful_stop import GracefulStop
+    from alphalens_pipeline.brokers.automanager.graceful_stop import (
+        STREAM_STOP_BUDGET_S,
+        GracefulStop,
+        run_within,
+    )
     from broker_contract.contract import BrokerError
 
     try:
@@ -3190,8 +3194,14 @@ def manage_command(
             try:
                 # Stop the streaming reader (DELETE subs + join the thread) so a --once
                 # run or a daemon exit never leaves an orphan subscription/thread.
+                # Bounded (#1864): this now runs on a real stop, and its DELETE has
+                # no overall limit of its own.
                 if deps.stream_trigger is not None:
-                    deps.stream_trigger.stop()
+                    run_within(
+                        deps.stream_trigger.stop,
+                        budget_s=STREAM_STOP_BUDGET_S,
+                        what="stream reader stop",
+                    )
             finally:
                 for sig, handler in previous.items():
                     signal.signal(sig, handler)

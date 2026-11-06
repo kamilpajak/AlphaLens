@@ -37,6 +37,7 @@ from typing import Any
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
+from alphalens_pipeline.brokers.automanager import graceful_stop
 from typer.testing import CliRunner
 
 from tests.brokers.automanager.home_isolation import IsolatedHomeTestCase
@@ -71,7 +72,7 @@ _CHILD = textwrap.dedent(
 
     ticks = {"n": 0}
 
-    def fake_run_once(deps, *, sweep_orphans=False):
+    def fake_run_once(deps, *, sweep_orphans=False, keep_placing=None):
         ticks["n"] += 1
         n = ticks["n"]
         say(f"TICK-START {n}")
@@ -129,6 +130,44 @@ _CHILD = textwrap.dedent(
         cli.broker_app(argv, prog_name="alphalens broker")
     """
 )
+
+
+class TestTheStreamStopIsBounded(unittest.TestCase):
+    """The ``manage`` ``finally`` now runs on a real stop, and the stream
+    reader's ``stop()`` sends a best-effort DELETE through the Saxo client:
+    30 s per phase, a 4-attempt retry ladder, a 429 Retry-After of up to 120 s,
+    and no bound at all on DNS. On main a SIGTERM never reached it, so the stop
+    was instant; unbounded, it would now run into systemd's SIGKILL at 90 s."""
+
+    def test_a_stop_that_hangs_is_abandoned_within_the_budget(self) -> None:
+        release = threading.Event()
+        self.addCleanup(release.set)
+        started = time.monotonic()
+        with self.assertLogs(graceful_stop.logger, "WARNING") as logged:
+            finished = graceful_stop.run_within(
+                release.wait, budget_s=0.3, what="stream reader stop"
+            )
+        elapsed = time.monotonic() - started
+        self.assertFalse(finished)
+        self.assertLess(elapsed, 1.5)
+        self.assertIn("stream reader stop", logged.output[0])
+
+    def test_a_stop_that_finishes_returns_true_and_logs_nothing(self) -> None:
+        calls: list[int] = []
+        with self.assertNoLogs(graceful_stop.logger, "WARNING"):
+            finished = graceful_stop.run_within(lambda: calls.append(1), budget_s=5.0, what="x")
+        self.assertTrue(finished)
+        self.assertEqual(calls, [1])
+
+    def test_an_exception_in_the_stop_is_logged_not_raised(self) -> None:
+        # Best-effort cleanup on the way out: a failure must not replace the exit.
+        def _boom() -> None:
+            raise RuntimeError("DELETE failed")
+
+        with self.assertLogs(graceful_stop.logger, "WARNING") as logged:
+            finished = graceful_stop.run_within(_boom, budget_s=5.0, what="stream reader stop")
+        self.assertTrue(finished)
+        self.assertIn("DELETE failed", "\n".join(logged.output))
 
 
 class _Child:
@@ -574,6 +613,10 @@ class TestManageRestoresThePreviousHandlers(IsolatedHomeTestCase):
         self.assertEqual({sig: signal.getsignal(sig) for sig in before}, before)
 
     def test_the_handlers_are_restored_when_the_stream_stop_raises(self) -> None:
+        # The stream stop is best-effort cleanup on the way out and runs through
+        # ``run_within`` (bounded, #1864 review): a failure there is LOGGED and the
+        # command exits normally, rather than replacing the exit with a traceback.
+        # What this pins is that the handlers are restored either way.
         from alphalens_cli.commands.broker import broker_app
 
         before = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
@@ -586,10 +629,12 @@ class TestManageRestoresThePreviousHandlers(IsolatedHomeTestCase):
             mock.patch("alphalens_cli.commands.broker._telegram_chain_loss_notify"),
             mock.patch.object(cl, "build_default_deps", return_value=deps),
             mock.patch.object(cl, "run_daemon"),
+            self.assertLogs(graceful_stop.logger, "WARNING") as logged,
         ):
             result = CliRunner().invoke(broker_app, ["manage", "--once"])
 
-        self.assertIsInstance(result.exception, RuntimeError)
+        self.assertIsNone(result.exception)
+        self.assertIn("stream stop failed", "\n".join(logged.output))
         self.assertEqual({sig: signal.getsignal(sig) for sig in before}, before)
 
 
