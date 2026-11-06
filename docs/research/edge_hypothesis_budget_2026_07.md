@@ -27,7 +27,7 @@ This ledger makes the family **program-wide, fixed, and auditable**.
 
 | # | Cluster | Primary signal | July verdict | B-clear | Primary horizon | Looks used | Status | Sunset |
 |---|---------|----------------|--------------|---------|-----------------|-----------|--------|--------|
-| 1 | ATR / choppiness | `technical_atr_pct` | ROBUST | ✓ (5,10,20) | `sel_ar_20` (was car_10, amended 2026-09-21, §4) | 2 (Jun,Jul) | **confirmation REGISTERED 2026-09-23, run DEFERRED to on/after 2026-10-09** (`atr_confirmation_prereg_2026_09.md`; family of one, charge taken at the run; the 2026-09-24 row withdrew the power figure that unblocked it) | — |
+| 1 | ATR / choppiness | `technical_atr_pct` | ROBUST | ✓ (5,10,20) | `sel_ar_20` (was car_10, amended 2026-09-21, §4) | 2 (Jun,Jul) | **confirmation REGISTERED 2026-09-23, run DEFERRED to on/after 2026-10-09** (`atr_confirmation_prereg_2026_09.md`; family of one, charge taken at the run; the 2026-09-24 row withdrew the power figure that unblocked it; **both trigger conditions verified met 2026-11-06** — 385 episodes in 63 clusters, ATR power 91.5% ±1.4% at the family of one, §4 appended note of that date — run still not spent, which is an owner decision) | — |
 | 2 | MA50 extension / overbought | `technical_ma50_distance_pct` (+`technical_rsi`) | ROBUST, ATR-orthogonal | ✓ (car_10) | `sel_ar_20` (was car_10, amended 2026-09-21, §4) | 2 | **held — 2nd axis candidate** | — |
 | 3 | 52w-low extension | `technical_pct_off_52w_low` | SUGGESTIVE (ATR-loaded) | ✗ | car_10 | 2 | monitor | 2026-10 |
 | 4 | Quality (ROIC) | `roic_pct` | SPURIOUS (ATR proxy + pseudo-replication) | ✗ | — | 2 | **RETIRED** (fold into ATR; only residual-ROIC×ATR admissible) | done |
@@ -41,7 +41,7 @@ This ledger makes the family **program-wide, fixed, and auditable**.
 | 12 | Event-type / theme / sector categoricals | `catalyst_event_type`, theme, `sector_name` | SPURIOUS (pseudo-replication) | ✗ | — | 2 | **RETIRED** | done |
 | 13 | Industry | `industry_name` | SUGGESTIVE (loser arm only; pharma = obesity cluster) | ✗ | car_10 | 2 | monitor | 2026-11 |
 | 14 | Insider flow | `insider_score_usd` | SUGGESTIVE (N≈5 events, ticker-dedup null) | ✗ | car_10 | 2 | monitor (needs episodes) | 2026-12 |
-| 15 | Experts (panel) | `expert_spread`, `oneil_*`, buffett qual | SPURIOUS or NULL across the board | ✗ | car_10 | 2 | **1 re-look left** (ticker-episode unit ~2026-09); retire if null | 2026-10 |
+| 15 | Experts (panel) | `expert_spread`, `oneil_*`, buffett qual | SPURIOUS or NULL across the board | ✗ | car_10 | 3 | **RETIRED 2026-09-29** (operational stop rule, not falsified; `experts_last_look_2026_09.md` §6, §4 row 2026-09-29) | done |
 | 16 | Joint loser flag | ATR-hi × `pct_off_52w_low`-hi (ROIC leg dropped) | SUGGESTIVE (mostly ATR curvature) | ✗ | car_10 | 1 | **forward-log without ROIC leg** (telemetry-only, pre-register before ordering use) | 2026-11 |
 | 17 | Size | `log10_mcap` | not in the July family — admitted 2026-07-14 (ML corner): continuous WCB p .024 on car_10, below the .05/7 family bar; invisible to the binary model | ✗ | car_10 | 1 | monitor (exploratory candidate) | 2026-12 |
 | 18 | LLM conviction | `llm_confidence` | not in the July family — admitted 2026-07-14 (ML corner): null (L1-zeroed, WCB p .842); missingness is structural (early brief_dates lack the column) | ✗ | car_10 | 1 | monitor | 2026-12 |
@@ -93,6 +93,37 @@ Every test that draws on a cluster. `looks` = cumulative program looks spent on 
 | 2026-09-24 CORRECTION → run deferred to on/after 2026-10-09 | **The #1227 power gate was never met.** `held_out_structure` in `a20_power.py` counted distinct (brief_date, ticker) pairs; ledger rule 5 counts ticker-episodes after the chained 5-session collapse, which the burnt side of the same module already applied. The held-out panel is 206 episodes in 33 arrival clusters, not 419 in 35, and the accrual rate is 0.917 clusters/session, not 1.00. Fix `bf2f7b9a`; family made explicit in `bc7420e4`. | 1 | held-out ≥ 2026-07-06, BRIEFED population only — unchanged, and still pre-committed | `sel_ar_20` | REGISTERED — run DEFERRED; still no interim peeks and no held-out outcome value read | 0 — a correction to a power calculation spends no look | **24.A** Corrected power at the 50% gate: **46.2%** under Holm across three, **66.7%** at the registered family of one, against a bar of 80%. Both intervals lie wholly below the bar, so this is resolved, not a rounding. **24.B** `RUN_NOT_BEFORE` moves 2026-09-24 → **2026-10-09**, derived as arithmetic on the FROZEN `MIN_EPISODES = 300` floor (~48 clusters at 6.24 episodes/cluster) and the measured accrual — NOT from the power search, whose stopping point is unresolved at 2000 simulations (43 clusters 79.2% [77.4, 81.0], 45 clusters 81.2% [79.5, 82.9], both crossing the bar). A rail that only ever refuses may be tightened on a measurement; loosening one may not. **24.C** `MIN_EPISODES` and `MIN_CLUSTERS` are UNCHANGED although both were set against the miscounted panel and the episode floor is now stricter than power requires. Lowering a floor after watching a panel fail it is the move the registration exists to prevent; the cost of leaving it is three days. **24.D** Population NOT switched to the wider arm, which reaches the gate on 2026-10-02. §2.1 of the power preflight pre-committed BRIEFED before any curve existed, precisely against this. **24.E** Everything else in the registration stands as frozen 2026-09-23 — estimand, panel definition, DELTA, decision rule, conclusion language, tilt mapping. No held-out `sel_ar_20` value has been read, then or since. **24.F** A third tooling mismatch is recorded and deliberately NOT corrected: the power simulator measures a two-sided test while the registration tests one-sided, so every figure above understates it (~77% by normal approximation, still under the bar). Adopting a method change that lifts a gate immediately after it failed is the forking path; it also does not move the date, since one-sided needs fewer clusters than the episode floor. **24.G** Not found by review — two adversarial passes read the registration and neither questioned the counts, because a reviewer checks the argument and counts arrive from code looking like facts. Found by running the preflight on the real store after merge. |
 | — | (future rows appended here) | | | | | | |
 
+**Appended note 2026-11-06 — clause b.F of the 2026-10-01 (b) row is superseded; the
+row is not.** b.F reads "its own frozen floors (300 episodes / 30 clusters) are not yet
+met — measured 2026-10-01, the held-out side holds 493 briefed matured rows across 41
+arrival sessions, which is roughly 250 episodes after the chained dedup". That was true
+when written and is no longer. Re-measured on the VPS production stores on 2026-11-06
+10:32 UTC with
+`apps/alphalens-research/scripts/ml/2026_09_a20_atr_confirmation.py --preflight`: 1079
+briefed held-out label rows, 779 resolved, **385 ticker-episodes in 63 arrival
+clusters**, so the panel clears both frozen floors. ATR power at the 50% gate reads
+**91.5% ±1.4%** at the registered family of one (`a20_power.py --population briefed
+--family-size 1`, seed 20260922, n_sims 400) and **92.2% ±1.3%** at seed 7, same
+n_sims and the same family, both read 2026-11-06 and both above the 80% bar; they
+agree inside Monte Carlo error, and the corrected 2026-09-24 figure was 66.7%. Two
+seeds, one run each — the simulation is bit-identical at a fixed seed, panel and
+n_sims, so a repeat at one seed would be a determinism check and not a reproduction.
+No run at a higher n_sims is recorded. Construction of both numbers:
+`a20_power_preflight_2026_09.md` §8.
+
+**This note spends no look and charges nothing.** The preflight reads no outcome
+column, and the power simulation injects effects into simulated outcomes; no held-out
+`sel_ar_20` value has been read. No frozen constant moved, no §3 cluster row was added
+and no §4 row was added: #1227 is still REGISTERED and still has not run. The rest of
+b.F stands — a second registered test on this label before the first has run would
+still multiply the family and raise every other hypothesis's denominator. Per the
+append-only convention the row is left as written and this note is the correction.
+
+**One look count in this ledger is disputed, and this note does not settle it.** §3
+reads cluster 1 at 2 looks (Jun, Jul) while the 2026-07-14 and 2026-09-23 §4 rows read
+3, against rule 4's cap of 2 re-looks; the question is posted on #1227 (comment of
+2026-11-06) and is unresolved, so no cell is changed here.
+
 ### 4.1 Policy- and ladder-side looks annex (charges the T5/T7 walk-forward budget, not the §3 covariate family)
 
 Rule-11 of `scripts/ml/README.md` covers covariate-vs-EDGE-outcome looks; POLICY counterfactuals evaluated
@@ -127,6 +158,9 @@ of variants examined and `charges: 0 (exploration)`; and nothing it produced is 
 for what ships. Rule 1 ("No look happens off-ledger") is unchanged and now covers exploratory
 looks explicitly. Per the append-only convention the header sentence is left as written — this
 note is the correction. See ADR 0013 R4, amendment 2026-09-25.
+
+**Appended note 2026-11-06:** clause b.F of the 2026-10-01 (b) row above is
+superseded; the note that supersedes it is at the end of §4.
 
 
 ## 5. Cross-reference: the mechanical-vs-LLM selection test (own track)

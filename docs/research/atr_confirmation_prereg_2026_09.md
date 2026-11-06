@@ -8,7 +8,9 @@ was computed on the held-out panel)
 **Run trigger:** AMENDED 2026-09-24 — on or after **2026-10-09**, and only once the
 panel clears the registered floors. The original trigger ("on or after 2026-09-24,
 no further accrual condition") rested on a power figure that was wrong; see the
-correction box.
+correction box. **Both conditions were verified met on 2026-11-06:** the date has
+passed and the panel holds 385 ticker-episodes in 63 arrival clusters against floors
+of 300 and 30 (update box below). The trigger is unchanged; it is now satisfied.
 **Sunset:** none (cluster 1 carries no sunset date)
 **Frozen code:** [`apps/alphalens-research/scripts/ml/2026_09_a20_atr_confirmation.py`](../../apps/alphalens-research/scripts/ml/2026_09_a20_atr_confirmation.py)
 — its module docstring is the operative registration; this memo is the rationale
@@ -57,6 +59,61 @@ cannot be repeated, and the decision rule below was fixed before it ran.
 > caught by the owner asking for the preflight to be run after merge, which printed
 > the panel and did not match the remembered number.
 
+> ### UPDATE — 2026-11-06 (the run has still NOT happened)
+>
+> **The unblocking condition is now met.** The sentence "The unblocking condition is
+> not met" in the box above described the panel of 2026-09-24. It is left as written
+> and this box is the correction. Re-measured on the VPS production stores on
+> 2026-11-06, with `2026_09_a20_atr_confirmation.py --preflight` and with
+> `a20_power.py --population briefed --family-size 1`:
+>
+> | | 2026-09-24 (corrected) | 2026-11-06 |
+> |---|---|---|
+> | held-out panel | 206 episodes, 33 clusters | **385 episodes, 63 clusters** |
+> | registered floors (300 / 30) | not met | **met** |
+> | ATR power at the gate, family of 1 | 66.7% | **91.5% ±1.4%** (seed 20260922, n_sims 400) and **92.2% ±1.3%** (seed 7, n_sims 400) |
+>
+> Construction of both numbers:
+> [`a20_power_preflight_2026_09.md`](a20_power_preflight_2026_09.md) §8. The power
+> figure was read at two seeds, one run each: 91.5% ±1.4% at seed 20260922 and 92.2%
+> ±1.3% at seed 7, both at n_sims 400 and both on 2026-11-06. They agree inside Monte
+> Carlo error. No run at a higher n_sims is recorded. A repeat at one seed would be a
+> determinism check and not a reproduction, because the simulation draws all of its
+> entropy from `np.random.default_rng(seed)` and is bit-identical at a fixed seed,
+> panel and n_sims.
+>
+> **Nothing is withdrawn and nothing is added.** No frozen value moved —
+> `MIN_EPISODES = 300`, `MIN_CLUSTERS = 30`, `MIN_VOL_EPISODES = 4`,
+> `RUN_NOT_BEFORE = 2026-10-09`, `DISCOVERY_CUTOFF = "2026-07-05"`,
+> `POPULATION = "briefed"`, `SEED = 20260924` and `N_BOOT = 9999` all stand as frozen,
+> read from the script on 2026-11-06. The estimand, DELTA, the decision rule, the
+> conclusion language and the tilt mapping stand exactly as frozen on 2026-09-23. No
+> held-out `sel_ar_20` value has been read, then or since: the preflight reads no
+> outcome column and the power simulation injects effects into simulated outcomes.
+>
+> **This is not a look and it is not a decision to run.** Ledger rule 4 makes the look
+> terminal, so spending it is the owner's decision. Two questions are posted on #1227
+> for that decision: the cumulative look count on cluster 1, which §3 of the ledger
+> reads as "2 (Jun,Jul)" while two §4 rows read 3, against rule 4's cap of 2 re-looks;
+> and the fact that one of the three outcomes in §6 bumps `SCORER_CONFIG_VERSION` with
+> a cohort reset, which cuts the panel a later model would train on.
+>
+> **The operative registration still reads as blocked, and this box does not touch
+> it.** The registration itself is the module docstring of
+> `apps/alphalens-research/scripts/ml/2026_09_a20_atr_confirmation.py`, and it still
+> carries the 2026-09-24 "WHY IT MAY NOT RUN YET" section written when the floors were
+> not met. Amending the operative registration is itself a dated act, and it belongs
+> with the owner's decision on whether to spend the terminal look — not inside the
+> change that reports the gate as clear. Until that act is taken the script's docstring
+> and this box disagree about the gate, and this box is the later read.
+>
+> **Still open, and not changed by this box.** The §1 operating-characteristics table
+> and the implied SE 0.0552 were back-derived from the withdrawn power curve (§9), and
+> §1 says they must be re-derived once the panel reaches the floors. The panel has now
+> reached them; the re-derivation has not been done. So is the direction mismatch in
+> `a20_power.py` recorded in the preflight memo §7.3 (the simulator measures two-sided,
+> this registration tests one-sided).
+
 ## 1. Why now, and not later
 
 #1227 wrote its own unblocking condition: run when an outcome-blind power
@@ -65,7 +122,7 @@ ATR test. Three preflights answered it, and all three are recorded elsewhere:
 
 | question | answer | where |
 |---|---|---|
-| Is the ATR test powered? | ~~83.9% under a 3-member Holm family; **92.9% at the family of one used here**~~ **WITHDRAWN 2026-09-24: 46.2% and 66.7%. Not powered.** | [`a20_power_preflight_2026_09.md`](a20_power_preflight_2026_09.md) §7 |
+| Is the ATR test powered? | ~~83.9% under a 3-member Holm family; **92.9% at the family of one used here**~~ **WITHDRAWN 2026-09-24: 46.2% and 66.7%. Not powered.** **RE-MEASURED 2026-11-06 on a panel of 385 episodes in 63 clusters: 91.5% ±1.4% at the family of one (seed 20260922, n_sims 400) — powered.** | [`a20_power_preflight_2026_09.md`](a20_power_preflight_2026_09.md) §7, §8 |
 | Does the 20-session window overlap break the inference? | No. Arrival-session WCB holds its level in every cell, worst corner 7.125% (95% CI [6.87, 7.38]) against a pre-specified 7.5% bar | [`a20_overlap_inference_2026_09.md`](a20_overlap_inference_2026_09.md) |
 | Does mixed price adjustment reach a held-out label window? | No. The premise was withdrawn — both sources are split-adjusted | [`atr_split_adjustment_gate_2026_09.md`](atr_split_adjustment_gate_2026_09.md) |
 

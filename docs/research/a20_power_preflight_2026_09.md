@@ -1,10 +1,19 @@
 # A20 power preflight for #1227 — is the ATR test powered, and if not, when?
 
-**Status:** CORRECTED 2026-09-24 — **the gate is NOT met.** The answer recorded on
-2026-09-23 was computed on a panel counted in the wrong unit. The correction is
-below and the re-run is §7. The pre-commitments in §2 were written and committed
-in `1621be4b`, **before** the preflight ran, and they stand unchanged. Nothing
-here registers #1227 and nothing here runs its confirmation.
+**Status:** LOCKED; **§7's verdict SUPERSEDED 2026-11-06** — §8 is the current
+reading. The §7 verdict ("the gate is NOT met") no longer describes the panel.
+Re-measured on the VPS production stores on 2026-11-06: the briefed held-out panel
+holds 385 ticker-episodes in 63 arrival clusters and clears both frozen floors (300
+episodes, 30 arrival clusters), and ATR power at the 50% gate reads 91.5% ±1.4% at
+the registered family of one (`a20_power.py --population briefed --family-size 1`,
+seed 20260922, n_sims 400) and 92.2% ±1.3% at seed 7, same n_sims and the same
+family of one. Two seeds, one run each; both are above the 80% bar and they agree
+inside Monte Carlo error. The construction of both numbers is in §8.
+Everything else stands: the pre-commitments in §2 were written and committed in
+`1621be4b`, **before** the preflight ran, and the 2026-09-24 correction below with
+the superseded §4 stay as the record of a mistake. Whether to SPEND the one terminal
+look is the owner's decision and is not made here. Nothing here registers #1227,
+nothing here runs its confirmation, and no held-out outcome value has been read.
 
 > ### CORRECTION — 2026-09-24
 >
@@ -136,6 +145,17 @@ under the wrong maturity.
 > reading, and it is worth recording that nothing here was chosen: the
 > population was fixed in §2.1 before any power number existed, and the curve
 > was computed without reading one held-out outcome.
+>
+> **Appended note 2026-11-06 — the block above was overtaken the next day and was
+> never marked.** The 2026-09-24 correction withdrew "the gate is already met", and a
+> cluster-count search did run: §7.1 reports it. The case this paragraph provided for
+> was "later than 2026-10-14", and what happened was neither: the trigger moved to
+> 2026-10-09, which is EARLIER than 2026-10-14, and it comes from the frozen
+> `MIN_EPISODES = 300` floor and the measured accrual rather than from the power
+> search (§7.2). #1227 now carries `Wake: 2026-10-09`, matching the frozen
+> `RUN_NOT_BEFORE` in `2026_09_a20_atr_confirmation.py`, and read 2026-11-06 the issue
+> carries one label, `area:alphalens` — the `waiting:data` label is already off. The
+> text above is left as written and this note is the correction.
 
 ## 3. Method
 
@@ -421,3 +441,73 @@ arithmetic on this memo's own number and not a measurement, which is why it is
 written as "roughly". More to the point, one-sided power is HIGHER, so it needs
 FEWER clusters than the ~45 above, while the episode floor still needs ~48. The
 binding constraint in §7.2 is unaffected, and so is the date.
+
+## 8. Re-measured 2026-11-06 — the panel clears the floors and the power gate
+
+Read on the VPS (`vault.kamilpajak.pl`) against the raw production stores, 2026-11-06
+10:32 UTC, with
+`.venv/bin/python apps/alphalens-research/scripts/ml/2026_09_a20_atr_confirmation.py --preflight`,
+on a checkout whose copy of that script is byte-identical to `origin/main` (sha256
+compared). Verbatim output:
+
+```
+held-out briefed label rows past 2026-07-05: 1079
+  immature 297 (27.5%), ok 779 (72.2%), no_close_at_horizon 1 (0.1%),
+  no_open 1 (0.1%), split_unchecked 1 (0.1%)
+held-out brief parquets available to join: 123
+resolved rows available to the panel: 779
+THE PANEL: 385 ticker-episodes in 63 arrival clusters
+registration floors: >= 300 episodes, >= 30 arrival clusters
+VERDICT: the panel clears both floors.
+```
+
+On 2026-09-24 the same panel was 206 episodes in 33 arrival clusters.
+
+**Panel width**, same read, computed through this script's own
+`_held_out_episodes(..., with_signals=False)` — the preflight path, whose label read
+is an explicit allowlist (`_LABEL_KEY_COLUMNS` plus `sel_label_status_20`, with the
+outcome column appended only when `with_signals` is true), so no value column can
+reach the frame. The run also printed an assertion that no `sel_ar_*` and no `car_*`
+column was present; that prefix covers 9 of the 16 value families the stamper writes,
+so it is not what makes the read blind:
+
+| quantity | value |
+|---|---|
+| episodes | 385 |
+| arrival clusters | 63 |
+| episodes per arrival cluster | p10 2, p50 5, mean 6.1, p90 11 |
+| thin clusters | 20 of 63 carry ≤ 3 episodes; 24 of 63 carry < 5 |
+| arrival range | 2026-07-07 .. 2026-10-09 |
+
+The shape has not moved in the seven weeks since 2026-09-16 (51 days). The label
+registry's own census (`ml_label_registry_design_2026_09_16.md` §4, row "Episodes per
+arrival session", read 2026-09-16) gives p10 2, p50 5, mean 6.2, p90 11 and 23 of 74
+sessions at ≤ 3.
+
+**Power.** `a20_power.py --population briefed --family-size 1` reads ATR power at the
+50% gate = **91.5% ±1.4%** at the registered family of one, against the 80% bar, at
+seed 20260922 with n_sims 400. The same command at seed 7, same n_sims and the same
+family, reads **92.2% ±1.3%**; both were read on 2026-11-06. Inputs the seed-20260922
+run reports: 198 burnt episodes; 398 held-out episodes in 64 clusters (no brief join);
+accrual 0.941 clusters per session; sd(y) 0.1681; ICC 0.05; burnt standardised effects
+ATR −0.358, MA50 −0.315, press +0.006. The corrected 2026-09-24 figures were 66.7% at
+the family of one and 46.2% under Holm across three.
+
+Two cautions on that figure:
+
+- **Two seeds, one run each, 400 simulations each.** 91.5% ±1.4% is seed 20260922 and
+  92.2% ±1.3% is seed 7, both read 2026-11-06. Both sit above the 80% bar and the two
+  agree inside Monte Carlo error. They are two SEEDS and not two reproductions of one:
+  the simulation draws all of its entropy from `np.random.default_rng(seed)`, so at a
+  fixed seed, panel and n_sims the figure is bit-identical and a repeat would be a
+  determinism check. No run at a higher n_sims is recorded. Two seeds bound the
+  seed-to-seed spread weakly, so seed independence is shown, not proved.
+- **385/63 and 398/64 are the same panel.** The confirmation script inner-joins the
+  label store to `thematic_briefs` and `a20_power.py` does not, so 13 episodes have no
+  brief row. The power simulation therefore takes its cluster shape from a panel
+  slightly wider than the registered one.
+
+**What this settles and what it does not.** The registration's own floors are met and
+its power condition is met. Nothing here is a look: the preflight reads no outcome
+column, and the power simulation injects effects into simulated outcomes. Whether to
+spend the one terminal look is the owner's decision, and this section does not make it.
