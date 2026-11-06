@@ -1,12 +1,14 @@
 # A20 power preflight for #1227 — is the ATR test powered, and if not, when?
 
-**Status:** SUPERSEDED 2026-11-06 in its verdict only — **the §7 verdict ("the gate
-is NOT met") no longer describes the panel.** Re-measured on the VPS production
-stores on 2026-11-06: the briefed held-out panel holds 385 ticker-episodes in 63
-arrival clusters and clears both frozen floors (300 episodes, 30 arrival clusters),
-and ATR power at the 50% gate reads 91.5% ±1.4% at the registered family of one
-(`a20_power.py --population briefed --family-size 1`, seed 20260922, n_sims 400,
-reproduced twice) against the 80% bar. The construction of both numbers is in §8.
+**Status:** LOCKED; **§7's verdict SUPERSEDED 2026-11-06** — §8 is the current
+reading. The §7 verdict ("the gate is NOT met") no longer describes the panel.
+Re-measured on the VPS production stores on 2026-11-06: the briefed held-out panel
+holds 385 ticker-episodes in 63 arrival clusters and clears both frozen floors (300
+episodes, 30 arrival clusters), and ATR power at the 50% gate reads 91.5% ±1.4% at
+the registered family of one (`a20_power.py --population briefed --family-size 1`,
+seed 20260922, n_sims 400) and 92.2% ±1.3% at seed 7, same n_sims and the same
+family of one. Two seeds, one run each; both are above the 80% bar and they agree
+inside Monte Carlo error. The construction of both numbers is in §8.
 Everything else stands: the pre-commitments in §2 were written and committed in
 `1621be4b`, **before** the preflight ran, and the 2026-09-24 correction below with
 the superseded §4 stay as the record of a mistake. Whether to SPEND the one terminal
@@ -462,8 +464,12 @@ VERDICT: the panel clears both floors.
 On 2026-09-24 the same panel was 206 episodes in 33 arrival clusters.
 
 **Panel width**, same read, computed through this script's own
-`_held_out_episodes(..., with_signals=False)` — the preflight path, which reads no
-outcome column; the run asserted that no `sel_ar_*` and no `car_*` column was present:
+`_held_out_episodes(..., with_signals=False)` — the preflight path, whose label read
+is an explicit allowlist (`_LABEL_KEY_COLUMNS` plus `sel_label_status_20`, with the
+outcome column appended only when `with_signals` is true), so no value column can
+reach the frame. The run also printed an assertion that no `sel_ar_*` and no `car_*`
+column was present; that prefix covers 9 of the 16 value families the stamper writes,
+so it is not what makes the read blind:
 
 | quantity | value |
 |---|---|
@@ -473,23 +479,29 @@ outcome column; the run asserted that no `sel_ar_*` and no `car_*` column was pr
 | thin clusters | 20 of 63 carry ≤ 3 episodes; 24 of 63 carry < 5 |
 | arrival range | 2026-07-07 .. 2026-10-09 |
 
-The shape has not moved in five weeks. The label registry's own census
-(`ml_label_registry_design_2026_09_16.md` §4, row "Episodes per arrival session", read
-2026-09-16) gives p10 2, p50 5, mean 6.2, p90 11 and 23 of 74 sessions at ≤ 3.
+The shape has not moved in the seven weeks since 2026-09-16 (51 days). The label
+registry's own census (`ml_label_registry_design_2026_09_16.md` §4, row "Episodes per
+arrival session", read 2026-09-16) gives p10 2, p50 5, mean 6.2, p90 11 and 23 of 74
+sessions at ≤ 3.
 
 **Power.** `a20_power.py --population briefed --family-size 1` reads ATR power at the
 50% gate = **91.5% ±1.4%** at the registered family of one, against the 80% bar, at
-seed 20260922 with n_sims 400, reproduced twice by two separate runs. Inputs it
-reports: 198 burnt episodes; 398 held-out episodes in 64 clusters (no brief join);
+seed 20260922 with n_sims 400. The same command at seed 7, same n_sims and the same
+family, reads **92.2% ±1.3%**; both were read on 2026-11-06. Inputs the seed-20260922
+run reports: 198 burnt episodes; 398 held-out episodes in 64 clusters (no brief join);
 accrual 0.941 clusters per session; sd(y) 0.1681; ICC 0.05; burnt standardised effects
 ATR −0.358, MA50 −0.315, press +0.006. The corrected 2026-09-24 figures were 66.7% at
 the family of one and 46.2% under Holm across three.
 
 Two cautions on that figure:
 
-- **One seed.** 91.5% ±1.4% is seed 20260922 at 400 simulations. A fresh-seed re-run
-  at n_sims 1200 was still in flight when this section was written, so nothing here
-  claims the figure is seed-independent.
+- **Two seeds, one run each, 400 simulations each.** 91.5% ±1.4% is seed 20260922 and
+  92.2% ±1.3% is seed 7, both read 2026-11-06. Both sit above the 80% bar and the two
+  agree inside Monte Carlo error. They are two SEEDS and not two reproductions of one:
+  the simulation draws all of its entropy from `np.random.default_rng(seed)`, so at a
+  fixed seed, panel and n_sims the figure is bit-identical and a repeat would be a
+  determinism check. No run at a higher n_sims is recorded. Two seeds bound the
+  seed-to-seed spread weakly, so seed independence is shown, not proved.
 - **385/63 and 398/64 are the same panel.** The confirmation script inner-joins the
   label store to `thematic_briefs` and `a20_power.py` does not, so 13 episodes have no
   brief row. The power simulation therefore takes its cluster shape from a panel

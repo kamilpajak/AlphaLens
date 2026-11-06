@@ -71,12 +71,16 @@ cannot be repeated, and the decision rule below was fixed before it ran.
 > |---|---|---|
 > | held-out panel | 206 episodes, 33 clusters | **385 episodes, 63 clusters** |
 > | registered floors (300 / 30) | not met | **met** |
-> | ATR power at the gate, family of 1 | 66.7% | **91.5% ±1.4%** (seed 20260922, n_sims 400) |
+> | ATR power at the gate, family of 1 | 66.7% | **91.5% ±1.4%** (seed 20260922, n_sims 400) and **92.2% ±1.3%** (seed 7, n_sims 400) |
 >
 > Construction of both numbers:
 > [`a20_power_preflight_2026_09.md`](a20_power_preflight_2026_09.md) §8. The power
-> figure is one seed; a fresh-seed re-run at n_sims 1200 was in flight when this box
-> was written, so seed independence is not claimed.
+> figure was read at two seeds, one run each: 91.5% ±1.4% at seed 20260922 and 92.2%
+> ±1.3% at seed 7, both at n_sims 400 and both on 2026-11-06. They agree inside Monte
+> Carlo error. No run at a higher n_sims is recorded. A repeat at one seed would be a
+> determinism check and not a reproduction, because the simulation draws all of its
+> entropy from `np.random.default_rng(seed)` and is bit-identical at a fixed seed,
+> panel and n_sims.
 >
 > **Nothing is withdrawn and nothing is added.** No frozen value moved —
 > `MIN_EPISODES = 300`, `MIN_CLUSTERS = 30`, `MIN_VOL_EPISODES = 4`,
@@ -93,6 +97,15 @@ cannot be repeated, and the decision rule below was fixed before it ran.
 > reads as "2 (Jun,Jul)" while two §4 rows read 3, against rule 4's cap of 2 re-looks;
 > and the fact that one of the three outcomes in §6 bumps `SCORER_CONFIG_VERSION` with
 > a cohort reset, which cuts the panel a later model would train on.
+>
+> **The operative registration still reads as blocked, and this box does not touch
+> it.** The registration itself is the module docstring of
+> `apps/alphalens-research/scripts/ml/2026_09_a20_atr_confirmation.py`, and it still
+> carries the 2026-09-24 "WHY IT MAY NOT RUN YET" section written when the floors were
+> not met. Amending the operative registration is itself a dated act, and it belongs
+> with the owner's decision on whether to spend the terminal look — not inside the
+> change that reports the gate as clear. Until that act is taken the script's docstring
+> and this box disagree about the gate, and this box is the later read.
 >
 > **Still open, and not changed by this box.** The §1 operating-characteristics table
 > and the implied SE 0.0552 were back-derived from the withdrawn power curve (§9), and

@@ -41,7 +41,7 @@ This ledger makes the family **program-wide, fixed, and auditable**.
 | 12 | Event-type / theme / sector categoricals | `catalyst_event_type`, theme, `sector_name` | SPURIOUS (pseudo-replication) | ✗ | — | 2 | **RETIRED** | done |
 | 13 | Industry | `industry_name` | SUGGESTIVE (loser arm only; pharma = obesity cluster) | ✗ | car_10 | 2 | monitor | 2026-11 |
 | 14 | Insider flow | `insider_score_usd` | SUGGESTIVE (N≈5 events, ticker-dedup null) | ✗ | car_10 | 2 | monitor (needs episodes) | 2026-12 |
-| 15 | Experts (panel) | `expert_spread`, `oneil_*`, buffett qual | SPURIOUS or NULL across the board | ✗ | car_10 | 2 | **1 re-look left** (ticker-episode unit ~2026-09); retire if null | 2026-10 |
+| 15 | Experts (panel) | `expert_spread`, `oneil_*`, buffett qual | SPURIOUS or NULL across the board | ✗ | car_10 | 3 | **RETIRED 2026-09-29** (operational stop rule, not falsified; `experts_last_look_2026_09.md` §6, §4 row 2026-09-29) | done |
 | 16 | Joint loser flag | ATR-hi × `pct_off_52w_low`-hi (ROIC leg dropped) | SUGGESTIVE (mostly ATR curvature) | ✗ | car_10 | 1 | **forward-log without ROIC leg** (telemetry-only, pre-register before ordering use) | 2026-11 |
 | 17 | Size | `log10_mcap` | not in the July family — admitted 2026-07-14 (ML corner): continuous WCB p .024 on car_10, below the .05/7 family bar; invisible to the binary model | ✗ | car_10 | 1 | monitor (exploratory candidate) | 2026-12 |
 | 18 | LLM conviction | `llm_confidence` | not in the July family — admitted 2026-07-14 (ML corner): null (L1-zeroed, WCB p .842); missingness is structural (early brief_dates lack the column) | ✗ | car_10 | 1 | monitor | 2026-12 |
@@ -103,9 +103,12 @@ when written and is no longer. Re-measured on the VPS production stores on 2026-
 briefed held-out label rows, 779 resolved, **385 ticker-episodes in 63 arrival
 clusters**, so the panel clears both frozen floors. ATR power at the 50% gate reads
 **91.5% ±1.4%** at the registered family of one (`a20_power.py --population briefed
---family-size 1`, seed 20260922, n_sims 400, reproduced twice) against the 80% bar; the
-corrected 2026-09-24 figure was 66.7%. One seed only — a fresh-seed re-run at n_sims
-1200 was in flight when this note was written. Construction of both numbers:
+--family-size 1`, seed 20260922, n_sims 400) and **92.2% ±1.3%** at seed 7, same
+n_sims and the same family, both read 2026-11-06 and both above the 80% bar; they
+agree inside Monte Carlo error, and the corrected 2026-09-24 figure was 66.7%. Two
+seeds, one run each — the simulation is bit-identical at a fixed seed, panel and
+n_sims, so a repeat at one seed would be a determinism check and not a reproduction.
+No run at a higher n_sims is recorded. Construction of both numbers:
 `a20_power_preflight_2026_09.md` §8.
 
 **This note spends no look and charges nothing.** The preflight reads no outcome
@@ -114,8 +117,12 @@ column, and the power simulation injects effects into simulated outcomes; no hel
 and no §4 row was added: #1227 is still REGISTERED and still has not run. The rest of
 b.F stands — a second registered test on this label before the first has run would
 still multiply the family and raise every other hypothesis's denominator. Per the
-append-only convention the row is left as written and this note is the correction,
-following the precedent of the 2026-09-25 appended note in §4.1.
+append-only convention the row is left as written and this note is the correction.
+
+**One look count in this ledger is disputed, and this note does not settle it.** §3
+reads cluster 1 at 2 looks (Jun, Jul) while the 2026-07-14 and 2026-09-23 §4 rows read
+3, against rule 4's cap of 2 re-looks; the question is posted on #1227 (comment of
+2026-11-06) and is unresolved, so no cell is changed here.
 
 ### 4.1 Policy- and ladder-side looks annex (charges the T5/T7 walk-forward budget, not the §3 covariate family)
 
@@ -151,6 +158,9 @@ of variants examined and `charges: 0 (exploration)`; and nothing it produced is 
 for what ships. Rule 1 ("No look happens off-ledger") is unchanged and now covers exploratory
 looks explicitly. Per the append-only convention the header sentence is left as written — this
 note is the correction. See ADR 0013 R4, amendment 2026-09-25.
+
+**Appended note 2026-11-06:** clause b.F of the 2026-10-01 (b) row above is
+superseded; the note that supersedes it is at the end of §4.
 
 
 ## 5. Cross-reference: the mechanical-vs-LLM selection test (own track)
