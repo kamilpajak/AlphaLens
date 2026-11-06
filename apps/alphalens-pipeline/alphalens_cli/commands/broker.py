@@ -3143,10 +3143,18 @@ def manage_command(
     `touch ~/.alphalens/broker_orders/KILL` is the GLOBAL kill (every instance,
     ADR 0016 D3). Placement still needs ALPHALENS_BROKER_ALLOW_ORDERS=1 (enforced
     inside the broker)."""
+    import contextlib
+    import signal
+
     from alphalens_pipeline.brokers.automanager.control_loop import (
         build_default_deps,
         build_entry_fill_probe,
         run_daemon,
+    )
+    from alphalens_pipeline.brokers.automanager.graceful_stop import (
+        STREAM_STOP_BUDGET_S,
+        GracefulStop,
+        run_within,
     )
     from broker_contract.contract import BrokerError
 
@@ -3155,6 +3163,15 @@ def manage_command(
             notify=_environment_labeled_notify(_telegram_daemon_notify()),
             chain_loss_notify=_environment_labeled_notify(_telegram_chain_loss_notify()),
         )
+        # SIGTERM (systemd) and SIGINT (Ctrl-C) finish the tick in progress, end
+        # the wait at once and return through both finally blocks below; a second
+        # signal exits at once. Installed after the deps, so a signal during boot
+        # still kills at once, as before. `graceful_stop` says why it is built so.
+        stop = GracefulStop(wake_event=deps.wake_event)
+        previous = {}
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            with contextlib.suppress(ValueError):  # not the main thread (tests)
+                previous[sig] = signal.signal(sig, stop.handle)
         # Dark streaming early-wake: build_default_deps returns wake_event/stream_tick
         # only when ALPHALENS_BROKER_STREAMING_ENABLED=1 and the reader started; both
         # None otherwise -> run_daemon is byte-identical to today's poll-only loop.
@@ -3163,6 +3180,10 @@ def manage_command(
                 deps,
                 once=once,
                 poll_seconds=poll_seconds,
+                sleep_fn=stop.sleep,
+                # --once always runs its one tick: a stop that lands before it
+                # is honoured after it, so "single tick complete" stays true.
+                is_running=(lambda: True) if once else stop.is_running,
                 wake_event=deps.wake_event,
                 on_tick=deps.stream_tick,
                 # #1402: used only on the poll-only path (LIVE); the streaming
@@ -3170,10 +3191,21 @@ def manage_command(
                 fill_probe=build_entry_fill_probe(deps),
             )
         finally:
-            # Stop the streaming reader (DELETE subs + join the thread) so a --once
-            # run or a daemon exit never leaves an orphan subscription/thread.
-            if deps.stream_trigger is not None:
-                deps.stream_trigger.stop()
+            try:
+                # Stop the streaming reader (DELETE subs + join the thread) so a --once
+                # run or a daemon exit never leaves an orphan subscription/thread.
+                # Bounded (#1864): this now runs on a real stop, and its DELETE has
+                # no overall limit of its own.
+                if deps.stream_trigger is not None:
+                    run_within(
+                        deps.stream_trigger.stop,
+                        budget_s=STREAM_STOP_BUDGET_S,
+                        what="stream reader stop",
+                    )
+            finally:
+                for sig, handler in previous.items():
+                    signal.signal(sig, handler)
+                stop.close()
     except BrokerError as exc:
         raise _fail_from_broker_error(exc, "broker manage failed") from exc
     if once:

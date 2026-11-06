@@ -614,7 +614,12 @@ def _kill_active(deps: LoopDeps) -> bool:
     )
 
 
-def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
+def run_once(
+    deps: LoopDeps,
+    *,
+    sweep_orphans: bool = False,
+    keep_placing: Callable[[], bool] = _always,
+) -> TickReport:
     """One control-loop tick. Placement is gated on (no KILL) AND (chain alive);
     reconcile + Action execution ALWAYS run so a KILL still cancels and a dead
     chain still surfaces terminal state. The tick is a sequence of independent
@@ -663,7 +668,7 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
     # inline retire self-heals here; idempotent, quiet in steady state).
     _sweep_owed_sibling_retires(deps, report)
 
-    _run_placement_drain(deps, report, enabled=not kill and alive)
+    _run_placement_drain(deps, report, enabled=not kill and alive, keep_placing=keep_placing)
 
     # Entry-trailing watcher pass: advance each open watch's
     # state machine off the shared INC-2 price stream. KILL-GATED internally
@@ -810,7 +815,13 @@ def _run_orphan_sweep(deps: LoopDeps, report: TickReport) -> None:
         report.orphans += 1
 
 
-def _run_placement_drain(deps: LoopDeps, report: TickReport, *, enabled: bool) -> None:
+def _run_placement_drain(
+    deps: LoopDeps,
+    report: TickReport,
+    *,
+    enabled: bool,
+    keep_placing: Callable[[], bool] = _always,
+) -> None:
     # #1315: the drain OWNS the pass-level now-entry feed scope. Gated (KILL /
     # dead chain) releases it — the precedent every other pass follows on its
     # early returns (_release_feed_scope); otherwise the tick's visits hold
@@ -868,7 +879,20 @@ def _run_placement_drain(deps: LoopDeps, report: TickReport, *, enabled: bool) -
             picks.pick_key(pick) for pick in queued if picks.is_now_only_ladder(pick)
         },
     )
-    for pick in queued:
+    for index, pick in enumerate(queued):
+        # #1864: a stop requested by a signal lets the tick in progress run to
+        # completion, so this is where it must not START a placement main would
+        # never have reached (main died at the signal). A placement begun here
+        # and then cut by systemd's SIGKILL at 90 s would be left between its
+        # broker POST and its journal record. A ``break``, not a ``return``: the
+        # tick bookkeeping below still runs, and a pick not reached stays armed
+        # and untouched for the next process.
+        if not keep_placing():
+            logger.info(
+                "placement drain: stop requested -- leaving %d armed pick(s) for the next process",
+                len(queued) - index,
+            )
+            break
         key = picks.pick_key(pick)
         if key in retired or key in placed_this_tick:
             continue
@@ -4434,17 +4458,22 @@ def _wait_for_entry_fill(
     poll_seconds: float,
     sleep_fn: Callable[[float], None],
     monotonic: Callable[[], float],
+    is_running: Callable[[], bool] = _always,
 ) -> bool:
     """The poll-only wait with the #1402 fill probe. True when it ended early on
     a fill. With nothing armed it is exactly ``sleep_fn(poll_seconds)``, with no
-    clock read, as before."""
+    clock read, as before.
+
+    ``is_running`` ends the wait when a stop is requested: a woken ``sleep_fn``
+    returns at once, so without the check each chunk would read the book again
+    until the deadline, a busy loop on the broker."""
     if not probe.arm():
         sleep_fn(poll_seconds)
         return False
     deadline = monotonic() + poll_seconds
     while (remaining := deadline - monotonic()) > 0:
         sleep_fn(min(_FILL_PROBE_S, remaining))
-        if monotonic() >= deadline:
+        if monotonic() >= deadline or not is_running():
             return False
         if probe.fill_seen():
             return True
@@ -4487,6 +4516,11 @@ def run_daemon(
 ) -> None:
     """Drive run_once forever (orphan sweep on the FIRST tick only), or once.
 
+    ``is_running`` is read before each tick and between the fill probe's chunks.
+    A caller that stops the loop on a signal must also make ``sleep_fn`` and
+    ``wake_event`` wake on it, since a sleep resumes after the handler returns
+    (``graceful_stop`` does both for ``broker manage``).
+
     ``fill_probe`` (#1402) applies to the poll-only path only: while a native
     trailing BUY rests, the wait probes the order book and, on a fill, runs a
     protection pass before the next tick. ``None`` keeps the plain sleep.
@@ -4527,7 +4561,7 @@ def run_daemon(
     first = True
     deadline = monotonic() + poll_seconds if wake_event is not None else 0.0
     while is_running():
-        run_once(deps, sweep_orphans=first)
+        run_once(deps, sweep_orphans=first, keep_placing=is_running)
         # Anchor the backstop to the moment protection COMPLETED (before on_tick),
         # NOT to a clock read taken after on_tick. A slow on_tick (a hung Telegram
         # POST inside the stale/breaker alert can block ~tens of seconds) must only
@@ -4563,7 +4597,11 @@ def run_daemon(
             if fill_probe is None:
                 sleep_fn(poll_seconds)  # legacy/disabled path — byte-identical to today
             elif _wait_for_entry_fill(
-                fill_probe, poll_seconds=poll_seconds, sleep_fn=sleep_fn, monotonic=monotonic
+                fill_probe,
+                poll_seconds=poll_seconds,
+                sleep_fn=sleep_fn,
+                monotonic=monotonic,
+                is_running=is_running,
             ):
                 _run_fill_wake_protection(deps)
             continue

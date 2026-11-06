@@ -14,6 +14,7 @@ import dataclasses
 import datetime as dt
 import inspect
 import os
+import sys
 import unittest
 from collections.abc import Callable
 from pathlib import Path
@@ -8893,6 +8894,24 @@ def _stop_after(n: int) -> Callable[[], bool]:
     return _running
 
 
+def _stop_after_ticks(n: int) -> Callable[[], bool]:
+    """is_running that lets ``run_daemon``'s loop start ``n`` ticks, then stops it.
+
+    Unlike :func:`_stop_after`, it counts only the LOOP's own check. The #1402
+    fill-probe wait also reads ``is_running`` between its chunks (a stop must end
+    the wait), and a predicate that counted those reads would stop the daemon in
+    the middle of a wait these tests mean to run to its deadline."""
+    state = {"ticks": 0}
+
+    def _running() -> bool:
+        if sys._getframe(1).f_code is not cl.run_daemon.__code__:
+            return True  # a read from inside the wait: no stop requested
+        state["ticks"] += 1
+        return state["ticks"] <= n
+
+    return _running
+
+
 def _daemon_deps(run_once_at: list[float], clock: _Clock) -> cl.LoopDeps:
     """LoopDeps whose run_once (via build_protection_view) records the clock
     reading at each tick — the observable proxy for 'a protection pass ran'."""
@@ -9057,7 +9076,7 @@ class TestRunDaemonWakesOnAnEntryFill(IsolatedHomeTestCase):
             deps,
             once=False,
             poll_seconds=45.0,
-            is_running=_stop_after(ticks),
+            is_running=_stop_after_ticks(ticks),
             heartbeat_fn=lambda *_: None,
             sleep_fn=_sleep,
             wake_event=None,
