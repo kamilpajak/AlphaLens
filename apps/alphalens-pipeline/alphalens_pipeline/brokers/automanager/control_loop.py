@@ -4434,17 +4434,22 @@ def _wait_for_entry_fill(
     poll_seconds: float,
     sleep_fn: Callable[[float], None],
     monotonic: Callable[[], float],
+    is_running: Callable[[], bool] = _always,
 ) -> bool:
     """The poll-only wait with the #1402 fill probe. True when it ended early on
     a fill. With nothing armed it is exactly ``sleep_fn(poll_seconds)``, with no
-    clock read, as before."""
+    clock read, as before.
+
+    ``is_running`` ends the wait when a stop is requested: a woken ``sleep_fn``
+    returns at once, so without the check each chunk would read the book again
+    until the deadline, a busy loop on the broker."""
     if not probe.arm():
         sleep_fn(poll_seconds)
         return False
     deadline = monotonic() + poll_seconds
     while (remaining := deadline - monotonic()) > 0:
         sleep_fn(min(_FILL_PROBE_S, remaining))
-        if monotonic() >= deadline:
+        if monotonic() >= deadline or not is_running():
             return False
         if probe.fill_seen():
             return True
@@ -4486,6 +4491,11 @@ def run_daemon(
     fill_probe: EntryFillProbe | None = None,
 ) -> None:
     """Drive run_once forever (orphan sweep on the FIRST tick only), or once.
+
+    ``is_running`` is read before each tick and between the fill probe's chunks.
+    A caller that stops the loop on a signal must also make ``sleep_fn`` and
+    ``wake_event`` wake on it, since a sleep resumes after the handler returns
+    (``graceful_stop`` does both for ``broker manage``).
 
     ``fill_probe`` (#1402) applies to the poll-only path only: while a native
     trailing BUY rests, the wait probes the order book and, on a fill, runs a
@@ -4563,7 +4573,11 @@ def run_daemon(
             if fill_probe is None:
                 sleep_fn(poll_seconds)  # legacy/disabled path — byte-identical to today
             elif _wait_for_entry_fill(
-                fill_probe, poll_seconds=poll_seconds, sleep_fn=sleep_fn, monotonic=monotonic
+                fill_probe,
+                poll_seconds=poll_seconds,
+                sleep_fn=sleep_fn,
+                monotonic=monotonic,
+                is_running=is_running,
             ):
                 _run_fill_wake_protection(deps)
             continue

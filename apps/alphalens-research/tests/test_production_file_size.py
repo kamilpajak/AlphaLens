@@ -172,7 +172,15 @@ BASELINE: dict[str, int] = {
     # fold with no `immediate_only_keys`. The room says which of the two answers
     # the view gives and that an overdue PLACED row may now be a pick the drain
     # has finished with.
-    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3319,
+    # +20 for the graceful stop of `broker manage`: the command installs the
+    # SIGTERM/SIGINT handlers (with the price-reader's off-main-thread suppress),
+    # hands run_daemon the stop-aware sleep and loop check, and restores the
+    # previous handlers in a nested finally, so a stream stop that raises still
+    # restores them. The room is 15 lines of code, 1 blank and 6 of comment saying
+    # why the handlers go in AFTER the deps are built and why ``--once`` ignores a
+    # stop until its one tick ran. Counted with ``wc -l`` after ruff format (3319
+    # before, 3341 after).
+    "apps/alphalens-pipeline/alphalens_cli/commands/broker.py": 3341,
     # Raised by 8: the score stage now also stamps the three raw broad-index
     # 5-session returns beside the market-state label. The room is 1 line of
     # lazy call and 7 of comment saying why the family is separate from the
@@ -402,7 +410,13 @@ BASELINE: dict[str, int] = {
     # fill-path read is SYNCHRONOUS before the protection pass, at about 4 us a record.
     # The earlier text said the read was "never the protection loop itself", which is
     # true of the placed page only. Counted with ``wc -l`` (8477 before, 8489 after).
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8489,
+    # +14 for the graceful stop of `broker manage`: the #1402 fill-probe wait takes
+    # ``is_running`` and stops reading the book once a stop is requested (a woken
+    # sleep returns at once, so without it each chunk would hit the broker until the
+    # deadline), and the ``run_daemon`` docstring says that a caller stopping on a
+    # signal must make the sleep and the wake Event wake too. Counted with ``wc -l``
+    # after ruff format (8489 before, 8503 after).
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8503,
     # +1 to correct the comment beside ``_OCO_LAG_HOLD_REASON``. It claimed a rename
     # of that literal "fails the control-loop tests loudly"; measured, renaming it to
     # "oco-lag-held" leaves all 552 control-loop tests green, because they read the
