@@ -57,7 +57,9 @@ from alphalens_pipeline.brokers.automanager.picks import (
     read_pick_fold,
 )
 from alphalens_pipeline.brokers.automanager.stop_journal import (
+    _BRACKET_STOP_REF_RE,
     _STOP_MOVE_LEVEL_KEY,
+    _STOP_REF_RE,
     _pick_key_from_stop_ref,
     select_stop_move_lines,
     stop_move_of,
@@ -381,8 +383,6 @@ _BUY = "Buy"
 _SELL = "Sell"
 _STOP_ORDER_TYPES = frozenset({"Stop", "StopIfTraded", "StopLimit", "TrailingStopIfTraded"})
 
-_STOP_REF_RE = re.compile(r"-entry-t\d+(?:-fire)?-stop-\d+$")
-_BRACKET_STOP_REF_RE = re.compile(r"^(?P<request>.+)-stop-\d+$")
 _OCO_LEG_RE = re.compile(r"^(?P<request>.+)-(?P<leg>stop|tp)$")
 _UIC_TP_REF_RE = re.compile(r"^u(?P<uic>\d+)-tp(?P<n>\d+)(?:-|$)")
 _PICK_KEY_RE = re.compile(r"^[A-Z0-9.\-]+:\d{4}-\d{2}-\d{2}(?:-g[1-9]\d*)?$")

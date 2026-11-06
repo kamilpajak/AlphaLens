@@ -720,6 +720,71 @@ def _ticker_from_ref(ref: str | None) -> str | None:
     return pick_key.split(":", 1)[0] if pick_key else None
 
 
+# The two shapes of a protective stop's reference, with ONE owner: the stop pages
+# here and ``alphalens broker trades`` both parse a stop ref to ask which entry it
+# belongs to, and two parse rules would one day disagree. Only the PARSE is shared.
+# The page's join onto ``submissions.jsonl`` (``_bracket_ticker``) is stricter than
+# the command's on purpose -- exactly one record, uic cross-checked -- so on an
+# ambiguous journal the page names the uic where the command still attributes.
+# An entry-trail stop is ``<crid>-entry-t<k>[-fire]-stop-<n>``; a bracket stop is
+# ``<bracket crid>-stop-<n>`` (``position_manager._exit_stop_ref`` over the
+# submission's UUID crid). Every entry-trail ref ALSO matches the bracket pattern,
+# so the entry-trail one is tried first.
+_STOP_REF_RE = re.compile(r"-entry-t\d+(?:-fire)?-stop-\d+$")
+_BRACKET_STOP_REF_RE = re.compile(r"^(?P<request>.+)-stop-\d+$")
+
+
+def _bracket_request_from_stop_ref(ref: str | None) -> str | None:
+    """The bracket ``client_request_id`` a bracket-form stop ref names; ``None``
+    for an entry-trail ref, including one whose ticker or date does not parse,
+    and for any other shape."""
+    if not ref or _STOP_REF_RE.search(ref):
+        return None
+    match = _BRACKET_STOP_REF_RE.match(ref)
+    return match.group("request") if match else None
+
+
+def _submission_uic(record: Mapping[str, Any]) -> int | None:
+    """The record's uic as an int. ``submissions.jsonl`` stores it as a STRING
+    (``'212'``) where every other journal stores an int, so both are read."""
+    raw = record.get("uic")
+    if isinstance(raw, bool):  # an int to Python, never a uic
+        return None
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+    return None
+
+
+def _bracket_ticker(ref: str | None, uic: int, records: Iterable[Mapping[str, Any]]) -> str | None:
+    """The ticker of the submission whose bracket a bracket-form stop ref names,
+    or ``None`` unless that join is EXACT.
+
+    Exact means: the crid sits in exactly one bracket of exactly one record, and
+    that record's uic is the stop's uic. Two matches mean the journal does not
+    say which pick the stop belongs to, and a page naming one of two candidates
+    is worse than a page naming the uic. A ``brackets`` value that is not a list,
+    or an entry in it that is not an object, carries no crid and is skipped."""
+    request = _bracket_request_from_stop_ref(ref)
+    if request is None:
+        return None
+    owners = [
+        record
+        for record in records
+        if isinstance(brackets := record.get("brackets"), list)
+        for bracket in brackets
+        if isinstance(bracket, Mapping) and bracket.get("client_request_id") == request
+    ]
+    if len(owners) != 1 or _submission_uic(owners[0]) != uic:
+        return None
+    ticker = owners[0].get("ticker")
+    return ticker if isinstance(ticker, str) else None
+
+
 _DISASTER_STOP_SIDE = "SELL"  # protective exit of a long entry
 
 

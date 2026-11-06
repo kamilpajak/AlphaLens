@@ -386,7 +386,17 @@ BASELINE: dict[str, int] = {
     # The two changes touch disjoint regions and their growth adds exactly. Counted
     # with ``wc -l`` on the MERGED file after ruff format: 8333 before either, 8367
     # after #1855, 8446 after both (8333 + 34 + 79).
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8446,
+    # +31 for #1621 on BRACKET picks: their stop ref is ``<uuid>-stop-<n>``, so the
+    # stop-fill and stop-placed pages named ``uic <n>`` for every
+    # ``entry_mode: "immediate"`` pick (three LIVE stop fills out of three in the week
+    # of 2026-11-02). The room buys ``_stop_page_ticker``, which both pages now call:
+    # the entry-trail parse, then one ``submissions.jsonl`` read for a bracket ref,
+    # the fall-back to the uic when that read raises ANYTHING (the fill page is sent
+    # after ``stop_filled`` is journaled, so a raise would lose it), and the docstring
+    # that says why that read may sit in both callers (once per filled stop; the
+    # DEFERRED send, never the protection loop). Counted with ``wc -l`` after ruff
+    # format: 8446 before, 8477 after.
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8477,
     # +1 to correct the comment beside ``_OCO_LAG_HOLD_REASON``. It claimed a rename
     # of that literal "fails the control-loop tests loudly"; measured, renaming it to
     # "oco-lag-held" leaves all 552 control-loop tests green, because they read the
@@ -411,7 +421,16 @@ BASELINE: dict[str, int] = {
     # taking over the uic. The docstring is most of the room: a reader who sees two
     # folds over the same lines will merge them unless it says why they differ.
     # Counted with ``wc -l`` (1409 before, 1461 after), after ruff format.
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1461,
+    # +65 for #1621 on BRACKET picks. Two parts. The two stop-ref patterns move here
+    # from ``trades.py`` (which now imports them), so the stop pages and ``alphalens
+    # broker trades`` PARSE a stop ref with one rule, plus the comment that says the
+    # page's join is stricter than the command's on purpose, and
+    # ``_bracket_request_from_stop_ref`` that tries the entry-trail shape first. And
+    # ``_bracket_ticker`` with ``_submission_uic``: the exact join of a bracket stop
+    # ref onto ``submissions.jsonl`` (one bracket in one record, same uic, the uic
+    # read as int OR string, never a bool), whose docstring names every shape that
+    # refuses. Counted with ``wc -l`` after ruff format: 1461 before, 1526 after.
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/stop_journal.py": 1526,
     # +188 for the first half of this file's SonarCloud complexity cleanup: eight of
     # its sixteen python:S3776 functions, cleared by naming the block each one's
     # surplus sat in. Nineteen new module-level helpers and their docstrings; the

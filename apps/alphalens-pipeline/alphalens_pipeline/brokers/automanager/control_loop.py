@@ -3504,6 +3504,37 @@ def _exit_result_r(
     )
 
 
+def _stop_page_ticker(ref: str | None, uic: int) -> str:
+    """What a stop page calls the instrument: the ticker, or ``uic <n>``.
+
+    An entry-trail ref carries the ticker itself. A bracket ref
+    (``<uuid>-stop-<n>``, every ``entry_mode: "immediate"`` pick) does not, so
+    its ticker is read off the submission that holds that bracket -- only when
+    the join is exact (:func:`stop_journal._bracket_ticker`). A journal that is
+    missing, or whose READ raises anything at all (unreadable, not UTF-8, a line
+    nested past the recursion limit), falls back to the uic: the page is
+    observability, and the stop-fill page is sent after ``stop_filled`` is
+    journaled, so a raise here would lose it for good. The path resolution and
+    the pure join stay outside that catch, so a defect in either is not hidden.
+
+    One ``submissions.jsonl`` read per call, and only for a bracket ref. Both
+    callers may pay it: the stop-fill reconcile runs once per filled stop, and
+    the stop-placed page is the DEFERRED send (:func:`_queue_page`), never the
+    protection loop itself."""
+    ticker = stop_journal._ticker_from_ref(ref)
+    if ticker is None and stop_journal._bracket_request_from_stop_ref(ref) is not None:
+        from alphalens_pipeline.brokers.submission_log import iter_submission_records
+
+        path = state_paths.submissions_path()
+        try:
+            records = list(iter_submission_records(path))
+        except Exception:  # broad on purpose: a diagnostic read must not lose the page
+            logger.warning("stop page: submissions unreadable -- naming uic %s", uic, exc_info=True)
+            records = []
+        ticker = stop_journal._bracket_ticker(ref, uic, records)
+    return ticker or f"uic {uic}"
+
+
 def _reconcile_one_standing_stop(
     deps: LoopDeps,
     broker: Any,
@@ -3546,7 +3577,7 @@ def _reconcile_one_standing_stop(
     marker = _latest_stop_move(journal_lines, uic, since_ts=stop.placed_ts)
     event = trade_alerts.TradeEvent(
         kind=trade_alerts.EventKind.EXIT_FILLED,
-        ticker=stop_journal._ticker_from_ref(stop.ref) or f"uic {uic}",
+        ticker=_stop_page_ticker(stop.ref, uic),
         # The same leg word the stop-placed and stop-raised pages carry (#1621
         # part 3 introduced it). All three stop pages or none: an operator who
         # learns that ``SL`` marks the protective stop would otherwise scan for
@@ -8265,10 +8296,10 @@ def _page_stop_placed(
 
     Rendered here rather than inside the reconciler for the same reason the
     take-profit page is rendered in ``_announce_fired_tranches``: ``PlaceStop``
-    carries no ticker and the pure diff holds no alert sink. The ticker comes off
-    the deterministic stop ref, exactly as the stop-FILL page recovers it
-    (``stop_journal._ticker_from_ref``), and falls back to the uic rather than
-    going out unidentified.
+    carries no ticker and the pure diff holds no alert sink. The ticker comes from
+    :func:`_stop_page_ticker`, exactly as the stop-FILL page gets it, and falls
+    back to the uic rather than going out unidentified. Its journal read for a
+    bracket ref happens in the deferred send, not here.
 
     ``qty`` is the quantity ACTUALLY placed (post execute-time clamp), never
     ``action.qty``: a page quoting the stale number would tell the operator that
@@ -8301,7 +8332,7 @@ def _send_stop_placed_page(
     containment, so a formatter failure costs the page and nothing else."""
     event = trade_alerts.TradeEvent(
         kind=trade_alerts.EventKind.STOP_PLACED,
-        ticker=stop_journal._ticker_from_ref(action.request_id) or f"uic {action.uic}",
+        ticker=_stop_page_ticker(action.request_id, action.uic),
         label=STOP_LABEL,
         qty=qty,
         level=action.stop_price,
