@@ -105,8 +105,10 @@ cannot be repeated, and the decision rule below was fixed before it ran.
 > appended note at the end of §4 of `edge_hypothesis_budget_2026_07.md`. What is NOT
 > settled is the one that decides whether this look may run: whether rule 4's cap of two
 > re-looks covers a rule-3 confirmation. The ledger's own text cuts both ways in one rule
-> and that note records both readings, so it stays an owner interpretation. The second
-> question, the `SCORER_CONFIG_VERSION` bump, is unchanged.
+> and that note records both readings, so it was an owner interpretation. **The owner took
+> it the same day: the cap governs sweep re-looks and this confirmation sits outside it, so
+> the look is available to be spent.** The second question, the `SCORER_CONFIG_VERSION`
+> bump, is unchanged, and whether to spend the look is still a separate decision.
 >
 > **The operative registration still reads as blocked, and this box does not touch
 > it.** The registration itself is the module docstring of

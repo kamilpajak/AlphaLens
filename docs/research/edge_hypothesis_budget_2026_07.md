@@ -27,7 +27,7 @@ This ledger makes the family **program-wide, fixed, and auditable**.
 
 | # | Cluster | Primary signal | July verdict | B-clear | Primary horizon | Looks used | Status | Sunset |
 |---|---------|----------------|--------------|---------|-----------------|-----------|--------|--------|
-| 1 | ATR / choppiness | `technical_atr_pct` | ROBUST | ✓ (5,10,20) | `sel_ar_20` (was car_10, amended 2026-09-21, §4) | 3 (Jun, Jul, ML corner 2026-07-14) — AT the rule-4 cap; whether the rule-3 confirmation falls inside it is open, §4 note of 2026-11-06 | **confirmation REGISTERED 2026-09-23, run DEFERRED to on/after 2026-10-09** (`atr_confirmation_prereg_2026_09.md`; family of one, charge taken at the run; the 2026-09-24 row withdrew the power figure that unblocked it; **both trigger conditions verified met 2026-11-06** — 385 episodes in 63 clusters, ATR power 91.5% ±1.4% at the family of one, §4 appended note of that date — run still not spent, which is an owner decision) | — |
+| 1 | ATR / choppiness | `technical_atr_pct` | ROBUST | ✓ (5,10,20) | `sel_ar_20` (was car_10, amended 2026-09-21, §4) | 3 (Jun, Jul, ML corner 2026-07-14) — AT the rule-4 cap for SWEEP looks; the rule-3 confirmation sits outside it (owner decision 2026-11-06, §4 note) | **confirmation REGISTERED 2026-09-23, run DEFERRED to on/after 2026-10-09** (`atr_confirmation_prereg_2026_09.md`; family of one, charge taken at the run; the 2026-09-24 row withdrew the power figure that unblocked it; **both trigger conditions verified met 2026-11-06** — 385 episodes in 63 clusters, ATR power 91.5% ±1.4% at the family of one, §4 appended note of that date — run still not spent, which is an owner decision) | — |
 | 2 | MA50 extension / overbought | `technical_ma50_distance_pct` (+`technical_rsi`) | ROBUST, ATR-orthogonal | ✓ (car_10) | `sel_ar_20` (was car_10, amended 2026-09-21, §4) | 4 (Jun, Jul, ML corner, EWMA 2026-07-15) — one PAST the rule-4 cap, unresolved | **held — 2nd axis candidate** | — |
 | 3 | 52w-low extension | `technical_pct_off_52w_low` | SUGGESTIVE (ATR-loaded) | ✗ | car_10 | 3 (Jun, Jul, ML corner) — AT the rule-4 cap | monitor | 2026-10 |
 | 4 | Quality (ROIC) | `roic_pct` | SPURIOUS (ATR proxy + pseudo-replication) | ✗ | — | 2 | **RETIRED** (fold into ATR; only residual-ROIC×ATR admissible) | done |
@@ -179,7 +179,25 @@ promotable, which is internally consistent.
 registered confirmation is legal and cluster 1 has no sweep re-look left, so a failure
 retires it with nothing to return to. Under the strict reading cluster 1 is at the cap and
 the confirmation would be its fourth look, which rule 4 does not allow. The choice decides
-whether #1227 may be run at all, so it belongs to the owner and is recorded as open.
+whether #1227 may be run at all, so it belongs to the owner.
+
+**DECIDED by the owner 2026-11-06: the "outside the cap" reading.** Rule 4's cap of two
+re-looks governs re-testing in sweeps; the single rule-3 confirmation sits outside it. The
+decision is an interpretation of this ledger's own text, taken on the evidence recorded
+above, and it binds every cluster, not only cluster 1:
+
+* **Cluster 1** keeps its registered confirmation. Spending it remains a separate owner
+  decision (#1227), and the cap still binds the other way: no sweep re-look is left, so a
+  cluster retired under rule 4 has nothing to return to.
+* **Clusters 2, 3 and 9** likewise keep one rule-3 confirmation available whatever their
+  sweep count, which is what the promise under the §3 table asked for.
+* **Cluster 2's sweep count is NOT cured by this reading.** Four looks is the first plus
+  three re-looks, one past a cap of two, and that breach is about sweep looks rather than
+  about the confirmation. It stays open.
+* **Clusters 3 and 9 have no sweep re-look left.** Their `Status` cells still read "monitor"
+  (sunset 2026-10, passed) and "held", which imply a sweep look rule 4 no longer provides;
+  what each has is its confirmation. Cluster 3 is not Bonferroni-clear, so the §3 promise
+  does not cover it. Both statuses stay open.
 
 **What the count becomes after a run.** The §4 header counts "every test that draws on a
 cluster", so the confirmation counts in this column: cluster 1 would read 4 after the run
