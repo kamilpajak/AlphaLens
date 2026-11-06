@@ -5061,10 +5061,10 @@ class TestStopPlacedPagesTheOperator(IsolatedHomeTestCase):
         self.assertEqual(len([a for a in sent if "stop placed" in a]), 1, "one went out")
         self.assertEqual(report.alerts, 1, "only the page that went out is counted")
 
-    def test_the_page_names_the_uic_when_the_ref_carries_no_ticker(self) -> None:
-        # A classic bracket ref is not the entry-trail shape, so no ticker can
-        # be recovered from it. The page must still identify the instrument —
-        # the same fallback the stop-FILL alert uses.
+    def test_the_page_names_the_uic_when_no_submission_names_the_bracket(self) -> None:
+        # A bracket ref carries no ticker of its own, and this isolated home has
+        # no ``submissions.jsonl`` to read one from. The page must still identify
+        # the instrument -- the same fallback the stop-FILL alert uses.
         throttle, _report = self._place(
             broker=_ProtBroker(by_uic={_UIC: _pos(46.0)}), ref="crid-0-stop-0"
         )

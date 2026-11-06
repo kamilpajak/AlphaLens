@@ -506,7 +506,7 @@ class TestStopFillAlertNamesTheStop(unittest.TestCase):
 
     def test_a_ref_without_a_ticker_falls_back_to_the_uic(self) -> None:
         text = self._alert_for(
-            _stop_placed(ref="some-classic-bracket-id"), outcome=_filled(_STOP_ID, 16.0, 17.1)
+            _stop_placed(ref="some-ref-of-no-known-shape"), outcome=_filled(_STOP_ID, 16.0, 17.1)
         )
         self.assertTrue(text.startswith(f"SELL uic {_UIC} SL 16 @"), text)
 

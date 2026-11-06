@@ -643,22 +643,31 @@ class SyntheticBrokerPredicates(_TradesCase):
         self.assertEqual(len(moves), 4)
 
     def test_a_bracket_stop_reference_names_the_bracket_pick(self) -> None:
+        # Gen 1 too: every resize bumps the gen of a bracket's stop ref
+        # (``position_manager._exit_stop_ref``).
         crid = "bbbbbbbb-0000-0000-0000-000000000000"
-        venue = venue_without()
-        for row in venue["audit"]:
-            if row["OrderId"] == VST_STOP:
-                row["ExternalReference"] = f"{crid}-stop-0"
-        submission = {
-            "ticker": "VST",
-            "trade_date": "2026-09-21",
-            "brackets": [
-                {"client_request_id": crid, "entry_order_id": "1", "exit_order_ids": [], "qty": 1}
-            ],
-        }
-        record = self._vst(venue, extra={"submissions": [submission]})
-        (exit_,) = record["exits"]
-        self.assertEqual(exit_["attribution"], "external_reference")
-        self.assertEqual(exit_["reason"], "trailed_stop")
+        for gen in (0, 1):
+            with self.subTest(gen=gen):
+                venue = venue_without()
+                for row in venue["audit"]:
+                    if row["OrderId"] == VST_STOP:
+                        row["ExternalReference"] = f"{crid}-stop-{gen}"
+                submission = {
+                    "ticker": "VST",
+                    "trade_date": "2026-09-21",
+                    "brackets": [
+                        {
+                            "client_request_id": crid,
+                            "entry_order_id": "1",
+                            "exit_order_ids": [],
+                            "qty": 1,
+                        }
+                    ],
+                }
+                record = self._vst(venue, extra={"submissions": [submission]})
+                (exit_,) = record["exits"]
+                self.assertEqual(exit_["attribution"], "external_reference")
+                self.assertEqual(exit_["reason"], "trailed_stop")
 
     def test_a_limit_bracket_child_is_a_take_profit(self) -> None:
         venue = venue_without()
