@@ -98,6 +98,16 @@ cannot be repeated, and the decision rule below was fixed before it ran.
 > and the fact that one of the three outcomes in §6 bumps `SCORER_CONFIG_VERSION` with
 > a cohort reset, which cuts the panel a later model would train on.
 >
+> **Appended note 2026-11-06 — the first of those two questions has moved; the text above
+> is left as written.** §3 of the ledger no longer reads "2 (Jun,Jul)": its cells for
+> clusters 1, 2, 3 and 9 were corrected to the §4 trail the same day, so cluster 1 reads
+> 3 (Jun, Jul, ML corner). The arithmetic is settled and the construction is in the
+> appended note at the end of §4 of `edge_hypothesis_budget_2026_07.md`. What is NOT
+> settled is the one that decides whether this look may run: whether rule 4's cap of two
+> re-looks covers a rule-3 confirmation. The ledger's own text cuts both ways in one rule
+> and that note records both readings, so it stays an owner interpretation. The second
+> question, the `SCORER_CONFIG_VERSION` bump, is unchanged.
+>
 > **The operative registration still reads as blocked, and this box does not touch
 > it.** The registration itself is the module docstring of
 > `apps/alphalens-research/scripts/ml/2026_09_a20_atr_confirmation.py`, and it still

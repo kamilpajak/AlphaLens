@@ -27,15 +27,15 @@ This ledger makes the family **program-wide, fixed, and auditable**.
 
 | # | Cluster | Primary signal | July verdict | B-clear | Primary horizon | Looks used | Status | Sunset |
 |---|---------|----------------|--------------|---------|-----------------|-----------|--------|--------|
-| 1 | ATR / choppiness | `technical_atr_pct` | ROBUST | ✓ (5,10,20) | `sel_ar_20` (was car_10, amended 2026-09-21, §4) | 3 (Jun, Jul, ML corner 2026-07-14) — AT the rule-4 cap | **confirmation REGISTERED 2026-09-23, run DEFERRED to on/after 2026-10-09** (`atr_confirmation_prereg_2026_09.md`; family of one, charge taken at the run; the 2026-09-24 row withdrew the power figure that unblocked it; **both trigger conditions verified met 2026-11-06** — 385 episodes in 63 clusters, ATR power 91.5% ±1.4% at the family of one, §4 appended note of that date — run still not spent, which is an owner decision) | — |
+| 1 | ATR / choppiness | `technical_atr_pct` | ROBUST | ✓ (5,10,20) | `sel_ar_20` (was car_10, amended 2026-09-21, §4) | 3 (Jun, Jul, ML corner 2026-07-14) — AT the rule-4 cap; whether the rule-3 confirmation falls inside it is open, §4 note of 2026-11-06 | **confirmation REGISTERED 2026-09-23, run DEFERRED to on/after 2026-10-09** (`atr_confirmation_prereg_2026_09.md`; family of one, charge taken at the run; the 2026-09-24 row withdrew the power figure that unblocked it; **both trigger conditions verified met 2026-11-06** — 385 episodes in 63 clusters, ATR power 91.5% ±1.4% at the family of one, §4 appended note of that date — run still not spent, which is an owner decision) | — |
 | 2 | MA50 extension / overbought | `technical_ma50_distance_pct` (+`technical_rsi`) | ROBUST, ATR-orthogonal | ✓ (car_10) | `sel_ar_20` (was car_10, amended 2026-09-21, §4) | 4 (Jun, Jul, ML corner, EWMA 2026-07-15) — one PAST the rule-4 cap, unresolved | **held — 2nd axis candidate** | — |
-| 3 | 52w-low extension | `technical_pct_off_52w_low` | SUGGESTIVE (ATR-loaded) | ✗ | car_10 | 3 (Jun, Jul, ML corner) | monitor | 2026-10 |
+| 3 | 52w-low extension | `technical_pct_off_52w_low` | SUGGESTIVE (ATR-loaded) | ✗ | car_10 | 3 (Jun, Jul, ML corner) — AT the rule-4 cap | monitor | 2026-10 |
 | 4 | Quality (ROIC) | `roic_pct` | SPURIOUS (ATR proxy + pseudo-replication) | ✗ | — | 2 | **RETIRED** (fold into ATR; only residual-ROIC×ATR admissible) | done |
 | 5 | FCF axis | `valuation_fcf_margin` | ROBUST, not B-clear | ✗ | car_10 | 2 | **Aug pre-reg (1 look budgeted)** | 2026-12 |
 | 6 | Anti-value / growth tilt | `valuation_pe` | ROBUST-watch (car_10 only) | ✗ | car_10 | 2 | monitor (watch, don't act) | 2026-12 |
 | 7 | Cheapness multiples | `valuation_ps` | SPURIOUS (ATR/space proxy) | ✗ | — | 2 | **RETIRED** | done |
 | 8 | Ordering | `layer4_weighted_score` | SUGGESTIVE (low-score avoid filter) | ✗ | car_10 | 2 | monitor (selection_score incremental pending) | 2026-10 |
-| 9 | Press gate | `n_gates_passed` ≡ `pass_press` | ROBUST | ✓ | `sel_ar_20` (was car_10, amended 2026-09-21, §4) | 3 (Jun, Jul, ML corner) | **held** | — |
+| 9 | Press gate | `n_gates_passed` ≡ `pass_press` | ROBUST | ✓ | `sel_ar_20` (was car_10, amended 2026-09-21, §4) | 3 (Jun, Jul, ML corner) — AT the rule-4 cap | **held** | — |
 | 10 | Gate-unknown / insider-coverage proxy | `n_gates_unknown` | ROBUST in-sample, near-extinct under insider-v2 | ✓ (in-sample) | car_10 | 2 | **RETIRED** (no forward utility, 4/165 rows) | done |
 | 11 | Catalyst strength | `catalyst_strength` | SUGGESTIVE (car_10 slow-burn) | ✗ | car_10 | 2 | **re-test scheduled (~40 car_10 days)** | 2026-11 |
 | 12 | Event-type / theme / sector categoricals | `catalyst_event_type`, theme, `sector_name` | SPURIOUS (pseudo-replication) | ✗ | — | 2 | **RETIRED** | done |
@@ -124,43 +124,85 @@ reads cluster 1 at 2 looks (Jun, Jul) while the 2026-07-14 and 2026-09-23 §4 ro
 3, against rule 4's cap of 2 re-looks; the question is posted on #1227 (comment of
 2026-11-06) and is unresolved, so no cell is changed here.
 
-**Resolved 2026-11-06, later the same day — the §3 counts above are corrected and the
-cap is not breached for cluster 1.** The three entries were not three claims about one
-number. §3's `Looks used` column had not been maintained since the 2026-07-06 sweep: it
-read 2 for clusters 1, 2, 3 AND 9, although the 2026-07-14 row moved all four to 3 and
-the 2026-07-15 row moved cluster 2 to 4. That is also what refutes the 2026-09-21
-amendment row's "unchanged (still 2 each)" without any judgement — the same ledger puts
-cluster 2 at 4 by that date, so the cell is wrong by two for cluster 2 and carries no
-evidence about cluster 1. The two readings of "3" then follow: the 2026-07-14 row counted
-the third look from the §4 trail, and the 2026-09-23 registration row counted the third
-from the stale §3 cell. Nobody mis-added; one row counted from an unmaintained source.
+**Appended note 2026-11-06, later the same day — the §3 counts above are corrected, the
+note immediately above is superseded (it is left as written per the append-only
+convention), and one question it raised is NOT closed by this note.**
 
-**Rule 4's cap governs re-looks in sweeps; the rule-3 confirmation is outside it.** Three
-things settle the reading. Rule 4's own sentence presupposes the confirmation exists
-outside the cap, since it caps re-testing "in later sweeps" and names the confirmation as
-the event whose failure retires the cluster. Rule 3 requires exactly one confirmation
-before promotion, so a reading in which the confirmation consumes a re-look slot would
-make rule 3 unsatisfiable for any cluster that used both re-looks — and a reading that
-makes a binding rule impossible to satisfy is the wrong one. Rule 2 closes it: Bonferroni
-is kept "only for the final promote gate (rule 3)", which treats the promote gate as its
-own stage rather than as one of the sweep looks.
+**What the three entries were.** §3's `Looks used` cells for clusters 1, 2, 3 and 9 were
+never bumped after the ledger opened on 2026-07-12: all four read 2 while the 2026-07-14
+row had moved them to 3 and the 2026-07-15 row had moved cluster 2 to 4. The column as a
+whole WAS maintained — commit `5b8d9f54` of 2026-07-14 added the §3 rows for #17 and #18
+with 1 look each, and cluster 15's cell was bumped on 2026-11-06 — so those four cells
+were missed rather than the column abandoned, and "the 2026-09-23 row counted from a stale
+cell" is the likeliest account rather than a demonstrated one. What IS demonstrated without
+judgement is that the 2026-09-21 row's "unchanged (still 2 each)" is wrong: the same ledger
+puts cluster 2 at 4 by that date, so the cell is wrong by two for cluster 2 and carries no
+evidence about cluster 1. Note also that the range cumulations ("1 each tested", "2 each")
+are approximations — cluster 16 has read 1 since the ledger opened — so a per-cluster count
+comes from the rows that name the cluster, which is where 3 / 4 / 3 / 3 are taken from.
 
-So cluster 1 stands at three looks in the sweep track, which is the first look plus both
-re-looks, and the registered confirmation is legal as the one rule-3 event. **What the cap
-now binds is the other direction: ATR has no sweep re-look left.** If the confirmation
-does not clear, cluster 1 is retired under rule 4 and there is nothing to return to.
+**Why the 2026-07-14 ML-corner row charges cluster 1 at all.** The look definition is rule
+11 of `scripts/ml/README.md`, not a ledger rule (this ledger has six, §2): every run that
+computes a CV metric or p-value against an EDGE outcome is a look. That row computed seven
+wild-cluster-bootstrap coefficient tests over seven features against `car_10`, and
+`technical_atr_pct` was one of the seven.
 
-**Cluster 2 is one past the cap and this note does not change its status.** Jun 1, Jul 2,
-ML corner 3, EWMA 2026-07-15 4 — four looks is the first plus three re-looks, against a
-cap of two. The only lever is whether the June sweep counts as a look or as a precursor to
-the July re-run; the 2026-06-25 row counts it ("1 each tested"), so the ledger's own
-arithmetic puts cluster 2 past the cap. Clusters 1 and 9 are unaffected. Recorded here for
-the owner, with no cell changed beyond the count itself.
+**Two levers could move these counts, not one.** The first is whether the June sweep is a
+look or a precursor to the July re-run; the 2026-06-25 row counts it. The second is whether
+the ML-corner row could be re-charged at 0 as an exploratory burnt-panel look under the
+ADR 0013 R4 amendment of 2026-09-25. It cannot, on that amendment's own terms: a 0 charge
+requires all three of a stated burn date, the label `charges: 0 (exploration)` recorded with
+the row, and nothing from it cited as evidence; the row carries no such label, and
+retroactively reducing a recorded charge loosens a rail, which the 2026-09-24 clause of this
+ledger forbids. The second lever matters because it moves cluster 1 too: at 0 it would stand
+at 2 with a sweep re-look in hand.
+
+**The scope of rule 4's cap is an OWNER INTERPRETATION, not a deduction, and this note does
+not settle it.** The text cuts both ways in one rule: sentence 1 caps re-testing "in later
+sweeps", which puts a held-out confirmation outside it, while sentence 2 says "Max 2
+re-looks per cluster", and a confirmation is literally a look that is not the first. Three
+things bear on it. (i) The sentence under the §3 table promises the window to exactly these
+clusters: "#1 ATR, #2 MA50-extension, #9 press-gate ... even they must clear the held-out
+window (rule 3) before entering SELECTION." Under the strict reading that promise is already
+unkeepable for cluster 2, which stands at 4. (ii) Rule 2 keeps Bonferroni "only for the final
+promote gate (rule 3)", which treats that gate as its own stage — relevant to which
+multiplicity correction applies, weaker on the cap's scope. (iii) Cluster 15 is neutral on
+the question but shows the house treats a cluster's total budget as 3 and that a registered
+one-shot held-out test can occupy a slot: its third look was a registered re-look, not a
+rule-3 confirmation (`experts_last_look_2026_09.md` calls it the last re-look), and at 3 of 3
+the cluster was closed. An argument from rule 3 being unsatisfiable was offered earlier and is
+WITHDRAWN as invalid: rule 3 is a necessary condition for promotion, not an entitlement to a
+confirmation, so under the strict reading a cluster that spent both re-looks is simply not
+promotable, which is internally consistent.
+
+**What follows for cluster 1 under each reading.** Under the "outside the cap" reading the
+registered confirmation is legal and cluster 1 has no sweep re-look left, so a failure
+retires it with nothing to return to. Under the strict reading cluster 1 is at the cap and
+the confirmation would be its fourth look, which rule 4 does not allow. The choice decides
+whether #1227 may be run at all, so it belongs to the owner and is recorded as open.
+
+**What the count becomes after a run.** The §4 header counts "every test that draws on a
+cluster", so the confirmation counts in this column: cluster 1 would read 4 after the run
+under either reading of the cap. The 2026-09-23 row's cumulation cell, "3 (cluster 1) — the
+confirmation, charged at the run", is superseded in that figure; the row is left as written.
+
+**Clusters 3 and 9 also stand at the cap, and two earlier statements about 2 and 9 are now
+dead.** The 2026-09-23 row says clusters 2 and 9 "keep their looks unspent (measured power
+69% and 5%, so the one shot would buy nothing for either)". The first half is true of that
+look's charge and the parenthesis is not: cluster 9 stands at the cap and cluster 2 past it,
+so neither holds a spare shot. The same sentence is quoted in
+`ml_label_registry_design_2026_09_16.md` §8 step 3. Cluster 3's `Status` still reads
+"monitor" with a sunset of 2026-10 that has passed, and cluster 9's reads "held"; both imply
+a future look that rule 4 no longer provides. No status cell is changed here.
+
+**Cluster 2 is one past the cap and this note does not change its status.** Jun 1, Jul 2, ML
+corner 3, EWMA 2026-07-15 4 — the first look plus three re-looks against a cap of two.
+Recorded for the owner, count corrected, status untouched.
 
 **One filing note, no number affected.** The three burnt-panel probes of 2026-09-29 and
-2026-10-01 are covariate looks on `sel_ar_20` with ATR and MA50 as controls, and they sit
-in §4.1, whose own header scopes that annex to policy and ladder looks rather than to the
-§3 covariate family. Each is charged 0 (exploration), so no count moves either way.
+2026-10-01 are covariate looks on `sel_ar_20` with ATR and MA50 as controls, and they sit in
+§4.1, whose header scopes that annex to policy and ladder looks rather than to the §3
+covariate family. Each is charged 0 (exploration), so no count moves either way.
 
 ### 4.1 Policy- and ladder-side looks annex (charges the T5/T7 walk-forward budget, not the §3 covariate family)
 
