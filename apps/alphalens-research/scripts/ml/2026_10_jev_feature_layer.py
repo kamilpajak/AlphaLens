@@ -53,13 +53,15 @@ gains about 6 AUC points up to 32 000 and then gives some back. Zero refusals at
 any cap. 75.9 % of all articles are under 2000 chars, so the cap touches ~21 %
 of the store and all of them come from one source, `edgar_press_release`.
 
-Cost of the whole history at this cap, PROJECTED before the run: 23835 articles,
-28.8M input tokens, about $1.21. At the old 2000-char cap it would be $0.17.
+Cost of the ARTICLE leg over the whole history at this cap, PROJECTED before the
+run: 23835 articles, 28.8M input tokens, about $1.21. At the old 2000-char cap it
+would be $0.17. The projection covered that leg only.
 
 What it actually cost, summed from the `jev_cost_usd` the vendor charged (read on
 the production store 2026-11-06): $2.894739 for 23826 article rows under the
-current version token, plus $0.047553 for 1120 candidate rows. The projection was
-2.4x too low because it counted the article body and not the question documents,
+current version token, plus $0.047553 for 1120 candidate rows. Compared leg to
+leg, the article projection was 2.4x too low ($1.21 against $2.894739) because it
+counted the article body and not the question documents,
 which are re-sent on every call: a linear fit over the stored rows gives
 $0.0000589 per call plus $0.0000132 per 1000 body chars, so at the median body of
 333 chars the fixed part is 93 % of the cost. A superseded token
