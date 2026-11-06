@@ -637,3 +637,27 @@ class TestTheLoaderOwnsNoFrozenConstant(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheScreenCoversEveryStampedLabel(unittest.TestCase):
+    """The screen is a name shape, so it goes stale the moment the stamper adds a
+    label family. It already had: ``sel_zar_h`` and ``sel_car_mean_20`` are
+    written on every row of the production store and matched nothing, so the
+    blind path handed a held-out ``sel_zar_20`` value back without raising.
+
+    This pins the contract instead of the prefixes: every value column the
+    stamper writes must be refused by name. A new family then fails here rather
+    than silently leaking through the result assertion.
+    """
+
+    def test_every_value_key_the_stamper_writes_is_outcome_shaped(self):
+        from alphalens_pipeline.feedback.selection_label import VALUE_KEYS
+
+        missed = [key for key in VALUE_KEYS if not ep._OUTCOME_SHAPED.match(key)]
+        self.assertEqual([], missed)
+
+    def test_a_structural_column_is_not_outcome_shaped(self):
+        # The positive control: a screen that matched everything would pass the
+        # test above and refuse every legitimate blind read.
+        for column in ep.BLIND_STRUCTURE_COLUMNS:
+            self.assertIsNone(ep._OUTCOME_SHAPED.match(column), column)

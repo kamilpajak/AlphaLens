@@ -59,8 +59,23 @@ arrival. Every panel in the repo has this property and every registered number
 was computed with it. Reconciling them would move every panel, so it stays, and
 it has its own issue.
 
-Two of the four copies are NOT migrated onto this loader yet, for reasons worth
-recording so they are not re-litigated. ``2026_09_sel_ar_20_burnt_probe.py`` and
+No call site is migrated onto this loader, and for the two ``a20`` scripts that
+is a decision rather than a delay. ``2026_09_a20_atr_confirmation.py`` IS the
+#1227 registration — its docstring is the registered protocol — and ``a20_power.py``
+produced the power figure that registration is being judged on. Their blind
+paths can be diffed, because ``--preflight`` prints its panel. Their RUN paths
+cannot: proving that ``held_out_panel`` still returns the same episodes would mean
+reading held-out ``sel_ar_20`` values, which is the one-shot look itself. A
+registered instrument must not be refactored on a proof that cannot be taken, so
+both keep their copies until that look is spent.
+
+The pin those copies lack is measured, not hypothetical, and today it costs
+nothing: read on the production store 2026-11-06, ``sel_label_version`` holds one
+value, ``sel-label-v3``, on all 2268 rows and on all 1767 held-out rows. So
+requiring the pin changes no panel size today. The guard is for the day a second
+definition appears, which is exactly the day nobody would notice.
+
+The other two copies are not migrated either. ``2026_09_sel_ar_20_burnt_probe.py`` and
 ``2026_10_jev_discovery_burnt.py`` (a) keep ``arrival`` as a native ``dt.date``
 and feed it to ``session_open_utc``, so the string form would change what that
 call receives; (b) filter the cutoff on the ``brief_date`` COLUMN rather than the
@@ -105,11 +120,15 @@ BRIEF_KEY_COLUMN = "ticker"
 #: The column name the arrival session is returned under, on both paths.
 ARRIVAL_COLUMN = "arrival"
 
-#: A label value, by name shape. Outcomes live under ``sel_ar_*`` (the #1477
-#: selection labels), ``car_*`` (the earlier event-window labels) and
-#: ``sel_label_value*``. Used to screen caller arguments and to assert the
-#: returned frame, never to decide what to read — that is an allowlist.
-_OUTCOME_SHAPED = re.compile(r"^(sel_ar_|car_|sel_label_value)")
+#: A label value, by name shape. The stamper writes four families, not one:
+#: ``sel_ar_h`` and ``sel_ar_inc_lo_hi``, the beta-scaled ``sel_zar_h``, and the
+#: path mean ``sel_car_mean_20`` (``selection_label.VALUE_KEYS``). ``car_*``
+#: covers the earlier event-window labels and ``sel_label_value*`` the stored
+#: name. Used to screen caller arguments and to assert the returned frame, never
+#: to decide what to read — that is an allowlist. A name shape goes stale when a
+#: family is added, so ``TestTheScreenCoversEveryStampedLabel`` pins it against
+#: ``VALUE_KEYS`` rather than against these prefixes.
+_OUTCOME_SHAPED = re.compile(r"^(sel_ar_|sel_zar_|sel_car_|car_|sel_label_value)")
 
 #: An arrival session as the label store stamps it: a plain ISO date, exactly ten
 #: characters. Measured 2026-09-24 on 1001 held-out rows, every one matched.
