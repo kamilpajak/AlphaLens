@@ -131,8 +131,12 @@ def _seed_armed(
 
 
 def _run(deps: cl.LoopDeps, env: dict[str, str] | None = None) -> None:
+    """The pass, then the page drain: the pass only QUEUES its pages, and
+    ``run_once`` sends them after the protection pass."""
+    report = cl.TickReport()
     with mock.patch.dict("os.environ", {_ENV: "50"} if env is None else env, clear=True):
-        cl._run_entry_trail_reconcile_pass(deps, cl.TickReport())
+        cl._run_entry_trail_reconcile_pass(deps, report)
+    cl._drain_pages(report)
 
 
 class TestFilledArmedTierWritesFired(IsolatedHomeTestCase):

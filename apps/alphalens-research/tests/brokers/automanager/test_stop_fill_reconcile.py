@@ -128,10 +128,12 @@ def _deps(broker: Any, alerts: list[str], **over: Any) -> cl.LoopDeps:
 
 def _run(deps: cl.LoopDeps) -> cl.TickReport:
     """One reconcile step as run_once sequences it: the pass, then the
-    restart-safe sibling-retire sweep."""
+    restart-safe sibling-retire sweep, then the page drain (the pass only QUEUES
+    the stop-fill page; ``run_once`` sends it after the protection pass)."""
     report = cl.TickReport()
     cl._run_stop_fill_reconcile_pass(deps, report)
     cl._sweep_owed_sibling_retires(deps, report)
+    cl._drain_pages(report)
     return report
 
 
@@ -327,9 +329,9 @@ class TestStopFillAlertNamesTheStop(unittest.TestCase):
         if entries:
             _seed(_entry_journal(self), *entries)
         alerts: list[str] = []
-        cl._run_stop_fill_reconcile_pass(
-            _deps(_StopBroker(outcome=outcome), alerts), cl.TickReport()
-        )
+        report = cl.TickReport()
+        cl._run_stop_fill_reconcile_pass(_deps(_StopBroker(outcome=outcome), alerts), report)
+        cl._drain_pages(report)  # the pass only queues the page
         self.assertEqual(len(alerts), 1, alerts)
         return alerts[0]
 

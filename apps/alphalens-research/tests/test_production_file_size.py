@@ -426,7 +426,22 @@ BASELINE: dict[str, int] = {
     # ``run_once``), so a stop never STARTS a placement that systemd's SIGKILL at
     # 90 s could cut between its broker POST and its journal record. Main never
     # began one after the signal. Counted with ``wc -l`` (8503 before, 8527 after).
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8527,
+    # +111 to move the operator pages that were still sent inline BEFORE the protection
+    # pass onto the ``_queue_page`` / ``_drain_pages`` path: the stop fill, the #1198
+    # sibling retire (its three pages), the entry fill with its ceiling breach, and the
+    # take-profit sell. Measured on ``run_once`` with a 2 s sink, a stop fill with an
+    # open sibling delayed the protection pass by 4 s, an entry fill and a take-profit
+    # by 2 s each. The room buys the ``try`` of ``run_once`` opening at the entry-trail
+    # reconcile, the first pass that queues, with the comment that says why (the trade
+    # pages and the "retired N" page follow a journal latch, so a raise in a later pass
+    # would lose them for good, and only a FIRST signal lets the tick finish); most of
+    # that diff is the pass block re-indented one level. The rest is the queue calls,
+    # ``_queue_retire_page`` and ``_send_trade_page`` (a ``functools.partial`` target,
+    # so a loop of tranches cannot share one closure), and the docstrings that now say
+    # the pages wait and in which order: ``_queue_page``, ``_reconcile_one_standing_stop``
+    # (why the fill event is built at the fill) and ``_announce_fired_tranches``.
+    # Counted with ``wc -l`` after ruff format, on top of #1864 (8527 before, 8638 after).
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8638,
     # +1 to correct the comment beside ``_OCO_LAG_HOLD_REASON``. It claimed a rename
     # of that literal "fails the control-loop tests loudly"; measured, renaming it to
     # "oco-lag-held" leaves all 552 control-loop tests green, because they read the

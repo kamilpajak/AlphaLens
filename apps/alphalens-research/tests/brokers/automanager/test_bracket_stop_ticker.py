@@ -98,7 +98,9 @@ class _BracketStopCase(IsolatedHomeTestCase):
         stops.write_text(json.dumps(_RHI_STOP_PLACED) + "\n", encoding="utf-8")
         alerts: list[str] = []
         broker = _StopBroker(outcome=_filled(_RHI_ORDER, 1796.0, 40.46))
-        cl._run_stop_fill_reconcile_pass(_deps(broker, alerts), cl.TickReport())
+        report = cl.TickReport()
+        cl._run_stop_fill_reconcile_pass(_deps(broker, alerts), report)
+        cl._drain_pages(report)  # the pass only queues the page
         self.assertEqual(len(alerts), 1, alerts)
         return alerts[0]
 
@@ -324,7 +326,9 @@ class TestThePageAndTheCommandAgree(_BracketStopCase):
         )
         alerts: list[str] = []
         broker = _StopBroker(outcome=_filled(_RHI_ORDER, 1796.0, 40.46))
-        cl._run_stop_fill_reconcile_pass(_deps(broker, alerts), cl.TickReport())
+        tick = cl.TickReport()
+        cl._run_stop_fill_reconcile_pass(_deps(broker, alerts), tick)
+        cl._drain_pages(tick)  # the pass only queues the page
         self.assertEqual(
             alerts, ["SELL RHI SL 1796 @ 40.46 - plan stop - position closed (order 5040004072)"]
         )

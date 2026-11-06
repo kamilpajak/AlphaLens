@@ -208,7 +208,9 @@ class _ExitPageCase(IsolatedHomeTestCase):
         if entries:
             self.journals.seed(self.journals.entries, *entries)
         pages: list[str] = []
-        cl._run_stop_fill_reconcile_pass(_deps(_StopBroker(outcome), pages), cl.TickReport())
+        report = cl.TickReport()
+        cl._run_stop_fill_reconcile_pass(_deps(_StopBroker(outcome), pages), report)
+        cl._drain_pages(report)  # the pass only queues the page
         self.assertEqual(len(pages), 1, pages)
         return pages[0]
 
@@ -846,13 +848,15 @@ class TheSubmittedExitPageCarriesItsTarget(unittest.TestCase):
 
     def _page(self, tranche: live_exit_engine.FiredTranche) -> str:
         pages: list[str] = []
+        report = cl.TickReport()
         cl._announce_fired_tranches(
             _deps(object(), pages),
             [tranche],
             {_UIC: ("VST", "XNYS")},
             [],
-            cl.TickReport(),
+            report,
         )
+        cl._drain_pages(report)  # the page is queued; ``run_once`` drains after protection
         self.assertEqual(len(pages), 1, pages)
         return pages[0]
 
