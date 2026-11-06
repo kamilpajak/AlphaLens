@@ -3,7 +3,7 @@
 **Status:** LOCKED 2026-09-17 — owner decisions D1-D5 taken (§9); evidence and review record in §12. Nothing here changes a running registration (§7), with one planned amendment before a registration is filed (#1227, §8 step 3). **That amendment was filed** (2026-09-21 row of `edge_hypothesis_budget_2026_07.md` §4, clusters 1, 2 and 9 moved from `car_10` to `sel_ar_20`) and **#1227 was registered on 2026-09-23 as a family of ONE, ATR only** — not the three-signal Holm family §8 step 3 describes. The step-3 text is left as written; the appended note at the end of step 3 is the correction.
 **Date:** 2026-09-16
 **Scope:** the TARGET (label) of every future ML model over the thematic and event lanes. Not the features, not the model class, not `/edge` display.
-**Parents:** ADR 0013 (T1-T8 layers, R1/R2), `apps/alphalens-research/scripts/ml/README.md` (house rules 1-12), `edge_hypothesis_budget_2026_07.md` (looks ledger), `docs/superpowers/specs/2026-06-16-fixed-horizon-car-survival-fill-design.md` (the `car_k` origin), PR #996 (market-model beta), `insider_cluster_forward_prereg_2026_09.md` (`car_20_event`).
+**Parents:** ADR 0013 (T1-T8 layers, R1/R2), `apps/alphalens-research/scripts/ml/README.md` (house rules 1-13), `edge_hypothesis_budget_2026_07.md` (looks ledger), `docs/superpowers/specs/2026-06-16-fixed-horizon-car-survival-fill-design.md` (the `car_k` origin), PR #996 (market-model beta), `insider_cluster_forward_prereg_2026_09.md` (`car_20_event`).
 
 ---
 

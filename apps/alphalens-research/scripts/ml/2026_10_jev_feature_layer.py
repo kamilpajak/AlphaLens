@@ -92,7 +92,11 @@ USAGE
 Idempotent: a row already present for its unit under the CURRENT feature version
 is not recomputed. A version bump recomputes everything, by design.
 
-Last run: not yet run.
+Last run: the whole history, both passes. The store holds 136 `article` and
+134 `candidate` parquet files, newest 2026-09-30 (VPS, read 2026-11-06);
+`TITLE_CHAR_CAP` and the transport-retry policy below are measurements from
+that run (23823 article calls, one non-transport give-up). Dates after
+2026-09-30 are not built.
 """
 
 from __future__ import annotations
