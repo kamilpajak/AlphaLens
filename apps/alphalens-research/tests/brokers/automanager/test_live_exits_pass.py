@@ -595,7 +595,9 @@ class TestLiveExitsFlagOnFires(_JournalCase):
                 live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 16.5}),
             )
             with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
-                cl._run_live_exits_pass(deps, cl.TickReport())
+                report = cl.TickReport()
+                cl._run_live_exits_pass(deps, report)
+                cl._drain_pages(report)  # the pages are queued; ``run_once`` drains
         cancelled = [
             _json.loads(ln)
             for ln in entry_path.read_text().splitlines()
@@ -671,6 +673,7 @@ class TestLiveExitsFlagOnFires(_JournalCase):
         with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
             report = cl.TickReport()
             cl._run_live_exits_pass(deps, report)
+        cl._drain_pages(report)  # the page is queued; ``run_once`` drains after protection
         self.assertEqual(len(seen), 1)
         msg, reason = seen[0]
         # #1621: the SELL was SENT; no fill was read back, so no fill price and
@@ -948,6 +951,7 @@ class TestLiveExitsFeedConstructionBoundary(IsolatedHomeTestCase):
         report = cl.TickReport()
         feed = cl._build_live_exits_feed(deps, {211: ("AAPL", "XNYS")}, report)
         self.assertIsNone(feed.latest(211))
+        cl._drain_pages(report)  # the page is queued and sent after protection (#1867)
         self.assertEqual(len(alerts), 1)
         self.assertIn("live-exits", alerts[0])
         self.assertEqual(report.alerts, 1)
@@ -983,6 +987,7 @@ class TestLiveExitsFeedConstructionBoundary(IsolatedHomeTestCase):
             alert_throttled=throttled,
         )
         cl._build_live_exits_feed(deps_1, {211: ("AAPL", "XNYS")}, report)  # tick 1
+        cl._drain_pages(report)  # each tick sends its own queue (#1867)
         deps_2 = _deps(
             broker=object(),
             alerts=alerts,
@@ -990,6 +995,7 @@ class TestLiveExitsFeedConstructionBoundary(IsolatedHomeTestCase):
             alert_throttled=throttled,
         )
         cl._build_live_exits_feed(deps_2, {211: ("AAPL", "XNYS")}, report)  # tick 2
+        cl._drain_pages(report)
         self.assertEqual(len(alerts), 1)
         self.assertEqual(report.alerts, 1)
 
@@ -1027,6 +1033,7 @@ class TestLiveExitsFeedConstructionFailureEndToEnd(_JournalCase):
         sl = next(o for o in broker.list_working_sell_orders() if o.order_type == "StopIfTraded")
         self.assertEqual(sl.amount, 100.0)
         self.assertEqual(report.exits_placed, 0)
+        cl._drain_pages(report)  # the page is queued and sent after protection (#1867)
         self.assertEqual(len(alerts), 1)
 
 
@@ -1494,8 +1501,9 @@ class TestStopRaisePagesTheOperator(_JournalCase):
 
         self.assertEqual(
             [what for what, _send in report.pending_pages],
-            ["stop-raised"],
-            "the raise was computed and queued before the engine ran",
+            ["stop-raised", "live-exits"],
+            "the raise was computed and queued before the engine ran; the engine's "
+            "own failure page is queued after it (#1867), not sent inline",
         )
         self.assertEqual(
             [msg for msg, _key in pages if "resting" in msg],
@@ -1632,6 +1640,7 @@ class TestLiveExitsPassCapabilityGuard(IsolatedHomeTestCase):
         with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
             report = cl.TickReport()
             cl._run_live_exits_pass(deps, report)  # must not raise
+        cl._drain_pages(report)  # the page is queued and sent after protection (#1867)
         self.assertTrue(
             any("live-exit capability" in msg for msg in alerts),
             f"expected the capability-skip alert, got: {alerts}",

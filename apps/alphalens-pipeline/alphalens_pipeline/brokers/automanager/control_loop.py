@@ -455,7 +455,8 @@ class TickReport:
     # The alert sink is a synchronous HTTP POST whose own bound is tens of
     # seconds, so it may not sit between a position and its stop —
     # ``_queue_page`` / ``_drain_pages`` carry the whole argument. Per TICK, not
-    # per daemon: a report is built fresh in ``run_once``.
+    # per daemon: a report is built fresh by ``run_once`` and by
+    # ``_run_fill_wake_protection``, and each one drains its own.
     pending_pages: list[tuple[str, Callable[[], bool]]] = field(default_factory=list)
 
 
@@ -639,71 +640,90 @@ def run_once(
     if sweep_orphans:
         _run_orphan_sweep(deps, report)
 
-    # PR-T2b fill-reconcile (Finding 1) MUST run BEFORE the placement drain: a
-    # native trail that filled appears in the broker positions immediately, but its
-    # tier stays NON-terminal in the fold until this pass writes the terminal
-    # `fired` line that releases the virtual gross reservation. If the drain's
-    # gross-cap / cash-floor check ran FIRST, the filled
-    # tier would be counted TWICE (once as a filled position, once as its still-live
-    # virtual reservation) — spuriously breaching the cap and holding another
-    # valid pick drained the same tick (#1734: it waits instead of being
-    # refused, but it would still wait for capital that is in fact free). Reconciling first
-    # releases the reservation so the drain counts it once. UNGATED by KILL (a fill
-    # during an emergency stop must still release + is covered by the fire-arm
-    # planned disaster line) and a no-op when the flag is unset/0; it writes ONLY
-    # terminals — never places — so this call site is unconditional (ahead of the
-    # placement gate). Running before the watch pass is safe: a tier armed THIS tick
-    # just placed a WORKING order (reconcile no-ops on it), so it only reconciles
-    # prior-tick resting orders.
-    _run_entry_trail_reconcile_pass(deps, report)
-
-    # #1219 stop-fill reconcile: announce a standalone stop that FILLED at the
-    # broker (terminal `stop_filled` line + ONE throttled alert). Placement-order
-    # independent (no money-gate fold reads it) but grouped with the entry
-    # reconcile on purpose: both are journal-vs-book terminal writers, UNGATED
-    # by KILL, and both draw on the same per-tick audit budget started above.
-    _run_stop_fill_reconcile_pass(deps, report)
-    # #1198 restart-safe backstop: re-derive owed sibling retires from the
-    # durable round-trip records (crash between a terminal write and the
-    # inline retire self-heals here; idempotent, quiet in steady state).
-    _sweep_owed_sibling_retires(deps, report)
-
-    _run_placement_drain(deps, report, enabled=not kill and alive, keep_placing=keep_placing)
-
-    # Entry-trailing watcher pass: advance each open watch's
-    # state machine off the shared INC-2 price stream. KILL-GATED internally
-    # (memo §3 G2 — no open-watch/touch/would-fire/journal under KILL) and a
-    # no-op when ALPHALENS_BROKER_ENTRY_TRAIL_BPS is unset/0, so this call site
-    # is unconditional and the flag alone controls behaviour. Runs every tick
-    # regardless of chain-alive (like the exit/protection passes) so time-based
-    # expiry + measurement never stall on a dead session. The fire path PLACES:
-    # at the TOUCH it POSTs a native Saxo trailing-limit entry order, gated on
-    # ALLOW_ORDERS (see the section comment above `_ENTRY_REARM_MARKER`).
-    _run_entry_watch_pass(deps, kill, report)
-
-    # The verdict-level advance loop (terminal / round-trip CancelRemaining +
-    # divergence alerts) and the broker-state protection pass are INDEPENDENT: a
-    # reconcile-bridge or position-view BrokerError must not skip protection (the
-    # safety-critical path). Each reads the journal fresh and owns its boundary.
-    records = deps.read_records()
-    _run_verdict_advance(deps, records, report)
-    # Live TP-tranche exits (INC-5) run IMMEDIATELY BEFORE protection so the
-    # engine's synchronous shrink-SL-then-market-sell fully settles on this
-    # thread before the protection pass re-asserts SL == owned as the
-    # never-naked backstop — protection stays the LAST pass every tick.
-    # Internally gated on the flag (default OFF): a no-op when off, so this
-    # call site is unconditional and the flag alone controls behaviour.
+    # The operator pages of the passes below (the entry fill and its ceiling
+    # breach, the stop fill and its sibling retire, the take-profit sell, the
+    # live-exits failures, the stop placed and raised) are QUEUED (``_queue_page``) and sent by the ``finally`` below, after every
+    # protective pass: the sink is a synchronous POST bounded at tens of seconds
+    # and not bounded at all on DNS, so it may not sit between a position and
+    # its stop. The ``try`` opens HERE, at the first pass that queues, and not at
+    # the protection pass: the passes journal a latch (``fired``,
+    # ``stop_filled``, ``cancelled``, ``tranche_fired``) BEFORE they queue the
+    # trade pages and the "retired N sibling tier(s)" page, so no later tick
+    # pages those events again, and a raise in any pass in between (an
+    # undecodable byte or an I/O error in ``deps.read_records`` is one; a
+    # malformed JSON line is skipped, not raised) would otherwise take the page
+    # with it. The retire "skipped" and "journal write error" pages carry no
+    # latch and come back next tick. The ``finally`` only sends; the raise still
+    # propagates. A FIRST SIGTERM or SIGINT does not cut the tick short:
+    # ``broker manage`` installs ``GracefulStop`` (#1864). A second signal, a
+    # SIGKILL or an OOM kill still does, and the pages queued so far are then
+    # lost, because their latches are already written.
     try:
+        # PR-T2b fill-reconcile (Finding 1) MUST run BEFORE the placement drain: a
+        # native trail that filled appears in the broker positions immediately, but its
+        # tier stays NON-terminal in the fold until this pass writes the terminal
+        # `fired` line that releases the virtual gross reservation. If the drain's
+        # gross-cap / cash-floor check ran FIRST, the filled
+        # tier would be counted TWICE (once as a filled position, once as its still-live
+        # virtual reservation) — spuriously breaching the cap and holding another
+        # valid pick drained the same tick (#1734: it waits instead of being
+        # refused, but it would still wait for capital that is in fact free). Reconciling first
+        # releases the reservation so the drain counts it once. UNGATED by KILL (a fill
+        # during an emergency stop must still release + is covered by the fire-arm
+        # planned disaster line) and a no-op when the flag is unset/0; it writes ONLY
+        # terminals — never places — so this call site is unconditional (ahead of the
+        # placement gate). Running before the watch pass is safe: a tier armed THIS tick
+        # just placed a WORKING order (reconcile no-ops on it), so it only reconciles
+        # prior-tick resting orders.
+        _run_entry_trail_reconcile_pass(deps, report)
+
+        # #1219 stop-fill reconcile: announce a standalone stop that FILLED at
+        # the broker (terminal `stop_filled` line + ONE throttled page).
+        # Placement-order independent (no money-gate fold reads it) but grouped
+        # with the entry reconcile on purpose: both are journal-vs-book terminal
+        # writers, UNGATED by KILL, and both draw on the same per-tick audit
+        # budget started above.
+        _run_stop_fill_reconcile_pass(deps, report)
+        # #1198 restart-safe backstop: re-derive owed sibling retires from the
+        # durable round-trip records (crash between a terminal write and the
+        # inline retire self-heals here; idempotent, quiet in steady state).
+        _sweep_owed_sibling_retires(deps, report)
+
+        _run_placement_drain(deps, report, enabled=not kill and alive, keep_placing=keep_placing)
+
+        # Entry-trailing watcher pass: advance each open watch's state machine
+        # off the shared INC-2 price stream. KILL-GATED internally (memo §3 G2 —
+        # no open-watch/touch/would-fire/journal under KILL) and a no-op when
+        # ALPHALENS_BROKER_ENTRY_TRAIL_BPS is unset/0, so this call site is
+        # unconditional and the flag alone controls behaviour. Runs every tick
+        # regardless of chain-alive (like the exit/protection passes) so
+        # time-based expiry + measurement never stall on a dead session. The fire
+        # path PLACES: at the TOUCH it POSTs a native Saxo trailing-limit entry
+        # order, gated on ALLOW_ORDERS (see the section comment above
+        # `_ENTRY_REARM_MARKER`).
+        _run_entry_watch_pass(deps, kill, report)
+
+        # The verdict-level advance loop (terminal / round-trip CancelRemaining +
+        # divergence alerts) and the broker-state protection pass are
+        # INDEPENDENT: a reconcile-bridge or position-view BrokerError must not
+        # skip protection (the safety-critical path). Each reads the journal
+        # fresh and owns its boundary.
+        records = deps.read_records()
+        _run_verdict_advance(deps, records, report)
+        # Live TP-tranche exits (INC-5) run IMMEDIATELY BEFORE protection so the
+        # engine's synchronous shrink-SL-then-market-sell fully settles on this
+        # thread before the protection pass re-asserts SL == owned as the
+        # never-naked backstop — protection stays the LAST pass every tick.
+        # Internally gated on the flag (default OFF): a no-op when off, so this
+        # call site is unconditional and the flag alone controls behaviour.
         _run_live_exits_pass(deps, report)
         _run_protection_pass(deps, records, kill, report)
     finally:
-        # The stop pages #1621 part 3 added, sent only now that every protective
-        # action of this tick has run. The sink is a synchronous POST bounded at
-        # tens of seconds and not bounded at all on DNS, so it may not sit
-        # between a position and its stop; the passes above only APPEND to the
-        # queue (``_queue_page``). In a ``finally`` because the two passes carry
-        # their own ``BrokerError`` boundaries but not every boundary, and a page
-        # the operator never gets is the loss this part exists to fix.
+        # The queued pages (the comment above the ``try`` lists them), sent only
+        # now that every protective action of this tick has run. In a ``finally`` because the
+        # passes carry their own ``BrokerError`` boundaries but not every
+        # boundary, and a page the operator never gets is the loss #1621 part 3
+        # exists to fix.
         _drain_pages(report)
     report.audits_deferred = deps.audit_budget.deferred
     return report
@@ -1464,11 +1484,13 @@ def _build_live_exits_feed(
     # the whole point of this boundary is that it does not need to know what
     # can go wrong inside the factory, only that a doubt becomes a veto.
     except Exception as exc:
-        if deps.alert_throttled(
+        _queue_alert_page(
+            deps,
+            report,
             f"live-exits: price feed construction failed — degrading to no-prices: {exc}",
             "live-exits-feed-build-fail",
-        ):
-            report.alerts += 1
+            what="live-exits",
+        )
         return _NullPriceFeed()
 
 
@@ -1574,11 +1596,13 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
     try:
         long_positions = broker.get_long_positions()
     except BrokerError as exc:
-        if deps.alert_throttled(
+        _queue_alert_page(
+            deps,
+            report,
             f"live-exits: position read failed (broker error) — skipped: {exc}",
             "live-exits-posread-fail",
-        ):
-            report.alerts += 1
+            what="live-exits",
+        )
         return
     journal_lines = list(stop_journal._iter_standalone_stop_journal())
     stop_raises: list[StopRaise] = []
@@ -1635,11 +1659,17 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
         # The report is deliberately NOT logged here: a pass that died midway
         # holds a partial picture, and a partial picture presented as the
         # pass's outcome is exactly the misreading this reporting exists to end.
-        if deps.alert_throttled(
+        # Queued, not sent: on a full-close take-profit the engine has already
+        # cancelled the stop when the market sell raises, so the position is
+        # naked until the protection pass after this one. See
+        # :func:`_queue_alert_page`.
+        _queue_alert_page(
+            deps,
+            report,
             f"live-exits: pass failed (broker error) — skipped: {exc}",
             "live-exits-run-fail",
-        ):
-            report.alerts += 1
+            what="live-exits",
+        )
         return
     if (line := _render_exit_dispositions(fired=len(fired), dispositions=dispositions)) is not None:
         logger.info("%s", line)
@@ -1701,15 +1731,23 @@ def _live_exits_broker_or_none(deps: LoopDeps, report: TickReport) -> LiveExitBr
         # composed deps, i.e. tests. Skip + alert, NEVER an AttributeError: the
         # caller's try catches only BrokerError, so an AttributeError would escape
         # and starve the protection pass that follows in the tick (#1141).
-        if deps.alert_throttled(
+        _queue_alert_page(
+            deps,
+            report,
             f"live-exits: broker {getattr(broker, 'name', '?')!r} lacks the "
             "live-exit capability set (LiveExitBroker) — pass skipped",
             "live-exits-capability",
-        ):
-            report.alerts += 1
+            what="live-exits",
+        )
         _release_feed_scope(deps, _FEED_SCOPE_EXITS)
         return None
     return broker
+
+
+def _send_trade_page(deps: LoopDeps, event: trade_alerts.TradeEvent, key: str) -> bool:
+    """Render and send one queued trade page (the deferred half of
+    :func:`_queue_page`): the render runs inside the drain's containment."""
+    return deps.alert_throttled(trade_alerts.render(event), key)
 
 
 def _announce_fired_tranches(
@@ -1719,10 +1757,11 @@ def _announce_fired_tranches(
     journal_lines: Sequence[Mapping[str, Any]],
     report: TickReport,
 ) -> None:
-    """#1219: exits announce themselves — ONE throttled alert per fired
-    tranche, rendered HERE (not in the engine, which stays port-free and
-    knows no tickers). The (uic, tag) key lets a repeat within the throttle
-    window dedup while a distinct tranche still notifies."""
+    """#1219: exits announce themselves — ONE throttled page per fired
+    tranche, built HERE (not in the engine, which stays port-free and knows no
+    tickers) and QUEUED for the drain after the protection pass. The (uic, tag)
+    key lets a repeat within the throttle window dedup while a distinct tranche
+    still notifies."""
     for tranche in fired:
         ticker = uic_to_instrument.get(tranche.uic, (f"uic {tranche.uic}", None))[0]
         # SUBMITTED, not filled: the engine sends a market SELL and reads no fill
@@ -1738,10 +1777,17 @@ def _announce_fired_tranches(
             order_id=tranche.sell_order_id or None,
             position_closed=tranche.position_closed,
         )
-        if deps.alert_throttled(
-            trade_alerts.render(event), f"tranche-fired:{tranche.uic}:{tranche.tag}"
-        ):
-            report.alerts += 1
+        # QUEUED (:func:`_queue_page`): this pass runs IMMEDIATELY before the
+        # protection pass. ``functools.partial`` binds THIS tranche's event and
+        # key: a lambda here would close over the loop variable and send the
+        # last tranche once per tranche.
+        _queue_page(
+            functools.partial(
+                _send_trade_page, deps, event, f"tranche-fired:{tranche.uic}:{tranche.tag}"
+            ),
+            report,
+            what="take-profit",
+        )
         if tranche.position_closed:
             # #1198 option B: a TP exit that closed the position produces
             # no stop fill (the SL is CANCELLED), so the sibling-watch
@@ -3424,7 +3470,8 @@ def _run_stop_fill_reconcile_pass(deps: LoopDeps, report: TickReport) -> None:
     Mirrors ``_run_entry_trail_reconcile_pass`` exactly: journaled order id ->
     gone from the open-orders book -> ONE budgeted audit-log resolution -> on a
     FILLED outcome the terminal ``stop_filled`` line FIRST (the idempotence
-    latch), then ONE throttled operator alert. Runs UNGATED by KILL (a stop that
+    latch), then ONE throttled operator page, QUEUED for the drain that
+    ``run_once`` runs after the protection pass. Runs UNGATED by KILL (a stop that
     fills during an emergency stop must still be announced; the pass writes only
     terminals — it never places, amends or cancels) and needs no feature flag:
     it is a no-op whenever no journaled stop id is outstanding.
@@ -3545,16 +3592,20 @@ def _stop_page_ticker(ref: str | None, uic: int) -> str:
     The path resolution and the pure join stay OUTSIDE that catch, and the two
     callers contain a defect differently. On the stop-placed page,
     :func:`_drain_pages` catches it: that page is lost and a WARNING logged. On
-    the stop-fill page nothing does: it escapes the tick after ``stop_filled``
-    is latched, so the page is lost and that tick's protection pass is skipped.
+    the stop-fill page nothing does: it escapes the pass after ``stop_filled``
+    is latched, so that page is lost and that tick's protection pass is skipped
+    (the ``finally`` in ``run_once`` still sends the pages queued before it).
     That is why the join is pure and is held never to raise on anything a JSON
     journal can contain, rather than being wrapped.
 
     One ``submissions.jsonl`` read per call, and only for a bracket ref. The
     stop-placed page pays it in the DEFERRED send (:func:`_queue_page`), never
     between two ``execute_protection`` calls. The stop-fill page pays it
-    SYNCHRONOUSLY: the stop-fill reconcile runs before the protection pass of
-    the same tick, so the read delays that pass by its own cost. Measured at
+    SYNCHRONOUSLY, by choice: that page is queued too, but its facts are read
+    at the fill, because the same tick writes the entry-trails journal between
+    the pass and the drain (see :func:`_reconcile_one_standing_stop`). The
+    stop-fill reconcile runs before the protection pass of the same tick, so
+    the read delays that pass by its own cost. Measured at
     about 4 us a record (0.2 ms for LIVE's 60 today, 40 ms at 10k); the tick
     already reads the whole same file every time in ``deps.read_records``."""
     ticker = stop_journal._ticker_from_ref(ref)
@@ -3583,7 +3634,24 @@ def _reconcile_one_standing_stop(
 ) -> None:
     """Reconcile ONE journaled standing stop: gone-from-book -> budgeted
     resolution -> on FILLED, the terminal ``stop_filled`` line first, then one
-    throttled alert, then the #1198 sibling retire (full fills only)."""
+    throttled page QUEUED for the drain, then the #1198 sibling retire (full
+    fills only).
+
+    The page goes out after the protection pass (:func:`_queue_page`). The
+    sibling retire runs before the drain, and its own "retired N sibling
+    tier(s)" page is queued behind the fill page, so the operator still reads
+    the fill first. Nothing in the retire reads the page: it acts on the journal
+    and the stop ref only.
+
+    The event is BUILT here and only the render and the send are deferred. The
+    ticker and the R come from two journal reads (``submissions.jsonl`` and the
+    entry-trails fold), and the entry-trails journal is written by this same
+    tick between here and the drain: by the sibling retire below, the owed-retire
+    sweep, the entry-watch pass and the live-exits pass. No writer known today changes either answer
+    in that window (the retire and the sweep write ``cancelled`` terminals on
+    tiers that never filled, and the R blends FIRED tiers only), but a journal
+    write there COULD, and the page must state what was true at the fill. That
+    is worth more than the 0.2 ms the reads cost here."""
     from broker_contract.contract import OrderStatus
 
     if not _armed_order_is_gone(_read_entry_order(broker, stop.order_id)):
@@ -3629,8 +3697,15 @@ def _reconcile_one_standing_stop(
             uic, stop, journal_lines, plan_pick_keys, filled_qty, avg_price, partial=partial
         ),
     )
-    if deps.alert_throttled(trade_alerts.render(event), f"stop-fill:{stop.order_id}"):
-        report.alerts += 1
+    # QUEUED, not sent: this pass runs before every protective pass of the tick,
+    # and the sink is a synchronous POST (:func:`_queue_page`). ``run_once``
+    # drains in a ``finally`` that covers this pass, because the ``stop_filled``
+    # latch above is already down and no later tick would page this fill again.
+    _queue_page(
+        lambda: deps.alert_throttled(trade_alerts.render(event), f"stop-fill:{stop.order_id}"),
+        report,
+        what="stop-fill",
+    )
     if partial:
         return
     # #1198 option B: the round trip is over — retire the pick's still-open
@@ -3742,28 +3817,58 @@ def _retire_sibling_watches(
             pick_key, note=f"sibling retire: position round-tripped ({trigger}) — #1198"
         )
     except entry_trails.DisarmRestingOrderError as exc:
-        if deps.alert_throttled(
+        _queue_retire_page(
+            deps,
+            report,
             f"entry-watch: sibling retire of {pick_key} skipped — {exc}",
             f"sibling-retire-armed:{pick_key}",
-        ):
-            report.alerts += 1
+        )
         return
     except OSError as exc:
         # A journal write failure (ENOSPC, permissions) must never escape the
         # tick — it would starve the protection pass (zen MEDIUM on #1222).
         # The restart-safe sweep retries next tick off the durable record.
-        if deps.alert_throttled(
+        _queue_retire_page(
+            deps,
+            report,
             f"entry-watch: sibling retire of {pick_key} failed — journal write error: {exc}",
             f"sibling-retire-io:{pick_key}",
-        ):
-            report.alerts += 1
+        )
         return
-    if cancelled and deps.alert_throttled(
-        f"entry-watch: retired {len(cancelled)} sibling tier(s) of {pick_key} "
-        f"after round-trip ({trigger})",
-        f"sibling-retire:{pick_key}",
-    ):
-        report.alerts += 1
+    if cancelled:
+        _queue_retire_page(
+            deps,
+            report,
+            f"entry-watch: retired {len(cancelled)} sibling tier(s) of {pick_key} "
+            f"after round-trip ({trigger})",
+            f"sibling-retire:{pick_key}",
+        )
+
+
+def _queue_retire_page(deps: LoopDeps, report: TickReport, message: str, key: str) -> None:
+    """QUEUE one sibling-retire page (:func:`_queue_page`). Every caller of the
+    retire runs before the protection pass of the tick (the stop-fill pass, the
+    owed-retire sweep, the live-exits pass), inside the ``try`` of ``run_once``
+    whose ``finally`` sends it, so a hung POST no longer delays a stop. For the
+    "retired N" page the ``cancelled`` lines are the latch: that page, once
+    lost, would not come again. The "skipped" and "journal write error" pages
+    write no latch and are sent again on the next tick that retries."""
+    _queue_alert_page(deps, report, message, key, what="sibling-retire")
+
+
+def _queue_alert_page(
+    deps: LoopDeps, report: TickReport, message: str, key: str, *, what: str
+) -> None:
+    """QUEUE one ready-made alert (:func:`_queue_page`) under its throttle key.
+
+    For a page whose text is fixed when it is computed: the send only delivers.
+    Every caller runs inside the ``try`` of ``run_once`` whose ``finally``
+    sends the queue, so the page goes out after the protection pass instead of
+    holding it up for the sink's 34-64 s bound, unbounded on DNS. The
+    live-exits failure pages use it because one of them sits where a position
+    is NAKED: a full-close take-profit cancels the stop before its market sell,
+    and when that sell raises only the protection pass puts the stop back."""
+    _queue_page(functools.partial(deps.alert_throttled, message, key), report, what=what)
 
 
 def _reconcile_one_armed_tier(
@@ -3845,8 +3950,17 @@ def _reconcile_one_armed_tier(
         price=avg_price,
         order_id=order_id,
     )
-    if deps.alert_throttled(trade_alerts.render(event), f"entry-trail:fired:{crid}"):
-        report.alerts += 1
+    # QUEUED, not sent (:func:`_queue_page`): the stop of the position this fill
+    # just opened is placed by the protection pass of this same tick, and a hung
+    # POST here would hold it back. The ``fired`` line above is the latch, so the
+    # drain that sends this sits in the ``finally`` of ``run_once`` that covers
+    # this pass. The event holds no journal read, so building it here or at the
+    # drain says the same thing; only the render and the send wait.
+    _queue_page(
+        lambda: deps.alert_throttled(trade_alerts.render(event), f"entry-trail:fired:{crid}"),
+        report,
+        what="entry-fill",
+    )
     _announce_ceiling_breach(deps, crid, observation, report)
 
 
@@ -3867,14 +3981,18 @@ def _announce_ceiling_breach(
     ``fired`` line records which of the two it was)."""
     if observation is None or not observation.breached:
         return
-    if deps.alert_throttled(
+    message = (
         f"entry-trail {human_label_from_external_reference(crid)}: filled "
         f"{observation.fill:g} ABOVE its "
         f"{observation.ceiling:g} ceiling (+{observation.breach_bps:.1f} bps) — "
-        "the G1 clamp is not enforced on this order type (#1317)",
-        f"entry-trail:ceiling-breach:{crid}",
-    ):
-        report.alerts += 1
+        "the G1 clamp is not enforced on this order type (#1317)"
+    )
+    # QUEUED behind the fill page it explains, for the same reason.
+    _queue_page(
+        lambda: deps.alert_throttled(message, f"entry-trail:ceiling-breach:{crid}"),
+        report,
+        what="ceiling-breach",
+    )
 
 
 def _armed_order_is_gone(state: OrderState | None) -> bool:
@@ -7809,10 +7927,29 @@ def _queue_page(send: Callable[[], bool], report: TickReport, *, what: str) -> N
     stop after a restart the last one waits minutes while naked. The stop-raised
     page sits before the feed-scope write, the exits engine and the whole
     protection pass — the never-naked backstop — and a restart re-derives one
-    raise per managed position, so N hung pages serialise ahead of it.
+    raise per managed position, so N hung pages serialise ahead of it. The
+    entry-fill, ceiling-breach and stop-fill pages sit in the reconcile passes
+    near the top of the tick, ahead of every position's protection (the
+    entry-fill page ahead of the stop of the very position it announces). The
+    sibling-retire pages come from the stop-fill pass, the owed-retire sweep and
+    the live-exits pass, and the take-profit page from the live-exits pass,
+    right before protection. Measured on ``run_once`` with a 2 s sink, a stop
+    fill with an open sibling, an entry fill and a take-profit each delayed the
+    protection pass by 2 s per page.
 
-    The page is still computed HERE, where its facts are: ``send`` is a zero-arg
-    callable that BUILDS and renders too, so a render failure is contained with
+    The drain sends in queue order, which is pass order: entry fill, ceiling
+    breach, stop fill, its sibling retire, the owed-retire sweep, stop raised,
+    take-profit, the retire after a closing take-profit, stop placed. The
+    take-profit page therefore now follows the stop-raised page of the same
+    tick. Pages a pass still sends inline (failure alerts, rearm and expire)
+    arrive before all of these.
+
+    The page is still computed HERE, where its facts are. The stop-placed and
+    stop-raised ``send`` BUILDS and renders; the trade pages' ``send`` only
+    renders, because their facts are read at the event (for the stop fill, see
+    :func:`_reconcile_one_standing_stop`); the retire and ceiling-breach
+    ``send`` only sends a message built at the event.
+    Either way ``send`` is a zero-arg callable, so a render failure is contained with
     the delivery failure rather than escaping the ``functools.partial``
     argument list. Nothing between here and the drain can delay a stop: this is
     a list append.
