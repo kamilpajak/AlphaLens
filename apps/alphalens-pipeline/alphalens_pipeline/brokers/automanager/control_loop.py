@@ -455,7 +455,8 @@ class TickReport:
     # The alert sink is a synchronous HTTP POST whose own bound is tens of
     # seconds, so it may not sit between a position and its stop —
     # ``_queue_page`` / ``_drain_pages`` carry the whole argument. Per TICK, not
-    # per daemon: a report is built fresh in ``run_once``.
+    # per daemon: a report is built fresh by ``run_once`` and by
+    # ``_run_fill_wake_protection``, and each one drains its own.
     pending_pages: list[tuple[str, Callable[[], bool]]] = field(default_factory=list)
 
 
@@ -639,9 +640,9 @@ def run_once(
     if sweep_orphans:
         _run_orphan_sweep(deps, report)
 
-    # The operator pages of the passes below (the entry fill, the stop fill and
-    # its sibling retire, the take-profit sell, the stop placed and raised) are
-    # QUEUED (``_queue_page``) and sent by the ``finally`` below, after every
+    # The operator pages of the passes below (the entry fill and its ceiling
+    # breach, the stop fill and its sibling retire, the take-profit sell, the
+    # live-exits failures, the stop placed and raised) are QUEUED (``_queue_page``) and sent by the ``finally`` below, after every
     # protective pass: the sink is a synchronous POST bounded at tens of seconds
     # and not bounded at all on DNS, so it may not sit between a position and
     # its stop. The ``try`` opens HERE, at the first pass that queues, and not at
@@ -1483,11 +1484,13 @@ def _build_live_exits_feed(
     # the whole point of this boundary is that it does not need to know what
     # can go wrong inside the factory, only that a doubt becomes a veto.
     except Exception as exc:
-        if deps.alert_throttled(
+        _queue_alert_page(
+            deps,
+            report,
             f"live-exits: price feed construction failed — degrading to no-prices: {exc}",
             "live-exits-feed-build-fail",
-        ):
-            report.alerts += 1
+            what="live-exits",
+        )
         return _NullPriceFeed()
 
 
@@ -1593,11 +1596,13 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
     try:
         long_positions = broker.get_long_positions()
     except BrokerError as exc:
-        if deps.alert_throttled(
+        _queue_alert_page(
+            deps,
+            report,
             f"live-exits: position read failed (broker error) — skipped: {exc}",
             "live-exits-posread-fail",
-        ):
-            report.alerts += 1
+            what="live-exits",
+        )
         return
     journal_lines = list(stop_journal._iter_standalone_stop_journal())
     stop_raises: list[StopRaise] = []
@@ -1654,11 +1659,17 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
         # The report is deliberately NOT logged here: a pass that died midway
         # holds a partial picture, and a partial picture presented as the
         # pass's outcome is exactly the misreading this reporting exists to end.
-        if deps.alert_throttled(
+        # Queued, not sent: on a full-close take-profit the engine has already
+        # cancelled the stop when the market sell raises, so the position is
+        # naked until the protection pass after this one. See
+        # :func:`_queue_alert_page`.
+        _queue_alert_page(
+            deps,
+            report,
             f"live-exits: pass failed (broker error) — skipped: {exc}",
             "live-exits-run-fail",
-        ):
-            report.alerts += 1
+            what="live-exits",
+        )
         return
     if (line := _render_exit_dispositions(fired=len(fired), dispositions=dispositions)) is not None:
         logger.info("%s", line)
@@ -1720,12 +1731,14 @@ def _live_exits_broker_or_none(deps: LoopDeps, report: TickReport) -> LiveExitBr
         # composed deps, i.e. tests. Skip + alert, NEVER an AttributeError: the
         # caller's try catches only BrokerError, so an AttributeError would escape
         # and starve the protection pass that follows in the tick (#1141).
-        if deps.alert_throttled(
+        _queue_alert_page(
+            deps,
+            report,
             f"live-exits: broker {getattr(broker, 'name', '?')!r} lacks the "
             "live-exit capability set (LiveExitBroker) — pass skipped",
             "live-exits-capability",
-        ):
-            report.alerts += 1
+            what="live-exits",
+        )
         _release_feed_scope(deps, _FEED_SCOPE_EXITS)
         return None
     return broker
@@ -3840,9 +3853,22 @@ def _queue_retire_page(deps: LoopDeps, report: TickReport, message: str, key: st
     "retired N" page the ``cancelled`` lines are the latch: that page, once
     lost, would not come again. The "skipped" and "journal write error" pages
     write no latch and are sent again on the next tick that retries."""
-    _queue_page(
-        functools.partial(deps.alert_throttled, message, key), report, what="sibling-retire"
-    )
+    _queue_alert_page(deps, report, message, key, what="sibling-retire")
+
+
+def _queue_alert_page(
+    deps: LoopDeps, report: TickReport, message: str, key: str, *, what: str
+) -> None:
+    """QUEUE one ready-made alert (:func:`_queue_page`) under its throttle key.
+
+    For a page whose text is fixed when it is computed: the send only delivers.
+    Every caller runs inside the ``try`` of ``run_once`` whose ``finally``
+    sends the queue, so the page goes out after the protection pass instead of
+    holding it up for the sink's 34-64 s bound, unbounded on DNS. The
+    live-exits failure pages use it because one of them sits where a position
+    is NAKED: a full-close take-profit cancels the stop before its market sell,
+    and when that sell raises only the protection pass puts the stop back."""
+    _queue_page(functools.partial(deps.alert_throttled, message, key), report, what=what)
 
 
 def _reconcile_one_armed_tier(

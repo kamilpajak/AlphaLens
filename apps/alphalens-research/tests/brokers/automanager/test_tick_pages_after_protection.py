@@ -33,7 +33,7 @@ from unittest import mock
 import alphalens_pipeline.brokers.automanager.control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trails
 from alphalens_pipeline.brokers.automanager import stop_journal as sj
-from broker_contract.contract import OrderStatus
+from broker_contract.contract import BrokerError, OrderStatus
 
 from tests.brokers.automanager import test_entry_watch_reconcile as entry_case
 from tests.brokers.automanager import test_live_exits_pass as exits_case
@@ -395,4 +395,65 @@ class TestTheTakeProfitPageWaitsForProtection(_TakeProfitCase):
         self.assertEqual(
             self.events,
             [_PROTECTION, f"tranche-fired:{uic}:tp1", "sibling-retire:KO:2026-08-27"],
+        )
+
+
+class TestTheLiveExitsFailurePagesWaitForProtection(_TakeProfitCase):
+    """The live-exits failure pages, found by the review of #1867. The worst one
+    sits where a position is NAKED: on a full-close take-profit the engine
+    cancels the stop BEFORE it sends the market sell, so when that sell raises
+    the stop is gone and only the protection pass that follows puts it back.
+    Sent inline, the failure page put a synchronous Telegram POST (34-64 s,
+    unbounded on DNS) inside that window. These pages write no latch, so one
+    lost to a hard death is sent again on the next failing tick."""
+
+    def test_a_failed_sell_page_is_sent_after_the_stop_is_restored(self) -> None:
+        uic = self._position("KO", frac=1.0)
+        self.broker.market_order_error = BrokerError("sell rejected")
+        self._tick(self._deps(uic), _EXITS_ENV)
+        self.assertEqual(self.events, [_PROTECTION, "live-exits-run-fail"])
+
+    def test_the_failed_sell_page_text_is_unchanged(self) -> None:
+        uic = self._position("KO", frac=1.0)
+        self.broker.market_order_error = BrokerError("sell rejected")
+        self._tick(self._deps(uic), _EXITS_ENV)
+        self.assertEqual(
+            [page for page in self.pages if page[1] == "live-exits-run-fail"],
+            [
+                (
+                    "live-exits: pass failed (broker error) — skipped: sell rejected",
+                    "live-exits-run-fail",
+                )
+            ],
+        )
+
+    def test_a_failed_position_read_page_is_sent_after_the_protection_pass(self) -> None:
+        uic = self._position("KO", frac=0.5)
+        deps = self._deps(uic)
+        real_read = self.broker.get_long_positions
+        calls = [0]
+
+        def _first_read_fails() -> Any:
+            # Only the live-exits read fails; the protection pass reads again.
+            calls[0] += 1
+            if calls[0] == 1:
+                raise BrokerError("positions unavailable")
+            return real_read()
+
+        with mock.patch.object(self.broker, "get_long_positions", _first_read_fails):
+            self._tick(deps, _EXITS_ENV)
+        self.assertLess(
+            self.events.index(_PROTECTION), self.events.index("live-exits-posread-fail")
+        )
+
+    def test_a_failed_feed_build_page_is_sent_after_the_protection_pass(self) -> None:
+        uic = self._position("KO", frac=0.5)
+
+        def _boom(_m: Any, *, scope: Any) -> Any:
+            raise RuntimeError("feed down")
+
+        deps = dataclasses.replace(self._deps(uic), live_exits_feed_factory=_boom)
+        self._tick(deps, _EXITS_ENV)
+        self.assertLess(
+            self.events.index(_PROTECTION), self.events.index("live-exits-feed-build-fail")
         )

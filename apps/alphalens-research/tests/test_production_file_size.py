@@ -441,7 +441,12 @@ BASELINE: dict[str, int] = {
     # the pages wait and in which order: ``_queue_page``, ``_reconcile_one_standing_stop``
     # (why the fill event is built at the fill) and ``_announce_fired_tranches``.
     # Counted with ``wc -l`` after ruff format, on top of #1864 (8527 before, 8638 after).
-    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8638,
+    # +26 more, from the review of #1867: the four live-exits failure pages go
+    # through ``_queue_alert_page`` too. One of them sat where a position is NAKED:
+    # a full-close take-profit cancels the stop before its market sell, and when
+    # the sell raised, the inline page held the protection pass that puts the stop
+    # back for the sink's 34-64 s. Counted with ``wc -l`` (8638 before, 8664 after).
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/control_loop.py": 8664,
     # +1 to correct the comment beside ``_OCO_LAG_HOLD_REASON``. It claimed a rename
     # of that literal "fails the control-loop tests loudly"; measured, renaming it to
     # "oco-lag-held" leaves all 552 control-loop tests green, because they read the
