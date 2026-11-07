@@ -43,7 +43,7 @@ tilt arms, from the point estimate alone. `arms` is the expensive mode: it also
 builds the registered cluster-bootstrap interval for every simulated panel, which
 is what the "evidence against" arm needs and what a normal approximation cannot
 supply. Recorded runs and their seeds:
-`docs/research/atr_confirmation_prereg_2026_09.md` §11.
+`docs/research/atr_confirmation_prereg_2026_09.md` section 10.
 """
 
 from __future__ import annotations
@@ -57,20 +57,54 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-#: Grid of true |rho| for the slope mode, matching the table in §4 of the memo.
-SLOPE_GRID: tuple[float, ...] = (0.0, 0.05, 0.10, 0.15, 0.189, 0.25)
+#: Grid of true |rho| for the slope mode. The outer six match the table in
+#: section 4 of the memo; 0.03 is added because it is the pessimistic point the
+#: interval mode walks, and its three tilt arms deserve the same 3000 panels as
+#: the rest rather than the interval mode's 400.
+SLOPE_GRID: tuple[float, ...] = (0.0, 0.03, 0.05, 0.10, 0.15, 0.189, 0.25)
 SLOPE_SIMS = 3000
 SLOPE_SEED = 20261106
 
 #: The interval mode is about 5 s per simulated panel, so it walks two points:
-#: a true zero, which is the one the registration discloses a figure for, and the
-#: effect actually observed on the burnt panel.
+#: a true zero, which is the one the registration discloses a figure for, and a
+#: deliberately PESSIMISTIC point. 0.03 is NOT ATR's burnt effect — that is
+#: -0.358, which this script prints on every run — it is the order of magnitude
+#: the news-axis candidates showed on the burnt panel
+#: (`2026_10_jev_discovery_burnt.py`), carried here as "ATR's true effect has
+#: collapsed to under a tenth of its in-sample value".
 ARM_RHOS: tuple[float, ...] = (0.0, 0.03)
+
+#: ONE run of this many panels does NOT pin the evidence-against arm, and the
+#: binomial error it prints understates the spread. The arm fires when a panel
+#: has BOTH a small |beta| and an unusually narrow interval, and the half-width
+#: carries an sd of 0.0127 against a mean of 0.087 - 15% of its own size - so the
+#: firing event sits in a JOINT tail. Measured 2026-11-07 across eight seeds at a
+#: true zero: 18.50, 19.75, 19.75, 20.00, 20.75, 21.75, 24.25 and 28.00 percent,
+#: every one of them reproducible at its seed. Between-seed sd 3.11pp against a
+#: binomial 2.06pp. The published figure pools the seeds; a single run is a
+#: datapoint, not the answer. Memo section 10.3.
 ARM_SIMS = 400
-ARM_SEED = 20261107
+
+#: Disjoint from every seed `SLOPE_GRID` reaches. The two modes must not draw
+#: the SAME panels, or the memo's cross-check between them compares a sample
+#: with its own prefix: at `ARM_SEED = SLOPE_SEED + 1` the arms-mode rho=0
+#: panels were byte-identical to the first 400 slopes-mode rho=0 panels, and the
+#: memo called that "two independent instruments". `test_the_two_modes_cannot_
+#: draw_the_same_panels` is the guard.
+ARM_SEED = 20261206
+
+#: Offset for the interval bootstrap's own seed, so a panel draw and the
+#: bootstrap resampling of that same panel never start from one number.
+CI_SEED_OFFSET = 1_000_000
 
 #: How often the interval mode prints a progress line. Display only.
 ARM_PROGRESS_EVERY = 50
+
+#: One-sided 0.05 normal quantile. Used ONLY to locate the significance boundary
+#: for the floor-binds check; the registered test is a wild cluster bootstrap
+#: (`one_sided_p`, B = 9999) and this is a normal approximation to it, disclosed
+#: in the memo's section 10.6.
+ONE_SIDED_95_Z = 1.6449
 
 #: The shrinkage the power gate itself applies to the nuisance signals.
 NUISANCE_SHRINKAGE = 0.50
@@ -105,6 +139,11 @@ DEFAULT_STRUCTURE = "gate"
 
 class BlindnessError(RuntimeError):
     """A frame that should carry structure only carries a stored outcome."""
+
+
+class FloorDoesNotBindError(RuntimeError):
+    """The significance boundary moved past DELTA, so the promote arm is no
+    longer the floor alone and the slope-only grid would overstate it."""
 
 
 def _load_sibling(stem: str, name: str) -> Any:
@@ -249,6 +288,13 @@ def cluster_sizes_from(
         raise ValueError(
             f"unknown structure source {source!r}; expected one of {STRUCTURE_SOURCES}"
         )
+    if source == "gate" and conf is None:
+        raise ValueError(
+            "the 'gate' structure needs the confirmation module: the panel it counts is "
+            "the label store joined to the brief store. Pass conf=, or ask for 'power'."
+        )
+    if source == "power" and power is None:
+        raise ValueError("the 'power' structure needs the a20_power module; pass power=")
     if source == "power":
         held = power.load_held_out(labels_dir)
         assert_no_stored_outcome(held)
@@ -270,7 +316,7 @@ def structure_and_scale(
 ) -> dict[str, Any]:
     """Burnt scale and ICC, held-out cluster sizes, burnt signal rows.
 
-    One read, used by both modes, so the two tables in §11 describe one panel.
+    One read, used by both modes, so the two tables in section 10 of the memo describe one panel.
     """
     burnt = power.burnt_panel(labels_dir, briefs_dir, population=power.POPULATION_BRIEFED)
     sizes = cluster_sizes_from(
@@ -324,17 +370,28 @@ def _slopes_at(
 def _report_slopes(power: Any, conf: Any, shared: dict[str, Any], *, sims: int, seed: int) -> None:
     null = _slopes_at(power=power, conf=conf, shared=shared, rho=0.0, sims=sims, seed=seed)
     se = float(np.std(null, ddof=1))
-    boundary = -1.6449 * se
+    boundary = -ONE_SIDED_95_Z * se
     print(f"\nstandard error of the registered slope: {se:.4f}  ({sims} panels, seed {seed})")
     print(
         f"the figure section 4 publishes:         {PUBLISHED_IMPLIED_SE:.4f}  "
         f"-> ratio {se / PUBLISHED_IMPLIED_SE:.2f}"
     )
     print(f"one-sided 0.05 significance boundary:   {boundary:.4f}")
+    binds = boundary > -conf.DELTA
     print(
-        f"the FLOOR binds (boundary closer to zero than -{conf.DELTA}): "
-        f"{'yes' if boundary > -conf.DELTA else 'NO'}"
+        f"the FLOOR binds (boundary closer to zero than -{conf.DELTA}): {'yes' if binds else 'NO'}"
     )
+    if not binds:
+        # `classify_tilt` grades the promote arm as `beta <= -DELTA` alone, which
+        # is the registered rule ONLY while the floor binds. Printing the grid
+        # anyway would publish a table that overstates P(promote) by the whole
+        # p-value leg, in the same format as a valid one. Everything else in this
+        # file refuses rather than prints a wrong number.
+        raise FloorDoesNotBindError(
+            f"the one-sided boundary is {boundary:.4f}, past the floor of -{conf.DELTA}, so "
+            f"the promote arm is no longer the floor alone and this grid would overstate it. "
+            f"The standard error above stands; the table does not."
+        )
     print(f"\n{'true |rho|':>10} {'confirmed':>12} {'unchanged':>12} {'RETIRED':>12}")
     for rho in SLOPE_GRID:
         slopes = _slopes_at(
@@ -370,6 +427,7 @@ def _report_arms(power: Any, conf: Any, shared: dict[str, Any], *, sims: int, se
         arms: list[str] = []
         widths: list[float] = []
         betas: list[float] = []
+        firing: list[float] = []
         for index in range(sims):
             outcome, design, clusters = power.simulate_panel(
                 burnt_signals=shared["signals"],
@@ -387,12 +445,18 @@ def _report_arms(power: Any, conf: Any, shared: dict[str, Any], *, sims: int, se
                 signal_columns=columns,
             )
             beta = conf.atr_slope(panel)
-            lo, hi = conf.slope_ci(panel, seed=seed + index)
+            lo, hi = conf.slope_ci(panel, seed=seed + CI_SEED_OFFSET + index)
             betas.append(beta)
             widths.append(hi - lo)
             arms.append(classify_tilt(beta, conf.DELTA))
             if is_evidence_against(lo, hi, conf.DELTA):
                 inside += 1
+                # The registered interval is an equal-tail percentile interval
+                # over resampled clusters and is NOT symmetric about the point
+                # estimate, so "the arm needs |beta| below DELTA - half-width"
+                # is an approximation. Record the estimates that actually fired
+                # it, so the memo can quote a measured range instead.
+                firing.append(beta)
             if (index + 1) % ARM_PROGRESS_EVERY == 0:
                 # This mode runs for over an hour at the recorded settings and
                 # prints nothing until a rho finishes, which reads as a hang.
@@ -412,8 +476,14 @@ def _report_arms(power: Any, conf: Any, shared: dict[str, Any], *, sims: int, se
         )
         print(
             f"   mean {int(conf.CI_LEVEL * 100)}% interval half-width {half:.4f}; "
-            f"the arm needs |slope| below {conf.DELTA - half:+.4f}"
+            f"a symmetric reading would need |slope| below {conf.DELTA - half:+.4f}"
         )
+        if firing:
+            print(
+                f"   MEASURED: the arm fired on slopes in [{min(firing):+.4f}, {max(firing):+.4f}]"
+            )
+        else:
+            print("   MEASURED: the arm never fired, so it has no firing range")
         print(f"   sd of the slope {float(np.std(betas, ddof=1)):.4f}")
         for arm in ("confirmed", "unchanged", "retired"):
             frequency = arms.count(arm) / float(sims)
@@ -465,16 +535,16 @@ def main(argv: list[str] | None = None) -> int:
             power,
             conf,
             shared,
-            sims=args.sims or SLOPE_SIMS,
-            seed=args.seed or SLOPE_SEED,
+            sims=SLOPE_SIMS if args.sims is None else args.sims,
+            seed=SLOPE_SEED if args.seed is None else args.seed,
         )
     else:
         _report_arms(
             power,
             conf,
             shared,
-            sims=args.sims or ARM_SIMS,
-            seed=args.seed or ARM_SEED,
+            sims=ARM_SIMS if args.sims is None else args.sims,
+            seed=ARM_SEED if args.seed is None else args.seed,
         )
     return 0
 
