@@ -414,9 +414,28 @@ def _report_slopes(power: Any, conf: Any, shared: dict[str, Any], *, sims: int, 
         )
 
 
-def _report_arms(power: Any, conf: Any, shared: dict[str, Any], *, sims: int, seed: int) -> None:
+def _report_arms(
+    power: Any,
+    conf: Any,
+    shared: dict[str, Any],
+    *,
+    sims: int,
+    seed: int,
+    ci_boot: int,
+) -> None:
     columns = [conf.ATR, *conf.COVARIATES]
-    print(f"\nregistered interval: CI_BOOT {conf.CI_BOOT}, CI_LEVEL {conf.CI_LEVEL}")
+    registered = ci_boot == conf.CI_BOOT
+    print(f"\ninterval: CI_BOOT {ci_boot}, CI_LEVEL {conf.CI_LEVEL}")
+    if not registered:
+        # The dominant cost of this mode is one cluster bootstrap PER simulated
+        # panel, so a smoke run has to be able to shrink it. A figure computed at
+        # a reduced bootstrap is not the registered interval, and the report says
+        # so in its own output rather than leaving it to whoever reads the shell
+        # history: a number is a claim, and this one would be a different claim.
+        print(
+            f"   *** NOT the registered CI_BOOT of {conf.CI_BOOT}. This run is a SMOKE "
+            f"TEST, not a measurement, and its figures may not be published. ***"
+        )
     print("section 5 discloses the evidence-against arm at about 13% under a true zero")
     for rho in ARM_RHOS:
         injected = inject_effects(
@@ -445,7 +464,7 @@ def _report_arms(power: Any, conf: Any, shared: dict[str, Any], *, sims: int, se
                 signal_columns=columns,
             )
             beta = conf.atr_slope(panel)
-            lo, hi = conf.slope_ci(panel, seed=seed + CI_SEED_OFFSET + index)
+            lo, hi = conf.slope_ci(panel, n_boot=ci_boot, seed=seed + CI_SEED_OFFSET + index)
             betas.append(beta)
             widths.append(hi - lo)
             arms.append(classify_tilt(beta, conf.DELTA))
@@ -506,6 +525,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--briefs-dir", type=Path, default=home / "thematic_briefs")
     parser.add_argument("--sims", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument(
+        "--ci-boot",
+        type=int,
+        default=None,
+        help=(
+            "resamples per simulated panel in --mode arms (default: the registered "
+            "CI_BOOT). Lowering it makes the run a smoke test, which the report then "
+            "says in its own output."
+        ),
+    )
     args = parser.parse_args(argv)
 
     power = _load_sibling("a20_power", "_a20_power_for_opchar")
@@ -545,6 +574,7 @@ def main(argv: list[str] | None = None) -> int:
             shared,
             sims=ARM_SIMS if args.sims is None else args.sims,
             seed=ARM_SEED if args.seed is None else args.seed,
+            ci_boot=conf.CI_BOOT if args.ci_boot is None else args.ci_boot,
         )
     return 0
 

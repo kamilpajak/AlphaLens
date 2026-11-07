@@ -501,6 +501,14 @@ class _Store:
         ).to_parquet(self.briefs / f"{brief_date}.parquet", index=False)
 
 
+#: Resamples per panel for the end-to-end runs. These tests exist to cover the
+#: runtime paths — the readers, the two reporters, the argument wiring — not to
+#: estimate anything, and the registered CI_BOOT of 2999 per simulated panel put
+#: this one module at 13 of the research suite's 23 minutes on CI (measured
+#: 2026-11-07, runs 42318730964 and 42372930894).
+_SMOKE_BOOT = 9
+
+
 class TestTheProbeEndToEnd(unittest.TestCase):
     """Both modes against seeded stores. These cover the paths that only exist
     at runtime — the readers, the two reporters and the argument wiring — which
@@ -560,7 +568,9 @@ class TestTheProbeEndToEnd(unittest.TestCase):
             self.assertIn(f"{rho:10.3f}", printed)
 
     def test_the_arms_mode_reports_the_evidence_against_arm(self):
-        printed = self._run("--mode", "arms", "--sims", "4", "--seed", "13")
+        printed = self._run(
+            "--mode", "arms", "--sims", "4", "--seed", "13", "--ci-boot", str(_SMOKE_BOOT)
+        )
         self.assertIn("evidence-against arm fires", printed)
         self.assertIn("interval half-width", printed)
         self.assertIn("MEASURED:", printed)
@@ -568,11 +578,40 @@ class TestTheProbeEndToEnd(unittest.TestCase):
     def test_the_arms_mode_prints_progress_on_a_run_long_enough_to_need_it(self):
         """The progress branch is skipped entirely below ARM_PROGRESS_EVERY
         panels, so a short run cannot exercise it — which is exactly the trap a
-        12-panel determinism check fell into."""
+        12-panel determinism check fell into.
+
+        The STRIDE is lowered rather than the panel count raised. Running the
+        real stride of 50 panels cost one cluster bootstrap each and made this
+        single test the most expensive in the research suite; what the test
+        exists to prove is that the branch executes and prints, which a stride
+        of 2 proves identically.
+        """
+        self.addCleanup(setattr, opchar, "ARM_PROGRESS_EVERY", opchar.ARM_PROGRESS_EVERY)
+        opchar.ARM_PROGRESS_EVERY = 2
         printed = self._run(
-            "--mode", "arms", "--sims", str(opchar.ARM_PROGRESS_EVERY), "--seed", "17"
+            "--mode", "arms", "--sims", "2", "--seed", "17", "--ci-boot", str(_SMOKE_BOOT)
         )
-        self.assertIn(f"{opchar.ARM_PROGRESS_EVERY}/{opchar.ARM_PROGRESS_EVERY} panels", printed)
+        self.assertIn("2/2 panels", printed)
+
+    def test_a_reduced_bootstrap_says_so_in_the_report(self):
+        """A figure computed at a shrunken bootstrap is not the registered
+        interval. The report has to carry that in its own output, because the
+        flag that shrank it lives in a shell line nobody keeps."""
+        printed = self._run(
+            "--mode", "arms", "--sims", "2", "--seed", "23", "--ci-boot", str(_SMOKE_BOOT)
+        )
+        self.assertIn(f"CI_BOOT {_SMOKE_BOOT}", printed)
+        self.assertIn("SMOKE TEST, not a measurement", printed)
+        self.assertIn("may not be published", printed)
+
+    def test_the_default_bootstrap_is_the_registered_one_and_is_not_labelled(self):
+        """The flag defaults to the frozen CI_BOOT, and a run at the registered
+        value must carry no smoke-test marker. One panel is enough to pin the
+        wiring; the cost is one bootstrap, not one per panel."""
+        conf = self.conf()
+        printed = self._run("--mode", "arms", "--sims", "1", "--seed", "29")
+        self.assertIn(f"CI_BOOT {conf.CI_BOOT}", printed)
+        self.assertNotIn("SMOKE TEST", printed)
 
     def test_the_power_structure_is_reachable_from_the_command_line(self):
         printed = self._run(
