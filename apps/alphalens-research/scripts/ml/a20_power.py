@@ -33,13 +33,34 @@ The simulated dependence therefore comes from REAL burnt-panel signal rows
 resampled into the held-out cluster structure — never from synthetic
 independent draws, which would overstate power for three technical signals on
 the same names.
+
+What the default DGP here is known to get wrong
+-----------------------------------------------
+Measured 2026-11-07, after the #1227 look was spent: this simulator is **1.36x
+optimistic on the slope standard error** — it predicted 0.0538 where the run
+realized 0.0731 (CR2). The cause is not the ICC, not normality and not the
+resampling; it is noise that is HETEROSKEDASTIC AND ALIGNED WITH THE FEATURE
+UNDER TEST. Full record, with seven probes:
+``docs/research/a20_simulator_precision_gap_2026_11_07.md``.
+
+The mechanism is available here as :class:`NoiseAlignment`, and it is OFF by
+default so every published figure keeps reproducing bit for bit. It takes a
+required LEVEL because the burnt panel does not identify one: the realized
+precision is reached at ``gam`` 0.400 when a whole session's noise scales with
+that session's mean ATR, and at 0.205 when each row's noise scales with its own
+ATR — about a factor of two apart in the parameter. So the aligned answer this
+module will produce is a :class:`PowerBracket` over all three corners, never a
+single aligned power figure, and :meth:`PowerBracket.power_at_gate` refuses
+rather than return one when the span crosses the gate.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import math
 import re
+from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
@@ -348,6 +369,154 @@ def residual_variance(burnt_signals: np.ndarray, effects: dict[str, float], sd_y
     return remaining
 
 
+# ------------------------------------------------- feature-aligned noise
+#: The two LEVELS the burnt panel does NOT choose between. Section 7.5 of
+#: ``a20_simulator_precision_gap_2026_11_07.md``: the realized CR2 standard error
+#: is reached at ``gam`` 0.400 when a whole session's noise scales with that
+#: session's mean feature, and at 0.205 when each ROW's noise scales with its own
+#: feature value — with no clustering at all.
+ALIGNMENT_SESSION = "session"
+ALIGNMENT_ROW = "row"
+ALIGNMENT_LEVELS = (ALIGNMENT_SESSION, ALIGNMENT_ROW)
+
+#: The feature the #1227 gate turns on, and so the default alignment target.
+ALIGNMENT_FEATURE = "atr"
+
+#: Measured on the burnt panel 2026-11-07, residuals from the 3-signal
+#: standardised fit (memo sections 7.3 and 7.5). The SESSION arm has 21 points
+#: and a t of 3.56; the ROW arm has nine times the points and finds less.
+MEASURED_GAM_SESSION = 0.360
+MEASURED_GAM_SESSION_SE = 0.101
+MEASURED_GAM_SESSION_POINTS = 21
+MEASURED_GAM_ROW = 0.132
+MEASURED_GAM_ROW_SE = 0.085
+MEASURED_GAM_ROW_POINTS = 198
+
+#: The magnitude at which each level reaches the realized CR2 precision. The two
+#: differ by about a factor of two, which is why the LEVEL matters (section 7.5).
+GAM_AT_REALIZED_SE_SESSION = 0.400
+GAM_AT_REALIZED_SE_ROW = 0.205
+
+#: The gap this mechanism exists to explain (memo sections 4 and 7).
+SIMULATED_SLOPE_SE_PUBLISHED = 0.0538
+REALIZED_SLOPE_SE_CR2 = 0.0731
+SIMULATOR_OPTIMISM_RATIO = 1.36
+
+#: What the section 7.3 estimator reads back when a known truth is simulated, and
+#: its size under homoskedasticity against a nominal 5% (section 7.5, 1500 panels
+#: per row). The session arm OVER-READS a session truth and still reads clearly
+#: positive under a purely ROW-level truth, which is the non-identification.
+ESTIMATOR_READING_OF_A_SESSION_TRUTH = 0.419
+ESTIMATOR_READING_OF_A_ROW_TRUTH = 0.240
+ESTIMATOR_SIZE_UNDER_HOMOSKEDASTICITY = 0.090
+
+#: Session-level estimation floors. A session with fewer episodes has no usable
+#: residual sd; fewer qualifying sessions than this has no slope and no se.
+MIN_EPISODES_PER_SESSION_FOR_GAM = 3
+MIN_SESSIONS_FOR_GAM_SLOPE = 3
+
+#: Memo reference, printed beside every aligned figure so a quoted number
+#: carries its construction.
+ALIGNMENT_MEMO = "a20_simulator_precision_gap_2026_11_07.md"
+
+#: Key the disclosure is written under in the machine-readable artifact.
+PRECISION_DISCLOSURE_KEY = "precision_disclosure"
+
+#: Guard, not a model: an exactly-zero residual is ``-inf`` in a log and would
+#: poison a whole slope. At 198 points it is unreachable in practice.
+_LOG_ABS_FLOOR = 1e-12
+
+
+@dataclasses.dataclass(frozen=True)
+class NoiseAlignment:
+    """Noise scaled by ``exp(gam * z(feature))`` — a magnitude AND a level.
+
+    The level is a required field with no default on purpose. The burnt panel
+    does not identify it: the realized CR2 standard error of 0.0731 is reached at
+    ``gam`` 0.400 on sessions and at 0.205 on rows, so a default would bake an
+    unidentified choice into every later power figure.
+
+    ``feature`` is a KEY of the ``effects`` mapping, not a column name.
+    """
+
+    gam: float
+    level: str
+    feature: str = ALIGNMENT_FEATURE
+
+    def __post_init__(self) -> None:
+        # Argument errors, so plain ValueError — the one RuntimeError in this
+        # area is reserved for the identified set straddling the gate.
+        if self.level not in ALIGNMENT_LEVELS:
+            raise ValueError(
+                f"unknown alignment level {self.level!r}; the panel does not choose between "
+                f"{ALIGNMENT_SESSION!r} and {ALIGNMENT_ROW!r}, so one of them must be named"
+            )
+        if not math.isfinite(self.gam):
+            raise ValueError(f"gam must be finite, got {self.gam!r}")
+        if self.gam <= 0:
+            # Zero is refused as well as negative. At gam 0 the scale is exactly
+            # 1 everywhere, so an "aligned" arm is BIT-IDENTICAL to the
+            # homoskedastic one: the span collapses to zero width while still
+            # printing as a bracket, and the one scalar accessor then hands back
+            # the corner this module measures to be
+            # SIMULATOR_OPTIMISM_RATIO optimistic. A negative magnitude would
+            # say the QUIET names carry the loud noise, which nothing measured
+            # supports.
+            raise ValueError(
+                f"gam must be strictly positive, got {self.gam!r}. A zero magnitude is the "
+                f"homoskedastic corner, not a second arm: it makes the aligned corners "
+                f"bit-identical to it and the span zero-wide."
+            )
+
+
+def _alignment_scale(
+    xs: list[np.ndarray], *, alignment: NoiseAlignment, names: list[str]
+) -> list[np.ndarray]:
+    """Per-row noise scale for each cluster, already variance-normalised.
+
+    The scale is a function of ``x``, which the caller has ALREADY drawn, so this
+    consumes no randomness — that is what lets the mechanism exist without moving
+    the default path by one bit.
+
+    The normaliser is EMPIRICAL (``c = sqrt(mean of s**2)`` over the panel's own
+    rows) and deliberately not the analytic ``sqrt(1 + kappa**2)`` that
+    ``a20_overlap_power.simulate_overlapping_panel`` uses. That one is exact
+    because its mechanism is LINEAR in ``x`` and ``_z`` makes ``E[x**2] == 1``.
+    ``exp()`` has no such closed form: its second moment depends on the whole
+    distribution of the feature, and ATR is skewed. Do not "fix" this into a
+    constant.
+
+    No clipping of the scale. A clip would be a second, undocumented mechanism;
+    the variance is held by the normaliser instead.
+    """
+    if alignment.feature not in names:
+        raise ValueError(
+            f"alignment feature {alignment.feature!r} is not one of the injected effects "
+            f"{names}; the feature names a hypothesis, not a column"
+        )
+    k = names.index(alignment.feature)
+    gam = alignment.gam
+
+    if alignment.level == ALIGNMENT_ROW:
+        # The columns come from `_z`, which divides by the POPULATION sd, so
+        # x[:, k] IS z(row feature) — the regressor section 7.5's row arm uses.
+        raw = [np.exp(gam * x[:, k]) for x in xs]
+    else:
+        # z(session mean feature), the regressor the section 7.3 estimator
+        # regresses on, so `gam` carries one unit here and there. Constant within
+        # a cluster, so the cluster structure survives exactly.
+        cluster_means = np.array([float(np.mean(x[:, k])) for x in xs])
+        zc = _z(cluster_means)
+        raw = [
+            np.full(len(x), math.exp(gam * float(z)), dtype=float)
+            for x, z in zip(xs, zc, strict=True)
+        ]
+
+    rows = sum(len(part) for part in raw)
+    c = math.sqrt(float(sum(float(np.sum(part**2)) for part in raw)) / rows)
+    return [part / c for part in raw]
+
+
 def simulate_panel(
     *,
     burnt_signals: np.ndarray,
@@ -356,6 +525,7 @@ def simulate_panel(
     sd_y: float,
     icc: float,
     rng: np.random.Generator,
+    alignment: NoiseAlignment | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """One simulated panel: ``(y, X, clusters)``.
 
@@ -367,22 +537,45 @@ def simulate_panel(
     outcome, which carries the signal's own cluster structure, so some
     within-day dependence is counted twice — that direction costs power rather
     than manufacturing it, which is the safe way round for a gate.
+
+    ``alignment`` is OFF by default and the off path is bit-identical to the
+    version that produced every published figure: the loop below draws the same
+    integers, the same cluster shock and the same idiosyncratic noise in the same
+    order, and the rescaling is a deterministic function of ``x``, which is drawn
+    first. Measured 2026-11-07, this DEFAULT path is 1.36x optimistic on the
+    slope standard error (0.0538 simulated against a realized 0.0731) because
+    the real noise aligns with the feature under test; see
+    :func:`power_bracket` for the identified set and :data:`ALIGNMENT_MEMO`.
+
+    ``a20_overlap_power.simulate_overlapping_panel`` is a second copy of this
+    DGP and has NO aligned path. Its bit-identical pin against this function
+    therefore covers the off path only.
     """
     names = list(effects)
     var_resid = residual_variance(burnt_signals, effects, sd_y)
     var_u = icc * var_resid
     var_e = (1.0 - icc) * var_resid
 
-    xs, ys, cls = [], [], []
+    xs, sigs, us, es, cls = [], [], [], [], []
     for j, m in enumerate(cluster_sizes):
         idx = rng.integers(0, len(burnt_signals), m)
         x = burnt_signals[idx]  # (m, k) REAL rows, correlation intact
         u = rng.normal(0.0, math.sqrt(var_u))
         e = rng.normal(0.0, math.sqrt(var_e), m)
         signal = sum(effects[name] * x[:, i] for i, name in enumerate(names))
-        ys.append(signal + u + e)
+        sigs.append(signal)
+        us.append(u)
+        es.append(e)
         xs.append(x)
         cls.append(np.full(m, j))
+
+    if alignment is None:
+        # The same expression, the same operand order, the same broadcast of the
+        # scalar `u` as before the mechanism existed.
+        ys = [sig + u + e for sig, u, e in zip(sigs, us, es, strict=True)]
+    else:
+        scale = _alignment_scale(xs, alignment=alignment, names=names)
+        ys = [sig + (u + e) * s for sig, u, e, s in zip(sigs, us, es, scale, strict=True)]
     y = np.concatenate(ys)
     X = np.column_stack([np.ones(len(y)), np.vstack(xs)])
     return y, X, np.concatenate(cls).astype(str)
@@ -399,12 +592,17 @@ def simulate_power(
     wcb_boot: int,
     seed: int,
     family_size: int | None = None,
+    alignment: NoiseAlignment | None = None,
 ) -> dict[str, float]:
     """Power for each hypothesis at the given injected effects.
 
     ``family_size`` picks the multiplicity family; see
     :func:`rejected_under_family`. The default is Holm across all of them,
     which is what every merged number was computed under.
+
+    ``alignment`` exists because :func:`power_bracket` needs a per-arm engine.
+    It is not a way to obtain "the aligned power figure": one level is not
+    identified, so the caller-facing answer is a :class:`PowerBracket`.
 
     ``burnt_signals`` is a real (rows x hypotheses) matrix from the BURNT panel.
     Rows are resampled whole into the held-out cluster structure, so the
@@ -426,6 +624,7 @@ def simulate_power(
             sd_y=sd_y,
             icc=icc,
             rng=rng,
+            alignment=alignment,
         )
         pvalues = {
             name: wild_cluster_bootstrap_p(
@@ -437,6 +636,249 @@ def simulate_power(
             wins[name] += 1
 
     return {name: wins[name] / n_sims for name in names}
+
+
+class AlignmentLevelNotIdentifiedError(RuntimeError):
+    """The identified set straddles the gate, so no single power figure is
+    defensible: the session and row readings reach the realized precision at
+    magnitudes that differ by about a factor of two."""
+
+
+#: The identified set, ordered OPTIMISTIC FIRST. The homoskedastic corner is the
+#: DGP that produced every published figure; the other two are the levels the
+#: burnt panel does not choose between.
+BRACKET_ARMS = ("homoskedastic", ALIGNMENT_SESSION, ALIGNMENT_ROW)
+
+
+@dataclasses.dataclass(frozen=True)
+class PowerBracket:
+    """Power over the identified set of noise mechanisms, never a point.
+
+    ``arms`` holds every corner, keyed by :data:`BRACKET_ARMS`; ``alignments``
+    records the :class:`NoiseAlignment` each aligned corner ran at, so a quoted
+    span can never lose track of the magnitude that produced it — the same
+    reason :func:`report` carries ``family_size``.
+    """
+
+    arms: dict[str, dict[str, float]]
+    alignments: dict[str, NoiseAlignment | None]
+    target: str
+    shrinkage: float
+    n_sims: int
+
+    def __post_init__(self) -> None:
+        # A two-arm bracket prints in the same format as a three-arm one, and its
+        # span then reads as the identified set while being a subset of it.
+        for label, got in (("arms", self.arms), ("alignments", self.alignments)):
+            if set(got) != set(BRACKET_ARMS):
+                raise ValueError(
+                    f"a bracket covers exactly {list(BRACKET_ARMS)}; {label} carries "
+                    f"{sorted(got)}. A subset of the identified set is not a bracket."
+                )
+
+    def span(self) -> tuple[float, float]:
+        """The lowest and highest corner for the target hypothesis."""
+        values = [self.arms[arm][self.target] for arm in BRACKET_ARMS]
+        return min(values), max(values)
+
+    def arm_power(self, arm: str) -> float:
+        """One named corner. There is deliberately no positional accessor."""
+        if arm not in self.arms:
+            raise ValueError(f"unknown bracket arm {arm!r}; the corners are {list(BRACKET_ARMS)}")
+        return self.arms[arm][self.target]
+
+    def is_resolved(self, *, bar: float = GATE_POWER) -> bool:
+        """True only when all three corners' Wilson intervals clear the bar together.
+
+        Same shape and same reasoning as :func:`verdict_is_resolved`, one level
+        up: a span whose own Monte Carlo error crosses the bar is not an answer.
+        """
+        sides = set()
+        for arm in BRACKET_ARMS:
+            low, high = wilson_interval(self.arms[arm][self.target], self.n_sims)
+            if low <= bar <= high:
+                return False
+            sides.add(high < bar)
+        return len(sides) == 1
+
+    def power_at_gate(self, *, bar: float = GATE_POWER) -> float:
+        """The MOST PESSIMISTIC corner, and only when the span resolves.
+
+        The one scalar accessor on this type, so reaching for a number can never
+        hand back the homoskedastic corner that an ordered container would.
+        """
+        if self.is_resolved(bar=bar):
+            return min(self.arms[arm][self.target] for arm in BRACKET_ARMS)
+
+        low, high = self.span()
+        homo = self.arms["homoskedastic"][self.target]
+        session = self.arms[ALIGNMENT_SESSION][self.target]
+        row = self.arms[ALIGNMENT_ROW][self.target]
+        gam_session = self.alignments[ALIGNMENT_SESSION]
+        gam_row = self.alignments[ALIGNMENT_ROW]
+        # The homoskedastic corner is the one a caller reaching for a scalar
+        # would get from any ordered container, and it is the corner measured
+        # 1.36x optimistic. Returning any single arm here would print in the
+        # same format as a measured power figure.
+        raise AlignmentLevelNotIdentifiedError(
+            f"{self.target} power at the gate spans {low:.1%} to {high:.1%} across the "
+            f"identified set (homoskedastic {homo:.1%}, session gam "
+            f"{gam_session.gam if gam_session is not None else float('nan'):.3f} -> "
+            f"{session:.1%}, row gam "
+            f"{gam_row.gam if gam_row is not None else float('nan'):.3f} -> {row:.1%}, "
+            f"{self.n_sims} panels) "
+            f"and the span crosses the {bar:.0%} bar. This panel does not choose the LEVEL: the "
+            f"realized CR2 standard error of {REALIZED_SLOPE_SE_CR2:.4f} is reached at gam "
+            f"{GAM_AT_REALIZED_SE_SESSION:.3f} on sessions and at gam "
+            f"{GAM_AT_REALIZED_SE_ROW:.3f} on rows ({ALIGNMENT_MEMO} section 7.5), so one corner "
+            f"is NOT a power figure. The three corners above stand; a single number does not. "
+            f"Quote the span, or raise --n-sims if the corners are separated only by Monte "
+            f"Carlo error."
+        )
+
+
+def power_bracket(
+    *,
+    burnt_signals: np.ndarray,
+    cluster_sizes: list[int],
+    effects: dict[str, float],
+    sd_y: float,
+    icc: float,
+    n_sims: int,
+    wcb_boot: int,
+    seed: int,
+    family_size: int | None = None,
+    target: str = ALIGNMENT_FEATURE,
+    feature: str = ALIGNMENT_FEATURE,
+    gam: float | Mapping[str, float] | None = None,
+    shrinkage: float = GATE_SHRINKAGE,
+) -> PowerBracket:
+    """Power at all three corners of the identified set.
+
+    ``gam`` of ``None`` runs each aligned level at the magnitude that REACHES the
+    realized precision for that level — :data:`GAM_AT_REALIZED_SE_SESSION` and
+    :data:`GAM_AT_REALIZED_SE_ROW`. That is the default because a power bracket is
+    a BOUND: its worst corner has to be at least as bad as the one out-of-sample
+    standard error this programme actually measured, or the bracket would have
+    failed to warn about #1227 itself.
+
+    The burnt-panel READINGS, :data:`MEASURED_GAM_SESSION` and
+    :data:`MEASURED_GAM_ROW`, are deliberately NOT the default. They are
+    estimates of the mechanism rather than magnitudes consistent with the
+    realized precision, the row reading carries a t of 1.55 and is not
+    significant, and the session reading is known to over-read a session truth
+    (:data:`ESTIMATOR_READING_OF_A_SESSION_TRUTH`). They belong to
+    :func:`measure_noise_alignment`'s report. An earlier version of this function
+    ran the arms at the readings while the printed span line named the calibrated
+    pair as the identified set, which made the span about four times narrower
+    than it claimed to be.
+
+    ``gam`` as a NUMBER runs both aligned arms at that one magnitude, which
+    reproduces the memo's section 7.5 comparison table. ``gam`` as a MAPPING
+    keyed by level sets each arm separately, which is the only way to reach a
+    pair of different magnitudes such as the measured one — a single scalar
+    cannot express two levels measured on two scales.
+
+    ``shrinkage`` is carried for the record only; the caller passes already-shrunk
+    ``effects``, exactly as :func:`report` does.
+
+    There is no "cheap bracket" switch that drops an arm. The cheapening knob is
+    ``n_sims``, as everywhere else in this programme — dropping a corner is the
+    one shortcut that silently narrows the published span.
+    """
+    defaults = {
+        ALIGNMENT_SESSION: GAM_AT_REALIZED_SE_SESSION,
+        ALIGNMENT_ROW: GAM_AT_REALIZED_SE_ROW,
+    }
+    if gam is None:
+        chosen = defaults
+    elif isinstance(gam, Mapping):
+        unknown = sorted(set(gam) - set(ALIGNMENT_LEVELS))
+        if unknown:
+            raise ValueError(
+                f"gam mapping carries unknown levels {unknown}; the aligned corners are "
+                f"{list(ALIGNMENT_LEVELS)}"
+            )
+        chosen = {level: gam.get(level, defaults[level]) for level in ALIGNMENT_LEVELS}
+    else:
+        chosen = dict.fromkeys(ALIGNMENT_LEVELS, gam)
+    alignments: dict[str, NoiseAlignment | None] = {
+        "homoskedastic": None,
+        ALIGNMENT_SESSION: NoiseAlignment(
+            chosen[ALIGNMENT_SESSION], ALIGNMENT_SESSION, feature=feature
+        ),
+        ALIGNMENT_ROW: NoiseAlignment(chosen[ALIGNMENT_ROW], ALIGNMENT_ROW, feature=feature),
+    }
+    # One seed for every arm, so the corners are PAIRED across simulations and
+    # the span is a mechanism difference rather than three independent Monte
+    # Carlo draws.
+    arms = {
+        arm: simulate_power(
+            burnt_signals=burnt_signals,
+            cluster_sizes=cluster_sizes,
+            effects=effects,
+            sd_y=sd_y,
+            icc=icc,
+            n_sims=n_sims,
+            wcb_boot=wcb_boot,
+            seed=seed,
+            family_size=family_size,
+            alignment=alignments[arm],
+        )
+        for arm in BRACKET_ARMS
+    }
+    return PowerBracket(
+        arms=arms,
+        alignments=alignments,
+        target=target,
+        shrinkage=shrinkage,
+        n_sims=n_sims,
+    )
+
+
+def print_power_bracket(
+    bracket: PowerBracket, *, bar: float = GATE_POWER, seed: int | None = None
+) -> None:
+    """The three corners, their span, and which side the span resolved on.
+
+    Uses the :meth:`PowerBracket.is_resolved` predicate and never
+    :meth:`PowerBracket.power_at_gate`, so a driver cannot raise mid-run. Both
+    exist for the same reason :func:`verdict_is_resolved` (printed) sits beside
+    ``FloorDoesNotBindError`` (raised when a caller reaches for a number).
+    """
+    header = (
+        f"  ALIGNMENT BRACKET at {bracket.shrinkage:.0%} of the discovery effect, "
+        f"target {bracket.target}, {bracket.n_sims} panels"
+    )
+    print(header if seed is None else f"{header}, seed {seed}")
+    for arm in BRACKET_ARMS:
+        alignment = bracket.alignments[arm]
+        label = "homoskedastic" if alignment is None else f"{arm}-aligned"
+        magnitude = "" if alignment is None else f"gam {alignment.gam:.3f}"
+        power = bracket.arms[arm][bracket.target]
+        low, high = wilson_interval(power, bracket.n_sims)
+        print(
+            f"    {label:<16s} {magnitude:<14s}: {bracket.target} {power:.1%}  "
+            f"[95% {low:.1%}, {high:.1%}]"
+        )
+    low, high = bracket.span()
+    print(
+        f"    span {low:.1%} to {high:.1%}; the LEVEL is not identified "
+        f"({REALIZED_SLOPE_SE_CR2:.4f} is reached at gam {GAM_AT_REALIZED_SE_SESSION:.3f} on "
+        f"sessions and {GAM_AT_REALIZED_SE_ROW:.3f} on rows)"
+    )
+    if not bracket.is_resolved(bar=bar):
+        print(
+            f"    NO BRACKET VERDICT: the identified set crosses the {bar:.0%} bar; quote the "
+            f"span, not a corner. Re-run with more than --n-sims {bracket.n_sims} if the "
+            f"corners overlap."
+        )
+    elif low >= bar:
+        print(f"    BRACKET VERDICT: every corner clears {bar:.0%}")
+    else:
+        # is_resolved() is also true when every corner sits BELOW the bar, and
+        # calling that "clears" would invert the answer.
+        print(f"    BRACKET VERDICT: no corner clears {bar:.0%}")
 
 
 def load_held_out(labels_dir: Any) -> pd.DataFrame:
@@ -538,6 +980,21 @@ def burnt_panel(labels_dir: Any, briefs_dir: Any, *, population: str) -> pd.Data
     return panel
 
 
+def _standardised_design(panel: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """``(z(outcome), [1, z(signal) ...])`` — the burnt fit's one definition.
+
+    Shared by :func:`standardised_effects` and :func:`measure_noise_alignment`
+    rather than written twice: a second definition of the burnt fit is how two
+    published numbers come to disagree.
+    """
+    y = _z(panel[OUTCOME].astype(float).to_numpy())
+    X = np.column_stack(
+        [np.ones(len(panel))]
+        + [_z(panel[col].astype(float).to_numpy()) for col in SIGNALS.values()]
+    )
+    return y, X
+
+
 def standardised_effects(panel: pd.DataFrame) -> dict[str, float]:
     """The three partial slopes of z(outcome) on z(signal), jointly.
 
@@ -547,13 +1004,203 @@ def standardised_effects(panel: pd.DataFrame) -> dict[str, float]:
     the ATR-partial one — a marginal slope would re-import the confound the
     discovery already controlled for.
     """
-    y = _z(panel[OUTCOME].astype(float).to_numpy())
-    X = np.column_stack(
-        [np.ones(len(panel))]
-        + [_z(panel[col].astype(float).to_numpy()) for col in SIGNALS.values()]
-    )
+    y, X = _standardised_design(panel)
     beta, *_ = np.linalg.lstsq(X, y, rcond=None)
     return {name: float(beta[i + 1]) for i, name in enumerate(SIGNALS)}
+
+
+@dataclasses.dataclass(frozen=True)
+class AlignmentEstimate:
+    """Both levels' readings, together. Neither can be read without the other."""
+
+    feature: str
+    session_gam: float | None
+    session_se: float | None
+    session_t: float | None
+    session_points: int
+    row_gam: float
+    row_se: float
+    row_t: float
+    row_points: int
+
+
+def precision_disclosure() -> dict[str, Any]:
+    """What every power figure this module prints is conditional on.
+
+    Written into the JSON artifact as well as the human output, because the
+    artifact is what a memo quotes and a silent artifact defeats the point.
+    """
+    return {
+        "memo": ALIGNMENT_MEMO,
+        "simulated_slope_se_published": SIMULATED_SLOPE_SE_PUBLISHED,
+        "realized_slope_se_cr2": REALIZED_SLOPE_SE_CR2,
+        "optimism_ratio": SIMULATOR_OPTIMISM_RATIO,
+        "homoskedastic_default": (
+            "the default DGP gives every observation ONE noise scale, which is the "
+            "assumption measured to be optimistic by the ratio above"
+        ),
+        "level_not_identified": (
+            f"the realized precision is reached at gam {GAM_AT_REALIZED_SE_SESSION:.3f} on "
+            f"sessions and {GAM_AT_REALIZED_SE_ROW:.3f} on rows; the burnt panel does not "
+            f"choose between the two levels, so a single aligned power figure is not "
+            f"identified"
+        ),
+        "projections_are_not_bracketed": (
+            "the cluster-count search and the gate DATE are computed on the "
+            "homoskedastic corner only; --alignment-bracket does not move them"
+        ),
+    }
+
+
+def _ols_slope(y: np.ndarray, x: np.ndarray) -> tuple[float, float, float]:
+    """Slope of ``y`` on ``x`` with an intercept: ``(slope, se, t)``."""
+    design = np.column_stack([np.ones(len(x)), x])
+    beta, *_ = np.linalg.lstsq(design, y, rcond=None)
+    resid = y - design @ beta
+    dof = len(x) - 2
+    sxx = float(np.sum((x - float(np.mean(x))) ** 2))
+    if dof <= 0 or sxx <= 0:
+        return float(beta[1]), float("nan"), float("nan")
+    sigma2 = float(resid @ resid) / dof
+    se = math.sqrt(sigma2 / sxx)
+    return float(beta[1]), se, (float(beta[1]) / se if se > 0 else float("nan"))
+
+
+def measure_noise_alignment(
+    panel: pd.DataFrame,
+    *,
+    feature: str = ALIGNMENT_FEATURE,
+    min_episodes_per_session: int = MIN_EPISODES_PER_SESSION_FOR_GAM,
+) -> AlignmentEstimate:
+    """How far the burnt panel's noise ALIGNS with ``feature``, at both levels.
+
+    Returns BOTH levels because this panel does not identify which one is real.
+    The slope of log(per-session residual sd) on z(per-session mean feature)
+    measures a session-level mechanism, but it does not identify the level:
+    simulated on the real burnt design with 1500 panels per row, a ROW-level
+    truth of 0.360 reads back as +0.240 and is significant at ``|t| > 1.96`` in
+    72.4% of panels, so a positive, significant session reading is not evidence
+    for the session level.
+
+    It also OVER-READS a session-level truth: a known session truth of 0.360
+    reads back as +0.419 on average (sd 0.091). And it is slightly liberal under
+    the null — 9.0% of homoskedastic panels read significant against a nominal
+    5%. Measured 2026-11-07, ``a20_simulator_precision_gap_2026_11_07.md``
+    section 7.5.
+
+    The two readings disagree about magnitude by roughly a factor of two once
+    they are turned into a simulator calibration: the realized CR2 standard error
+    of 0.0731 is reached at gam 0.400 on sessions and 0.205 on rows. A
+    registration quoting its own feature's alignment must quote the span, not one
+    reading.
+
+    This is NOT ``a20_overlap_power.estimate_signal_loading`` (kappa) and the two
+    must not be substituted for each other. Kappa fits
+    ``|residual| = a + b*z(signal)`` and returns ``b / a``, a LINEAR widening
+    applied only to the SHARED overlap component. ``gam`` is the slope of a LOG
+    spread, an exponential widening applied to the WHOLE residual, and it comes
+    in two levels. The row arm here is the closest relative of kappa and still a
+    different link function.
+
+    Reads the BURNT panel only — the frame :func:`burnt_panel` returns. It never
+    globs the label store and never compares a date against
+    :data:`DISCOVERY_CUTOFF`, so it cannot reach a held-out row;
+    ``tests/test_a20_power_preflight.py`` asserts that over the module's source.
+    """
+    if feature not in SIGNALS:
+        raise ValueError(f"unknown feature {feature!r}; the hypotheses are {list(SIGNALS)}")
+    column = SIGNALS[feature]
+
+    y, X = _standardised_design(panel)
+    beta, *_ = np.linalg.lstsq(X, y, rcond=None)
+    resid = y - X @ beta
+    z_feature = _z(panel[column].astype(float).to_numpy())
+
+    row_gam, row_se, row_t = _ols_slope(np.log(np.abs(resid) + _LOG_ABS_FLOOR), z_feature)
+
+    arrival = panel["arrival"].astype(str).to_numpy()
+    # Sessions enter UNWEIGHTED, matching the section 7.3 construction. Weighting
+    # by episode count would be a different estimator and a different number.
+    session_sd, session_mean = [], []
+    for session in sorted(set(arrival)):
+        rows = arrival == session
+        if int(np.count_nonzero(rows)) < min_episodes_per_session:
+            continue
+        session_sd.append(float(np.std(resid[rows], ddof=1)))
+        session_mean.append(float(np.mean(z_feature[rows])))
+
+    points = len(session_sd)
+    if points < MIN_SESSIONS_FOR_GAM_SLOPE:
+        # INSUFFICIENT, not estimated. Reported, not dropped — the doctrine
+        # `volatility_sufficiency` sets in the frozen #1227 registration. The
+        # real surviving count is handed back so the printer can say how far
+        # short it fell.
+        return AlignmentEstimate(
+            feature=feature,
+            session_gam=None,
+            session_se=None,
+            session_t=None,
+            session_points=points,
+            row_gam=row_gam,
+            row_se=row_se,
+            row_t=row_t,
+            row_points=len(resid),
+        )
+
+    session_gam, session_se, session_t = _ols_slope(
+        np.log(np.asarray(session_sd) + _LOG_ABS_FLOOR), _z(np.asarray(session_mean))
+    )
+    return AlignmentEstimate(
+        feature=feature,
+        session_gam=session_gam,
+        session_se=session_se,
+        session_t=session_t,
+        session_points=points,
+        row_gam=row_gam,
+        row_se=row_se,
+        row_t=row_t,
+        row_points=len(resid),
+    )
+
+
+def print_alignment_estimate(estimate: AlignmentEstimate) -> None:
+    """The burnt-panel reading, with the non-identification stated beside it."""
+    print(
+        f"  BURNT-PANEL ALIGNMENT of the noise with {estimate.feature} "
+        f"(both levels; neither identifies the other)"
+    )
+    if estimate.session_gam is None:
+        print(
+            f"    session: {estimate.session_points} sessions with "
+            f">={MIN_EPISODES_PER_SESSION_FOR_GAM} episodes - INSUFFICIENT, not estimated "
+            f"(floor {MIN_SESSIONS_FOR_GAM_SLOPE}). Reported, not dropped."
+        )
+    else:
+        print(
+            f"    session: gam {estimate.session_gam:+.3f}  se {estimate.session_se:.3f}  "
+            f"t {estimate.session_t:+.2f}  ({estimate.session_points} sessions with "
+            f">={MIN_EPISODES_PER_SESSION_FOR_GAM} episodes)"
+        )
+    print(
+        f"    row:     gam {estimate.row_gam:+.3f}  se {estimate.row_se:.3f}  "
+        f"t {estimate.row_t:+.2f}  ({estimate.row_points} episodes)"
+    )
+    # The published reading beside this panel's own, so a number that drifted
+    # from the memo's is visible rather than quietly replacing it.
+    print(
+        f"    memo 2026-11-07, burnt panel: session gam {MEASURED_GAM_SESSION:+.3f} se "
+        f"{MEASURED_GAM_SESSION_SE:.3f} ({MEASURED_GAM_SESSION_POINTS} sessions); "
+        f"row gam {MEASURED_GAM_ROW:+.3f} se {MEASURED_GAM_ROW_SE:.3f} "
+        f"({MEASURED_GAM_ROW_POINTS} episodes)"
+    )
+    print(
+        f"    NOT IDENTIFIED: a row-level truth of {MEASURED_GAM_SESSION:.2f} reads "
+        f"{ESTIMATOR_READING_OF_A_ROW_TRUTH:+.3f} on the session arm and is significant in "
+        f"72.4% of panels; a session truth of {MEASURED_GAM_SESSION:.2f} is OVER-READ as "
+        f"{ESTIMATOR_READING_OF_A_SESSION_TRUTH:+.3f}; the session arm is liberal under the "
+        f"null ({ESTIMATOR_SIZE_UNDER_HOMOSKEDASTICITY:.1%} at a nominal 5%). "
+        f"({ALIGNMENT_MEMO} section 7.5)"
+    )
 
 
 def effect_ci(
@@ -590,11 +1237,20 @@ def report(
     seed: int,
     max_clusters: int = 200,
     family_size: int | None = None,
+    alignment_bracket: bool = False,
+    alignment_gam: float | None = None,
+    alignment_feature: str = ALIGNMENT_FEATURE,
+    measure_alignment: bool = False,
 ) -> dict[str, Any]:
     """One population's answer: effects, power at each shrinkage, and the date.
 
     ``family_size`` is carried into the result so a memo quoting a power figure
     can never lose track of which multiplicity family produced it.
+
+    There is deliberately no ``alignment`` parameter. One level is not identified
+    (:data:`ALIGNMENT_MEMO` section 7.5), so the only aligned answer this
+    function will produce is the three-corner :class:`PowerBracket` that
+    ``alignment_bracket`` asks for.
     """
     burnt = burnt_panel(labels_dir, briefs_dir, population=population)
     effects = standardised_effects(burnt)
@@ -666,7 +1322,32 @@ def report(
                         accrual_per_session=accrual,
                     )
 
+    bracket = None
+    if alignment_bracket:
+        bracket = power_bracket(
+            burnt_signals=signals,
+            cluster_sizes=sizes,
+            effects={n: shrink(effects[n], GATE_SHRINKAGE) * sd_y for n in SIGNALS},
+            sd_y=sd_y,
+            icc=icc,
+            n_sims=n_sims,
+            wcb_boot=wcb_boot,
+            seed=seed,
+            family_size=family_size,
+            target=alignment_feature,
+            feature=alignment_feature,
+            gam=alignment_gam,
+        )
+
+    # The estimate reads the panel already in hand, so --measure-alignment costs
+    # one fit and never a second trip to the store.
+    estimate = (
+        measure_noise_alignment(burnt, feature=alignment_feature) if measure_alignment else None
+    )
+
     return {
+        "alignment_bracket": bracket,
+        "alignment_estimate": estimate,
         "clusters_needed_for_gate": needed,
         "gate_date": gate_when,
         "power_by_cluster_count": table,
@@ -728,6 +1409,13 @@ def clusters_for_power(
     given an average size: the panel's clusters are far from uniform, and
     pretending they are would make the projection optimistic in exactly the
     direction that matters.
+
+    Takes NO ``alignment``, so the cluster search and its table are the
+    homoskedastic corner. If alignment is ever threaded in here it goes into
+    :func:`power_at_cluster_counts` in the SAME commit: the two are compared to
+    12 places by ``TestTheSearchAndTheTableAreOneComputation``, so changing one
+    alone turns that test red for the right reason and the memo's table and
+    verdict stop being one computation.
     """
     seen: dict[int, dict[str, float]] = {}
     n = len(observed_sizes)
@@ -827,7 +1515,59 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="repeatable; default is both",
     )
+    parser.add_argument(
+        "--alignment-bracket",
+        action="store_true",
+        help=(
+            "also print power at all three corners of the identified set "
+            "(homoskedastic, session-aligned, row-aligned) at the gate shrinkage"
+        ),
+    )
+    parser.add_argument(
+        "--alignment-gam",
+        type=float,
+        default=None,
+        help=(
+            "run BOTH aligned arms of the bracket at this magnitude instead of each "
+            "level's own measured value; reproduces the memo's section 7.5 table"
+        ),
+    )
+    parser.add_argument(
+        "--alignment-feature",
+        choices=tuple(SIGNALS),
+        default=ALIGNMENT_FEATURE,
+        help="which hypothesis the noise aligns with (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--measure-alignment",
+        action="store_true",
+        help="print the burnt-panel alignment estimate, at both levels, with its se",
+    )
     args = parser.parse_args(argv)
+
+    # Argument errors, caught where --ci-boot's are in the operating-characteristics
+    # script: before the burnt read, so a wrong combination costs no minutes.
+    if args.alignment_gam is not None:
+        if not args.alignment_bracket:
+            parser.error(
+                "--alignment-gam sets the magnitude of the bracket arms and has no effect "
+                "without --alignment-bracket; a single aligned power figure is not identified "
+                f"({ALIGNMENT_MEMO} section 7.5)"
+            )
+        if not math.isfinite(args.alignment_gam) or args.alignment_gam <= 0:
+            parser.error(
+                f"--alignment-gam must be a finite, strictly positive magnitude, got "
+                f"{args.alignment_gam}. A zero magnitude is the homoskedastic corner, not a "
+                f"second arm: it makes both aligned corners bit-identical to it, the span "
+                f"zero-wide, and the one scalar accessor hand back the corner measured to be "
+                f"{SIMULATOR_OPTIMISM_RATIO}x optimistic."
+            )
+    if args.alignment_feature != ALIGNMENT_FEATURE and not (
+        args.alignment_bracket or args.measure_alignment
+    ):
+        parser.error(
+            "--alignment-feature has no consumer without --alignment-bracket or --measure-alignment"
+        )
 
     out = {}
     for population in args.population or [POPULATION_BRIEFED, POPULATION_ALL]:
@@ -840,6 +1580,10 @@ def main(argv: list[str] | None = None) -> int:
             seed=args.seed,
             max_clusters=args.max_clusters,
             family_size=args.family_size,
+            alignment_bracket=args.alignment_bracket,
+            alignment_gam=args.alignment_gam,
+            alignment_feature=args.alignment_feature,
+            measure_alignment=args.measure_alignment,
         )
         out[population] = r
         print(f"\n=== population: {population} ===  family of {r['family_size']}")
@@ -868,6 +1612,18 @@ def main(argv: list[str] | None = None) -> int:
                 f"  NO VERDICT: the Monte Carlo interval straddles the bar. "
                 f"Re-run with more than --n-sims {args.n_sims}."
             )
+        # Printed on EVERY default run, including the reproductions of the
+        # published figures, and it moves no number. This is what makes the
+        # optimistic path hard to take by accident.
+        print(
+            f"  *** this is the HOMOSKEDASTIC corner. Measured 2026-11-07, this simulator is\n"
+            f"      {SIMULATOR_OPTIMISM_RATIO:.2f}x optimistic on the slope standard error "
+            f"({SIMULATED_SLOPE_SE_PUBLISHED:.4f} simulated against a\n"
+            f"      realized {REALIZED_SLOPE_SE_CR2:.4f}) because the real noise ALIGNS with "
+            f"the feature under\n"
+            f"      test. Re-run with --alignment-bracket for the identified set.\n"
+            f"      ({ALIGNMENT_MEMO})"
+        )
         if r["clusters_needed_for_gate"] and r["gate_date"] is not None:
             print(
                 f"  needs ~{r['clusters_needed_for_gate']} clusters (has {r['held_out_clusters']}) "
@@ -889,9 +1645,38 @@ def main(argv: list[str] | None = None) -> int:
                 f"    {count:3d} clusters: atr {row['atr']:.1%} "
                 f"[95% {lo:.1%}, {hi:.1%}] reached {when}"
             )
+        # Last, so the verdict, the cluster count and the cluster table stay one
+        # contiguous block: these two are additional readings, not part of it.
+        if r["alignment_bracket"] is not None:
+            print_power_bracket(r["alignment_bracket"], seed=args.seed)
+        if r["alignment_estimate"] is not None:
+            print_alignment_estimate(r["alignment_estimate"])
 
     if args.out_json:
-        args.out_json.write_text(json.dumps(out, indent=2, default=str) + "\n")
+        # The machine-readable artifact is the one a memo or a ledger row quotes,
+        # so it carries the disclosure too. A power figure recorded here without
+        # it is exactly the accident this module exists to prevent: the human
+        # output prints the warning and the JSON would have been silent.
+        #
+        # It goes INSIDE each population's record, not beside them. The top level
+        # is keyed by population and consumers iterate it, so a sibling key would
+        # read as a third population (`TestThePopulationFlag` pins that contract).
+        # The cost is one duplicated block per population; the benefit is that
+        # every recorded figure carries its condition locally.
+        disclosure = precision_disclosure()
+        for record in out.values():
+            record[PRECISION_DISCLOSURE_KEY] = disclosure
+
+        # Dataclasses are written as STRUCTURED data, not as a stringified repr:
+        # `asdict` recurses into the per-arm NoiseAlignment values, so a recorded
+        # bracket keeps the magnitude that produced each corner. Everything else
+        # (dates) still falls through to str.
+        def _as_json(value: Any) -> Any:
+            if dataclasses.is_dataclass(value) and not isinstance(value, type):
+                return dataclasses.asdict(value)
+            return str(value)
+
+        args.out_json.write_text(json.dumps(out, indent=2, default=_as_json) + "\n")
     return 0
 
 

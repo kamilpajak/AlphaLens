@@ -712,5 +712,64 @@ class TestTheWholeDriverRuns(unittest.TestCase):
         self.assertEqual(len(table), len(written["rows"]))
 
 
+class TestTheBitIdenticalPinOnlyCoversTheOffPath(unittest.TestCase):
+    """``simulate_overlapping_panel`` has no feature-aligned path, on purpose.
+
+    This module is a second copy of the DGP. The bit-identical pin above only
+    ever compares the OFF path, and forking the alignment mechanism into both
+    modules is how the two would silently diverge - so the mechanism lives in
+    ``a20_power`` only and the overlap memo's own 64.6-66.2% stay what they are.
+
+    That asymmetry gets a test rather than a comment: the next reader must not
+    mistake the pin above for full coverage.
+    """
+
+    _SIGNALS = np.random.default_rng(0).normal(0.0, 1.0, (50, 3))
+    _EFFECTS = {"atr": 0.2, "ma50": -0.1, "press": 0.05}
+    _SIZES = [3, 4, 2, 5]
+
+    def _overlap_panel(self):
+        return ov.simulate_overlapping_panel(
+            burnt_signals=self._SIGNALS,
+            arrival_offsets=[0, 1, 2, 3],
+            cluster_sizes=self._SIZES,
+            effects=self._EFFECTS,
+            sd_y=1.0,
+            icc=0.4,
+            shared_fraction=0.0,
+            horizon=20,
+            rng=np.random.default_rng(42),
+        )
+
+    def _power_panel(self, **extra):
+        return a20_power.simulate_panel(
+            burnt_signals=self._SIGNALS,
+            cluster_sizes=self._SIZES,
+            effects=self._EFFECTS,
+            sd_y=1.0,
+            icc=0.4,
+            rng=np.random.default_rng(42),
+            **extra,
+        )
+
+    def test_the_two_simulators_still_agree_on_the_default_path(self):
+        self.assertTrue(np.array_equal(self._power_panel()[0], self._overlap_panel()[0]))
+
+    def test_the_agreement_does_not_extend_to_the_aligned_path(self):
+        aligned = self._power_panel(
+            alignment=a20_power.NoiseAlignment(
+                a20_power.MEASURED_GAM_SESSION, a20_power.ALIGNMENT_SESSION
+            )
+        )[0]
+        self.assertFalse(np.array_equal(aligned, self._overlap_panel()[0]))
+
+    def test_the_overlap_simulator_takes_no_alignment(self):
+        # Stated as a signature fact, so adding a second copy of the mechanism
+        # has to argue with this test first.
+        import inspect
+
+        self.assertNotIn("alignment", inspect.signature(ov.simulate_overlapping_panel).parameters)
+
+
 if __name__ == "__main__":
     unittest.main()
