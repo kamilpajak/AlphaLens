@@ -251,15 +251,26 @@ Verified before the lock: the shadow covers 66 of 66 calendar days (2026-07-12..
      implies — a 36% understatement of the effect a model needs. **(b)** The
      correction is NOT a constant: it comes from the alignment between session
      noise and the feature under test, measured as large for a volatility-like
-     feature and absent for a feature orthogonal to session volatility. So no
+     feature. It is NOT absent for a feature merely orthogonal to SESSION
+     volatility: the alignment reaches the realized precision at row level too,
+     with no session structure, and that memo §7.5 measures that this panel does
+     not identify which level it lives at. So no
      blanket multiplier is available, and that memo §9 recommends bounding
      precision by the realized CR2 SE of 0.0731 at 394 episodes in 64 arrival
      clusters rather than modelling the mechanism per feature. **(c)** D5's
      ATR-only baseline is now a measured quantity rather than a hypothetical: ATR
      alone reads a held-out −0.0713 with an interval spanning zero, so house rule
      5's "must beat ATR" is a LOW bar, while beating it detectably on 64 clusters
-     is the binding one. The floor-25 and floor-30 episode gates passed on
-     2026-09-05 and are not what blocks a registration.
+     is the binding one. On data volume, two things that an earlier wording of
+     this note ran together: the "25-30 grouped-CV floor" counts **arrival
+     clusters**, not episodes, and on the 2026-09-05 re-measure only the
+     **ivx30-present arm** cleared it at 31 clusters, while the strict
+     `chain_quality == "OK"` arm read 18 and did NOT clear floor-30. So the
+     floors stop blocking the ivx30-present arm and still block the strict one,
+     and that re-measure is recorded outside this repository and carries no
+     construction here. Also, house rule 5 is a PAIR of baselines on the same
+     folds, base rate plus univariate ATR; a dead ATR makes the base-rate half
+     binding, and that half is not measured.
 4. **#1479 (filed 2026-09-16): one immutable brief per date.** The ladder replay has the same timing gap as the label. Measured impact: the default 90-day `/edge` window holds 21 affected rows (headline +3.4 % → +3.5 % without them — cosmetic); the full history holds 166 of 699 matured rows (+2.0 % → +2.4 %). #1479 removes the cause (one deciding run at 00:30 UTC, repair-only runs, deadline at the open) and flags the 16 historical dates.
 5. **README house rules update:** rule 4 names `sel_ar_h` / `sel_zar_h`; rule 9 gets the embargo = horizon statement; a new rule: "a model reads the stamped label; recomputing a label in a script is a new definition and needs its own version".
 

@@ -663,10 +663,15 @@ Two things follow and they point opposite ways:
 > that is a direct SE. The cause is NONE of the three assumptions this bullet
 > names: normal draws, the ICC on residual variance, and burnt rows resampled into
 > held-out sizes each move the simulated SE by 3% or less. The cause is a mechanism
-> not on the list — arrival sessions differ in noise scale and the scale tracks the
-> session's own volatility, the quantity the regressor measures. Measured on the
-> burnt panel at +0.360 (se 0.101) and put back into the simulator, it predicts
-> 0.0707 against the realized 0.0731, closing 88% of the gap. The bullet's own
+> not on the list — the noise is HETEROSKEDASTIC AND ALIGNED WITH THE FEATURE under
+> test, so the panel's noise scale tracks ATR itself, and the simulator gives every
+> observation one scale. Measured on the burnt panel at +0.360 (se 0.101) and put
+> back into the simulator, the session-level reading predicts 0.0707 against the
+> realized 0.0731, closing 88% of the gap as read and 71% once the estimator's own
+> measured upward bias is removed. **The LEVEL of the alignment is NOT identified:**
+> row-level alignment reaches the same realized SE with no clustering at all, and
+> the estimator cannot tell the two apart. The session reading is preferred only
+> because the row-level test has nine times the sample and finds less. The bullet's own
 > framing — "if the true outcome distribution is skewed" — points at the one
 > candidate the measurement rules out. Full construction, every table and the
 > verbatim output: `a20_simulator_precision_gap_2026_11_07.md`. That memo reads

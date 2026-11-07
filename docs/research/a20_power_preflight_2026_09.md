@@ -507,6 +507,33 @@ Two cautions on that figure:
   brief row. The power simulation therefore takes its cluster shape from a panel
   slightly wider than the registered one.
 
+> ### POWER FIGURES QUALIFIED 2026-11-07 — the 91.5% and 92.2% above stand as
+> SIMULATOR readings and are NOT the realized power
+>
+> Both figures come from `a20_power.simulate_panel`, and the spent look measured that
+> simulator to be optimistic on the slope standard error by **1.36x**. The cause is
+> not any assumption the registration disclosed in advance: the noise is
+> heteroskedastic and ALIGNED WITH THE FEATURE under test, and the simulator gives
+> every observation one noise scale. Measured on the burnt panel at +0.360
+> (se 0.101) and put back in, the session-level reading predicts an SE of 0.0707
+> against the realized 0.0731, which is 88% of the gap as read and 71% once the
+> estimator's own upward bias is removed. The LEVEL of the alignment is not
+> identified by that panel.
+> Construction, five probes and verbatim output:
+> [`a20_simulator_precision_gap_2026_11_07.md`](a20_simulator_precision_gap_2026_11_07.md).
+>
+> The REALIZED reading of the same gate point is **74.9% to 80.4%**, which straddles
+> the 80% bar, and was published in
+> [`atr_confirmation_prereg_2026_09.md`](atr_confirmation_prereg_2026_09.md) §11.5 and
+> ledger note 07.F on 2026-11-07. Nothing in §8 is withdrawn: the gate was met
+> honestly and outcome-blind on the only measurement that existed before the run, the
+> FLOORS are unaffected because they count episodes and clusters rather than power,
+> and this is a retrospective limitation rather than a protocol breach. But **the two
+> power percentages above must not be quoted as the power this registration had.**
+>
+> §7.3's open item — the two-sided-versus-one-sided direction mismatch — is also
+> still open and is separate from this.
+
 **What this settles and what it does not.** The registration's own floors are met and
 its power condition is met. Nothing here is a look: the preflight reads no outcome
 column, and the power simulation injects effects into simulated outcomes. Whether to
