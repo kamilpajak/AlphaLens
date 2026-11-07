@@ -222,6 +222,23 @@ Verified before the lock: the shadow covers 66 of 66 calendar days (2026-07-12..
    - **The ATR-tilt kill line is NOT run on its own.** It was registered on 2026-07-06 with a trigger of ≥ 40 fresh `car_10` brief-days plus regime diversity, which is probably met by now; running it separately would spend the held-out episodes the combined #1227 decision needs.
    - **Owner principle (2026-09-17): brief ORDER depends only on the score, and producing the score is the job of future models trained on this registry.** The current `selection_score` (`layer4_weighted_score` minus the ATR penalty, `scorer-v1-atrtilt-lam1.0-lo5.77-hi8.37`) stays frozen — no new hand-made terms — until a model score passes its own registered test.
    - **Appended note 2026-11-06 — the #1227 parenthetical in this step is stale in two places; the text above is left as written.** It reads "(#1227: ATR, MA50 extension, press gate, Holm, power-gated, Wake 2026-10-14)". Both facts were right on 2026-09-17 and neither is right now. **(a) Family.** The registration filed on 2026-09-23 fixed **FAMILY = 1, ATR only**; clusters 2 and 9 are not in the look and keep their looks unspent (`atr_confirmation_prereg_2026_09.md` header; ledger §4 row 2026-09-23). There is no Holm at a family of one. **(b) Wake.** The wake is **2026-10-09**, not 2026-10-14. Which document is wrong was decided by reading both against the frozen code: #1227's own body carries `Wake: 2026-10-09` and marks its `car_10` derivation "Superseded 2026-09-24", and the frozen rail agrees — `RUN_NOT_BEFORE = dt.date(2026, 10, 9)` in `apps/alphalens-research/scripts/ml/2026_09_a20_atr_confirmation.py`, read 2026-11-06. So the live date is 2026-10-09 and this memo holds the stale copy. It is stale rather than mistaken: 2026-10-14 was the issue's wake on 2026-09-17 and was derived under `car_10`, and the first sub-bullet of this step predicted the move ("the power gate is reached later"). It moved the other way, because the new date is arithmetic on the frozen `MIN_EPISODES = 300` floor and the measured accrual, not on the horizon. **The §4 census is NOT stale and is unchanged.** It is dated 2026-09-16 and the shape it reports still holds: re-measured 2026-11-06 the held-out panel gives p10 2, p50 5, mean 6.1, p90 11 episodes per arrival cluster against its p10 2, p50 5, mean 6.2, p90 11.
+   - **Appended note 2026-11-07 — #1227 has now REPORTED, and one sentence in the
+     note above is itself stale. Both are left as written.** The confirmation ran on
+     2026-11-07 and reported **RETIRE, conclusion `inconclusive`**: slope −0.0713,
+     one-sided p 0.1782 against 0.05, 90% interval [−0.1864, +0.0490] on 394
+     ticker-episodes in 64 arrival clusters
+     (`atr_confirmation_prereg_2026_09.md` §11; ledger §4 row of that date).
+     **(a)** This step's line "Until #1227 reports, no model influences selection
+     without its own registration" is discharged on its condition and unchanged in
+     its effect: #1227 reported, it reported a non-pass, so no ATR-based selection
+     influence is licensed at all, and ledger rule 3 still requires any model to
+     carry its own registration. **(b)** The 2026-11-06 note above says clusters 2
+     and 9 "keep their looks unspent". The ledger's own appended note of 2026-11-06,
+     written later the same day, settled that cluster 9 stands AT rule 4's cap of two
+     re-looks and cluster 2 one PAST it; neither holds a spare SWEEP look, and what
+     each holds is one rule-3 confirmation under the owner's "outside the cap"
+     interpretation of that date. **(c)** Cluster 1's cumulative look count is now 4,
+     and it is retired for selection and ordering under rule 4.
 4. **#1479 (filed 2026-09-16): one immutable brief per date.** The ladder replay has the same timing gap as the label. Measured impact: the default 90-day `/edge` window holds 21 affected rows (headline +3.4 % → +3.5 % without them — cosmetic); the full history holds 166 of 699 matured rows (+2.0 % → +2.4 %). #1479 removes the cause (one deciding run at 00:30 UTC, repair-only runs, deadline at the open) and flags the 16 historical dates.
 5. **README house rules update:** rule 4 names `sel_ar_h` / `sel_zar_h`; rule 9 gets the embargo = horizon statement; a new rule: "a model reads the stamped label; recomputing a label in a script is a new definition and needs its own version".
 

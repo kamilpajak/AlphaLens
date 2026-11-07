@@ -2,6 +2,7 @@
 
 **Date:** 2026-07-06
 **Status:** REJECTED (scorer-v2 ext axis) / NO-CHANGE (V1R breakpoint refresh)
+**ATR kill line (§5):** READ 2026-11-07 — did NOT fire, the live tilt is `unchanged`; the regime three-way's branch (c) is an OPEN owner decision (appended note in §5).
 **Decision class:** ordering-only tilt calibration (brief sort key); no gate, cap, or trading-rule change
 **Judged by:** three independent adversarial lenses (overfit, doctrine, production) — 1× approve, 2× approve-with-changes; all required changes incorporated below
 **Calibration data:** `~/.alphalens/diagnostics/signal_panel.parquet` (523 rows, 50 brief_dates 2026-04-14..07-05, 415 plannable; episode-deduped to 224 ticker-episodes)
@@ -110,6 +111,51 @@ Then implement: `selection_score.py` — `EXT_RAMP_LO/HI` + `LAMBDA_EXT` + `ext_
 - **Success line (V2A ships):** day-block-bootstrap top-3 mean car_10 delta vs V1 with 95% CI excluding 0 on the positive side, on episode-deduped fresh data, robust to ±1-week cut placement.
 - **Pre-registered kill/re-check line for the EXISTING v1 ATR tilt at the same look:** re-run the ATR-only control (C_atrrank) and C_l4only on fresh data FIRST, before any v2 evaluation. If fresh-data ATR-rank rho10 ≤ 0, or C_l4only is no longer worse than V1, the correct change is **retiring the tilt** (revert to layer4-only) — itself a `SCORER_CONFIG_VERSION` bump with its own cohort reset. The v1 tilt does not get grandfather status; its current support is descriptive-only (§2).
 - **Pre-registered regime diagnostic on the ATR kill line (added 2026-07-06, before any post-2026-07-05 outcome exists):** ONE interaction hypothesis — *the ATR effect is conditional on the market-state VOLATILITY axis {low, high}* (per [`market_state_signal_design_2026_07_05.md`](market_state_signal_design_2026_07_05.md)). The label is index-level and reconstructable for the full window from the grouped-daily store + FRED VIX under the frozen `mstate-v1-…-UNVALIDATED` config — stamped columns exist only from 2026-07-05, so pre-07-05 labels are reconstructed with the SAME frozen parameters, computed before joining any outcome. Method: episode-clustered comparison of ATR-rank rho10 between vol=high and vol=low sub-windows on fresh data (burnt window reported descriptively only, labelled as such). This makes the kill line three-way: (a) ATR holds unconditionally → keep; (b) ATR dead in both vol states → retire the tilt; (c) ATR alive in exactly one vol state → do NOT retire silently — register a conditional-penalty candidate (*atr_penalty active only when vol=high*) for the FOLLOWING window, as its own `SCORER_CONFIG_VERSION` and its own Bonferroni entry. One charge for this interaction test; the full 4-state grid is explicitly NOT in the family (single-axis only, matching the market-state memo's pre-committed-family discipline). Power caveat: the unit is independent regime EPISODES, not days — with likely 1-3 vol-state episodes in the fresh window, "insufficient episodes" is an honest and acceptable outcome. This is the first registered consumer of the market_state infrastructure: regime-conditional policy enters as a pre-validated discrete switch, never as continuous refitting.
+
+> **Appended note 2026-11-07 — the ATR kill line has now been read, and the bullet
+> above is left as written.** #1227's held-out confirmation ran on 2026-11-07 and
+> reported a standardised partial slope of **−0.0713** on 394 ticker-episodes in 64
+> arrival clusters, with a one-sided p of 0.1782 and a 90% interval of [−0.1864,
+> +0.0490] (`atr_confirmation_prereg_2026_09.md` §11; ledger §4 row of that date).
+>
+> **§5's kill line did NOT fire on the leg that was evaluated, and its other leg was
+> never run.** The bullet above states a two-prong OR: retire the tilt if fresh-data
+> ATR-rank rho10 is at most 0, **or** if C_l4only is no longer worse than V1. The
+> 2026-09-17 fold-in carried only the SIGN leg into #1227 — `decide()` takes a slope,
+> a p-value and an interval and has no input for a config comparison — and that
+> narrowing is recorded in `atr_confirmation_prereg_2026_09.md` §6, not here. So: the
+> sign leg did not fire, because the slope stayed negative. **The C_l4only-versus-V1
+> leg has not been re-run on fresh data at all**, and #1227 spent the held-out
+> episodes it would have needed. The live tilt is therefore `unchanged` and
+> `SCORER_CONFIG_VERSION = "scorer-v1-atrtilt-lam1.0-lo5.77-hi8.37"` keeps running
+> with no version bump and no cohort reset. Branch (a) of the three-way is not
+> reached either, because #1227 did not promote: the slope missed the −0.10 floor by
+> 0.0287 and the p-value missed 0.05 by 0.1282.
+>
+> **Branch (c) is OPEN, and nothing may be tilted on the evidence that exists.** The
+> confirmation's one registered interaction was estimated and printed `bull_quiet`
+> −0.0144 on 322 episodes against `bull_volatile` −0.3160 on 72, which reads on its
+> face like "ATR alive in exactly one vol state". It does not adjudicate branch (c),
+> for three reasons recorded in full in that memo's §11.8. First, the method
+> registered HERE is an episode-clustered comparison of ATR-rank rho10 between the
+> two volatility sub-windows; what ran is two separate standardised partial OLS
+> slopes grouped by the full four-state `market_state` label, with no contrast
+> statistic. Second, each arm is re-standardised in its OWN units by `atr_slope`, so
+> the two numbers are not a comparison of like with like and the gap is not a
+> difference in effect. Third, the sufficiency check passed at exactly
+> `MIN_VOL_EPISODES = 4`, which over two observed states means two contiguous
+> calendar stretches per arm, and the arms pool across three
+> `market_state_config_version` cohorts that the market-state registration says are
+> never pooled.
+>
+> Producing the registered contrast now would be a new look on held-out episodes the
+> ledger has no slot for, and cluster 1 cannot pay for it: rule 4 retired it for
+> selection and ordering on 2026-11-07. So branch (c) is an OPEN OWNER DECISION —
+> either register a conditional-penalty candidate for a FORWARD window with its own
+> `SCORER_CONFIG_VERSION` and its own Bonferroni entry, as this bullet pre-commits,
+> or record that the branch is unadjudicable on the evidence that exists and close
+> it. The one charge this bullet reserves for the interaction test is recorded as
+> SPENT in the ledger row of 2026-11-07.
 
 **Forward EDGE comparison mechanics:** `scorer_config_version` is the poolability key — v1 outcomes stay a frozen cohort; any shipped v2 accrues its own from zero. Partition `rank_in_day` by `scorer_config_version` in all forward attribution (rank semantics shift at cutover); the cohort partition rides only the parquet hop (`thematic.py` enriched.to_parquet), not Django. **Sample-size gate before ANY further tuning:** ≥30 distinct matured brief-days in the v2 cohort (~5-6 weeks post-cutover) before the first v2-vs-v1 EDGE look; no parameter touching between cutover and that look.
 
