@@ -125,6 +125,17 @@ cannot be repeated, and the decision rule below was fixed before it ran.
 > reached them; the re-derivation has not been done. So is the direction mismatch in
 > `a20_power.py` recorded in the preflight memo §7.3 (the simulator measures two-sided,
 > this registration tests one-sided).
+>
+> **Appended 2026-11-07 — the re-derivation IS now done; the sentence above is left as
+> written.** §10 holds it, measured on the panel the run will use, across several seeds.
+> The outcome is mostly a CONFIRMATION: §4's implied SE of 0.0552 sits inside the
+> measured range [0.0525, 0.0553], its significance boundary sits inside [−0.0910,
+> −0.0863], and every row of its promotion table is inside the between-seed spread.
+> One published figure is wrong — §5's "about 13%" for arm (iii) is **21.6% ±0.7pp** on
+> 3200 panels across 8 seeds. §10 also records two things never published: under a true
+> zero the run lands on `retired` 49.8% of the time (§10.3), and the frozen `POPULATION`
+> constant names a wider population than the join produces (§10.6). The direction
+> mismatch in §7.3 and rule 2's α-spending are still open and are NOT addressed.
 
 ## 1. Why now, and not later
 
@@ -182,7 +193,7 @@ doubling the maturity the same day).
 | Statistic | standardised partial slope, jointly fitted | So a slope reads on the same scale as the discovery ρ and the 25/50/75% shrinkage grid means what it says. |
 | Unit | ticker-episode, chained 5-session collapse | Ledger rule 5. |
 | Cluster | arrival session | The dependence that matters is same-day co-movement; verified against the 20-session overlap in the overlap memo. |
-| Population | BRIEFED only | Pre-committed in the power memo §2.1 before any curve existed. Discovery found ATR predicts outcomes *among briefed names*. |
+| Population | BRIEFED only | Pre-committed in the power memo §2.1 before any curve existed. Discovery found ATR predicts outcomes *among briefed names*. **The panel is narrower than this names — see §10.5:** the signal columns live only in the brief store, so the join drops 19 of 779 resolved briefed held-out rows, all `pre_open_recovered` names the journal stores without signals. The same join runs on the burnt side, so the exclusion is symmetric with discovery. |
 | Weighting | episode-weighted | One vote per episode, consistent with the unit. |
 | Winsorization | none | Discovery reported a rank statistic; a trim here would be a new choice invisible in the comparison. |
 | Test | one-sided restricted wild cluster bootstrap, alternative "less", α 0.05, B = 9999, seed 20260924 | Direction fixed from discovery. |
@@ -193,7 +204,9 @@ doubling the maturity the same day).
 
 On this estimand's own scale, with sd(`sel_ar_20`) = 0.1653 measured on the burnt
 panel, ρ = 0.10 means **1.65 percentage points** of 20-session market-adjusted
-return per one standard deviation of ATR. A realistic selection tilt that drops
+return per one standard deviation of ATR. (**Re-measured 2026-11-06: the burnt
+panel now holds 198 episodes and sd is 0.1681, so DELTA is 1.68 pp.** The bound is
+an owner decision on the ρ scale and does not move with it; the translation does.) A realistic selection tilt that drops
 the top ATR quintile moves the book's mean z(ATR) by about 0.4 sd, so about
 **0.66 pp per episode**. It is also about 26% of the discovery effect (−0.378), so
 the bound says in plain terms: *if the true effect is under roughly a quarter of
@@ -233,6 +246,14 @@ than measured** (0.189 / SE = 1.96 + 1.465; the same SE predicts 25% power at th
 |---|---|---|---|---|---|---|
 | P(promote) | 3.5% | 18% | 50% | 82% | 95% | 99.7% |
 
+**RE-DERIVED 2026-11-07 and CONFIRMED — §10.** The row above was never measured. It
+has now been measured on the panel the run will use, at 3000 panels per point across
+four seeds: 3.1% / 17.9% / 48.9% / 82.5% / 95.2% / 99.7%. Every gap is inside the
+between-seed spread. The SE is 0.0538 ± 0.00125 and the boundary −0.0885 ± 0.0021,
+so the back-derived 0.0552 and the stated −0.091 both sit inside the measured range
+and the FLOOR still binds on every seed. §10.3 adds the two arms this row never
+showed.
+
 The programme accepts these. Note that retiring a true effect of 0.05 is the
 *correct* decision under a 0.10 floor, not an error; the rows that cost something
 are 0.10 and 0.15. At the threshold itself the decision is a coin flip whatever
@@ -253,7 +274,18 @@ construction:
 
 **Disclosed before the run:** arm (iii) requires a point estimate inside roughly
 (−0.009, +0.009) and so has about a 13% chance even if the true effect is exactly
-zero. In practice this three-way will almost always land on (i) or (ii). Saying
+zero. **CORRECTED 2026-11-07 — §10.4: measured with this registration's own bootstrap
+interval on today's panel, the arm fires 21.6% ±0.7pp under a true zero, not 13%**
+(3200 panels across 8 seeds). This is the ONE figure in the memo that the
+re-derivation overturned; §4's precision figures and its whole promotion table came
+back confirmed. The reason this one is sensitive is that it fires on the difference
+between DELTA and the interval's half-width, two nearly equal numbers, while every
+other figure depends on the SE through a ratio. Two further corrections to the
+sentence above: the firing condition is NOT the symmetric band it implies — the
+estimates that actually fired ran to ±0.027, not ±0.009 — and a single 400-panel run
+cannot state this figure to a binomial error, because the arm sits in a joint tail
+(§10.4). The correction runs toward reachability, so arm (iii) is less of a long shot
+than disclosed, not more. In practice this three-way will almost always land on (i) or (ii). Saying
 so now is the difference between a limitation and an excuse. The interval is an
 equal-tail percentile interval over resampled clusters, which is wider than a
 studentised or BCa one would be; that makes arm (iii) *harder* to reach, so the
@@ -358,6 +390,14 @@ Fixed now:
   was derived FROM was itself computed on the wrong panel, so the number is wrong by
   more than approximation error. Recorded here because a limitation that names the
   right risk and misses the larger one is worth seeing again.
+  **2026-11-07: CLOSED by measurement, §10.** Measured across four seeds the SE is
+  0.0538 ± 0.00125, and the back-derived 0.0552 sits inside that range: the number was
+  wrong in PROVENANCE and right in VALUE. Every probability built on it came back
+  confirmed, except arm (iii), which moved from 13% to 21.6% because it alone depends
+  on the SE through a difference rather than a ratio. Worth recording how nearly this
+  limitation was repeated: the first draft of §10 quoted a SINGLE-seed SE of 0.0531 and
+  called it a 4% improvement on 0.0552. Four seeds showed that was seed noise. A
+  simulation run quoted as a measured constant is this same defect by another route.
 - **The July ATR figure was row-level and early-weighted** (ρ = −0.35 over 523
   rows, 231 of which repeat a ticker within 3 days), and
   `selection_score_v2_ext_tilt_decision_2026_07_06.md` records that pure ATR rank
@@ -372,7 +412,242 @@ Fixed now:
   `alphalens_research/backtest/romano_wolf.py` already exists. It is moot at a
   family of one and is recorded only so the choice is visible.
 
-## 10. Results
+## 10. Operating characteristics, measured 2026-11-07
+
+**Why this section exists.** §1 and §9 both say the operating characteristics must
+be re-derived once the panel reaches its floors, because §4's table and §5's
+reachability figure rest on an implied slope SE of 0.0552 that §9 states was
+*back-derived from the recorded power curve rather than measured* — and that curve
+was withdrawn on 2026-09-24. The panel reached the floors in October. This is the
+re-derivation. **No frozen value moves and no verdict about ATR is reported here.**
+The estimand, DELTA, the decision rule, the conclusion language and the tilt
+mapping stand exactly as frozen on 2026-09-23.
+
+**The headline is a confirmation, not a correction.** §4's implied SE turns out to
+be indistinguishable from the measured one, so §4's whole table stands. Exactly one
+published figure is wrong — §5's "about 13%" for the equivalence arm — and two
+things that were never published are recorded here for the first time.
+
+**Why it had to be simulated.** The real sampling distribution of the registered
+slope is a fact about held-out `sel_ar_20` values, and reading those IS the
+one-shot look. So it is measured the only other way open: simulate on the real
+held-out cluster structure with `a20_power.simulate_panel`, then apply this
+registration's own `atr_slope` and `slope_ci` to each simulated panel. Burnt
+outcomes supply scale, ICC and the signal correlation structure, which is what the
+burnt side is for under ledger rule 3. Every outcome any slope here is computed
+against is simulated. No held-out `sel_ar_*` value was read, so this charges
+nothing.
+
+**Construction.** `apps/alphalens-research/scripts/ml/2026_11_a20_operating_characteristics.py`,
+run on the VPS production stores 2026-11-06 and 2026-11-07. Both modes run on the
+panel the confirmation will actually use — 385 episodes in 63 arrival clusters,
+taken through this registration's own blind path
+(`_held_out_episodes(with_signals=False)`), not through `a20_power`'s label-only
+count of 398 in 64. Burnt panel 198 episodes, sd(`sel_ar_20`) 0.1681, ICC 0.050,
+burnt standardised effects ATR −0.358, MA50 −0.315, press +0.006. Nuisance signals
+injected at 50% of their burnt effects, the power gate's own shrinkage.
+
+| mode | panels per point | seeds | what it answers |
+|---|---|---|---|
+| `--mode slopes` | 3000 | 20261106, 51, 52, 53 | the SE, the significance boundary and the three tilt arms, from the point estimate |
+| `--mode arms` | 400 | 20261107, 20261206, 31–36 (ρ=0); 20261107, 20261206, 41–44 (ρ=0.03) | the registered cluster-bootstrap interval, which the equivalence arm needs |
+
+**Every figure below is read across SEVERAL seeds, and that is not decoration.**
+The first draft of this section quoted a single-seed SE of 0.0531 against the
+published 0.0552 and called it a 4% improvement. Four seeds show the SE is
+0.0538 ± 0.00125 and that 0.0552 sits inside the observed range. The apparent
+improvement was seed noise. Quoting one simulation run as a measured constant is
+the same class of error as the curve this section exists to replace, arrived at by
+a different route, so each row carries its between-seed spread.
+
+### 10.1 §4's precision figures: confirmed
+
+| quantity | §4 publishes | measured, 4 seeds × 3000 panels | verdict |
+|---|---|---|---|
+| slope SE | 0.0552 (back-derived) | **0.0538 ± 0.00125**, range [0.0525, 0.0553] | published value is INSIDE the range |
+| one-sided 0.05 boundary | about −0.091 | **−0.0885 ± 0.0021**, range [−0.0910, −0.0863] | published value is INSIDE the range |
+| does the FLOOR bind? | yes | **yes on all four seeds** | confirmed |
+
+The floor binding is the load-bearing claim of §4 and it holds on every seed: the
+boundary sits closer to zero than −0.10 in all four, so an estimate that clears the
+floor has already cleared the p-value. The probe refuses to print a promotion table
+at all if that ever stops being true (`FloorDoesNotBindError`), because the
+slope-only arm would then overstate promotion by the whole p-value leg.
+
+### 10.2 §4's promotion table: confirmed
+
+| true \|ρ\| | §4 publishes | measured | between-seed sd | gap |
+|---|---|---|---|---|
+| 0 | 3.5% | **3.1%** | 0.20 | −0.4 |
+| 0.05 | 18% | **17.9%** | 0.55 | −0.1 |
+| 0.10 | 50% | **48.9%** | 1.34 | −1.1 |
+| 0.15 | 82% | **82.5%** | 0.45 | +0.5 |
+| 0.189 | 95% | **95.2%** | 0.25 | +0.2 |
+| 0.25 | 99.7% | **99.7%** | 0.22 | +0.0 |
+
+Every gap is inside the between-seed spread; the largest, 1.1pp at ρ = 0.10, is
+smaller than that row's own sd of 1.34. The back-derived SE was wrong in
+PROVENANCE and right in VALUE, which is worth separating: §9's limitation named a
+real defect in how the number was obtained, and the number itself survived.
+
+### 10.3 All three arms, which §4 never tabulated
+
+§4 published P(promote) alone. Two of the three outcomes are a "no", and they are
+not the same "no". `unchanged` retires cluster 1 for selection and leaves the live
+tilt running; `retired` fires the July kill trigger, which is a
+`SCORER_CONFIG_VERSION` bump with its own cohort reset (§6). Mean of four grids,
+3000 panels each, between-seed sd in brackets:
+
+| true \|ρ\| | confirmed → PROMOTE | unchanged → live tilt keeps running | RETIRED → version bump, cohort reset |
+|---|---|---|---|
+| 0 | 3.1 [0.20] | 47.1 [0.70] | **49.8 [0.75]** |
+| 0.03 | 9.7 [0.45] | 61.9 [1.48] | 28.4 [1.63] |
+| 0.05 | 17.9 [0.55] | 64.4 [1.12] | 17.6 [0.81] |
+| 0.10 | 48.9 [1.34] | 47.6 [1.16] | 3.5 [0.38] |
+| 0.15 | 82.5 [0.45] | 17.2 [0.34] | 0.3 [0.17] |
+| 0.189 | 95.2 [0.25] | 4.7 [0.26] | 0.0 [0.05] |
+| 0.25 | 99.7 [0.22] | 0.3 [0.22] | 0.0 [0.00] |
+
+**Disclosed here because it was not disclosed before: under a true zero the run
+retires the live tilt about half the time.** That is not a defect introduced by
+this look. `retired` means the slope came out non-negative, and under a true zero
+the sign is a coin flip, so the frequency follows from the kill trigger the July
+memo registered. It is written down because the registration quantified its
+promote arm and its equivalence arm and left this one unquantified, and because
+the consequence — a cohort boundary under ADR 0013 R3 — is the most expensive
+thing any outcome here can trigger.
+
+### 10.4 §5's equivalence arm: the one figure that is wrong
+
+§5 discloses that the "evidence against" arm "has about a 13% chance even if the
+true effect is exactly zero", needing a point estimate inside roughly
+(−0.009, +0.009). Measured with the registered interval — the equal-tail cluster
+bootstrap over arrival sessions at `CI_BOOT` = 2999 draws, not a normal
+approximation:
+
+| at a true effect of | §5 discloses | measured | panels | seeds |
+|---|---|---|---|---|
+| exactly zero | about 13% | **21.6% ±0.7pp** | 3200 | 8 |
+| 0.03 (pessimistic, §10.5) | not stated | **18.0% ±0.8pp** | 2400 | 6 |
+
+The ordering is the one theory requires: moving the true effect away from zero
+pushes mass out of the firing band, so 0.03 fires less often than 0. The
+difference is 3.6pp against a pooled error of 1.1pp.
+
+**Why §5's figure is the sensitive one.** The arm fires on the DIFFERENCE between
+DELTA and the interval's half-width, two nearly equal numbers, so it moves far
+more than the SE does. Every other figure in §4 depends on the SE through a ratio,
+which is why §10.1 and §10.2 came back confirmed while this one did not.
+
+**The firing condition is NOT a symmetric band, and quoting one is misleading.**
+The registered interval is an equal-tail percentile interval over resampled
+clusters and is not symmetric about the point estimate. A symmetric reading off
+the mean half-width gives |slope| < 0.014; the estimates that actually fired the
+arm ran to ±0.027:
+
+| | symmetric reading | MEASURED firing range |
+|---|---|---|
+| ρ = 0 | \|slope\| < 0.0142 | **[−0.0275, +0.0254]** |
+| ρ = 0.03 | \|slope\| < 0.0135 | **[−0.0314, +0.0232]** |
+
+**One 400-panel run does not pin this figure, and the binomial error it prints
+understates the spread.** The arm needs a panel with BOTH a small |slope| and an
+unusually narrow interval, and the half-width carries an sd of 0.0127 against a
+mean of 0.087 — 15% of its own size — so the firing event sits in a JOINT tail.
+Eight seeds at a true zero, each 400 panels, each reproducible at its seed:
+
+| 18.50 | 19.75 | 19.75 | 20.00 | 20.75 | 21.75 | 24.25 | 28.00 |
+|---|---|---|---|---|---|---|---|
+
+Between-seed sd 3.11pp against a binomial 2.06pp. Seven of the eight sit
+binomially around 20.7%; the eighth is 3.5 standard errors above and reproduces
+exactly, and no explanation for it was found. A paired experiment on identical
+panels ruled out the bootstrap seed scheme as the cause: switching schemes moved
+the mean half-width by 0.5% and changed the arm on 3 of 120 panels. The pooled
+figure above is what the record carries; a single run is a datapoint.
+
+### 10.5 The 0.03 point is a stress test, not ATR's effect
+
+0.03 is **NOT ATR's burnt estimate** — that is −0.358 on this label and this panel,
+printed on every run of the probe. 0.03 is the order of magnitude the NEWS-axis
+candidates showed on the burnt panel (`2026_10_jev_discovery_burnt.py`:
+standardised betas −0.026 to +0.040), carried here as "ATR's true out-of-sample
+effect has collapsed to under a tenth of its in-sample value", far worse than the
+50% shrinkage the power gate plans for.
+
+Read against §10.3: if ATR's true effect really has collapsed to 0.03, the single
+most likely outcome of the run is `unchanged` at 61.9% — the look is spent and
+nothing changes. At the planning effect of 0.189 the same rule promotes 95.2% of
+the time. The two rows bracket the decision: the test is decisive about the effect
+it was powered for and near-silent about one an order of magnitude smaller, which
+is the trade the 0.10 floor was chosen to make (§3).
+
+For the record, the grid's 0.189 is half of the JULY row-level discovery effect
+−0.378 (§3), the number the power gate was written against. Half of the
+episode-level −0.358 would be 0.179; the grid was not re-cut when D5 moved the
+primary label.
+
+### 10.6 The population the test will run on is narrower than `POPULATION` names
+
+`POPULATION = "briefed"` is frozen and §2 fixes the population as BRIEFED only.
+The panel the run builds is narrower, and the gap belongs on the record before the
+verdict exists rather than after.
+
+The confirmation joins the label store to the brief store, because the signal
+columns live only in the brief store. Measured on the VPS 2026-11-06: of 779
+resolved briefed held-out label rows, **19 have no matching brief row**, all on
+three dates (2026-08-02: 10, 2026-08-19: 7, 2026-08-18: 2). After the rule-5
+episode collapse that is 13 episodes and one arrival cluster — the difference
+between `a20_power`'s 398 in 64 and this registration's 385 in 63.
+
+**The cause is known and it is not data loss.** `apply_pre_open_population` in
+`alphalens_pipeline/feedback/selection_label.py` sets `briefed_any_theme` to True
+unconditionally for names recovered from the pre-open brief journal (#1494), under
+its own population token `pre_open_recovered`. Its docstring states that such a
+name "comes back with no theme, because the journal records names only", so those
+names have no signal columns and never could have joined. Confirmed by measurement
+on the BURNT side, where every column may be read: of 466 resolved briefed burnt
+rows, 75 have no brief-store match and **all 75** carry
+`population = pre_open_recovered`, with zero `briefed_or_llm_proposed` rows
+unmatched. The held-out `population` column was NOT read — it sits outside
+`a20_power`'s allowlist — so the mechanism is carried across by the code path, not
+by a held-out read.
+
+Two things follow and they point opposite ways:
+
+- **For the estimand.** The exclusion is SYMMETRIC: `burnt_panel` applies the same
+  inner join, so the discovery effect this test compares itself against was
+  estimated with the same class of row excluded by the same mechanism.
+- **Against, and not cured.** Brief-store membership is settled after the fact — a
+  name drops out because a later run dropped it. That is selection on membership,
+  not on outcome. It is small on the held-out side (19 of 779, 2.4%) and larger on
+  the burnt side (75 of 466, 16.1%), so the two panels differ in composition in a
+  way no frozen constant describes.
+
+### 10.7 What this section does not settle
+
+- **The measured SE is the spread of a SIMULATED sampling distribution**, not of
+  the real one. It inherits every assumption `a20_power.simulate_panel` makes:
+  normal cluster and residual draws, ICC applied to residual variance, and real
+  burnt signal rows resampled into the held-out cluster sizes. If the true outcome
+  distribution is skewed, these figures are optimistic by an unmeasured amount.
+- **`--mode slopes` grades the promote arm as `slope ≤ −DELTA` alone**, relying on
+  the floor binding. The floor does bind on all four seeds, but that is an argument
+  from the measured SE rather than a bootstrap p-value computed on each simulated
+  panel, which would cost 3000 × 9999 fits per grid point.
+- **The pooled equivalence-arm figures mix two bootstrap seed schemes.** The two
+  earliest runs used `seed + index`; the rest use `seed + 1e6 + index`, which keeps
+  a panel draw and the resampling of that same panel out of one seed. The paired
+  experiment bounds the effect at 0.5% of the half-width and 3 arms in 120 panels.
+- **The unexplained seed.** One of eight seeds puts the equivalence arm 3.5 standard
+  errors above the other seven and reproduces exactly. It is in the pooled figure
+  rather than excluded, because excluding a reproducible observation for being
+  inconvenient is not a method.
+- **Not addressed:** the direction mismatch in `a20_power.py` recorded in the
+  preflight memo §7.3 (the simulator measures two-sided, this registration tests
+  one-sided), and rule 2's α-spending for this confirmation.
+
+## 11. Results
 
 *(Placeholder. Filled by the single run of
 `2026_09_a20_atr_confirmation.py --run`; the verdict is computed and printed by
