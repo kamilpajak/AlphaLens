@@ -200,7 +200,7 @@ doubling the maturity the same day).
 | Statistic | standardised partial slope, jointly fitted | So a slope reads on the same scale as the discovery ρ and the 25/50/75% shrinkage grid means what it says. |
 | Unit | ticker-episode, chained 5-session collapse | Ledger rule 5. |
 | Cluster | arrival session | The dependence that matters is same-day co-movement; verified against the 20-session overlap in the overlap memo. |
-| Population | BRIEFED only | Pre-committed in the power memo §2.1 before any curve existed. Discovery found ATR predicts outcomes *among briefed names*. **The panel is narrower than this names — see §10.5:** the signal columns live only in the brief store, so the join drops 19 of 779 resolved briefed held-out rows, all `pre_open_recovered` names the journal stores without signals. The same join runs on the burnt side, so the exclusion is symmetric with discovery. |
+| Population | BRIEFED only | Pre-committed in the power memo §2.1 before any curve existed. Discovery found ATR predicts outcomes *among briefed names*. **The panel is narrower than this names — see §10.6:** the signal columns live only in the brief store, so the join drops 19 of 779 resolved briefed held-out rows, all `pre_open_recovered` names the journal stores without signals. The same join runs on the burnt side, so the exclusion is symmetric with discovery. |
 | Weighting | episode-weighted | One vote per episode, consistent with the unit. |
 | Winsorization | none | Discovery reported a rank statistic; a trim here would be a new choice invisible in the comparison. |
 | Test | one-sided restricted wild cluster bootstrap, alternative "less", α 0.05, B = 9999, seed 20260924 | Direction fixed from discovery. |
@@ -735,9 +735,13 @@ hours, which does not matter for the computation — that merge did not touch th
 confirmation script — but it means the host's checkout did not contain §10 or this
 section at the moment of the run.
 
-### 11.2 The outcome-blind preflight, as printed
+### 11.2 The outcome-blind preflight, verbatim
+
+Run into the same log in the same minute as the look, immediately before it.
 
 ```
+PREFLIGHT — outcome-blind. Nothing here spends the look.
+
 held-out briefed label rows past 2026-07-05: 1107
   immature                301  (27.2%)
   no_close_at_horizon       1  (0.1%)
@@ -748,8 +752,10 @@ held-out brief parquets available to join: 124
 resolved rows available to the panel: 804
 
 THE PANEL: 394 ticker-episodes in 64 arrival clusters
+  (rows above, episodes here — ledger rule 5 collapses a ticker reappearing within 5 sessions)
 registration floors: >= 300 episodes, >= 30 arrival clusters
 VERDICT: the panel clears both floors.
+A panel below either floor is a VOID, not a RETIRE — the look returns unspent.
 ```
 
 No VOID condition was reachable: the panel clears both floors with 94 episodes and
@@ -828,7 +834,10 @@ content is that the cluster is not re-tested in later sweeps.
 > one-sided significance boundary sits at about −0.091. **That is false on the panel
 > this run used.** Both sentences are left as written; this box is the correction.
 > The same claim appears in the module docstring under "WHAT A PASS DOES AND DOES
-> NOT PROVE" and in ledger §4 note 23.B, and it is superseded in all four places.
+> NOT PROVE" and in ledger §4 note 23.B. Note 23.B is superseded by note 07.F of the
+> ledger's 2026-11-07 row. **The module docstring is NOT superseded** — it still
+> carries the sentence unmarked, because amending the operative registration is a
+> separate dated act (§11.11 item 1).
 
 The run's own output measures its precision three independent ways, and they agree
 with each other and disagree with §10:
@@ -887,10 +896,21 @@ measured, and it is a factor of 1.33 to 1.36 on the standard error.
 
 **§10's panel is not the run's panel.** §10 measured 385 ticker-episodes in 63
 arrival clusters, read 2026-11-06; the verdict came from 394 in 64. The stores are
-mutable and moved overnight by label maturity, not by new files: the file count
-stayed 172 with the newest stem unchanged at `2026-11-06`, while briefed held-out
-label rows went 1079 to 1107 and resolved rows 779 to 804, and the single
-`split_unchecked` row resolved away. The direction is harmless for the SE — a larger
+mutable and moved overnight by rows entering EXISTING files, which is measured and is
+not the same thing as maturity alone. The file count stayed 172 with the newest stem
+unchanged at `2026-11-06`, yet the census total went 1079 to 1107. Maturity
+transitions conserve that total and can only DECREASE `immature`, and `immature` went
+297 to 301, so at least **28 rows entered the census that were not in it on
+2026-11-06**. The mechanism is that the nightly stamper REWRITES per-date label
+parquets for PAST brief dates: read on the host 2026-11-07, the files with stems
+`2026-10-24` and `2026-10-25` both carry an mtime of 2026-11-07 08:09, and every stem
+from `2026-10-30` to `2026-11-06` was rewritten that morning. Two moves are therefore
+mixed into the 1079 → 1107 step — statuses maturing (resolved rows 779 to 804, and the
+single `split_unchecked` row resolving away) and rows being added. WHY rows are added
+to a past date's file is NOT established here and is not needed for the verdict. What
+it does establish is that a store fingerprint over names and sizes is the only thing
+pinning which panel produced this result, and that a same-size rewrite would defeat
+even that. The direction is harmless for the SE — a larger
 panel can only tighten it, and rescaling 0.0538 by `sqrt(385/394)` gives 0.0532 — so
 it explains none of the 1.35x gap above. §10's figures describe a panel one day
 stale and must not be quoted as measured on the panel that produced the verdict.
@@ -903,7 +923,7 @@ was not close on either characterisation of its firing condition:
 | characterisation | firing region | where −0.0713 sits |
 |---|---|---|
 | §10.4, measured on 3200 panels across 8 seeds | slope in [−0.0275, +0.0254] | 0.0438 below the lower firing edge |
-| the withdrawn disclosure the docstring still carries | slope in about (−0.009, +0.009) | 7.9 half-widths outside |
+| the withdrawn disclosure the docstring still carries | slope in about (−0.009, +0.009) | 0.0623 below the lower firing edge, i.e. 6.9 half-widths beyond it (7.9 measured from the band's centre) |
 
 **Quote §10.4's figures, not the docstring's.** The operative registration still
 reads "roughly a 13% chance even if the true effect is exactly zero" with a band of
@@ -920,14 +940,24 @@ states that an interval whose endpoint sits exactly on ±0.10 has not excluded i
 ### 11.7 The live scorer tilt, and the July three-way's open branch
 
 **Nothing in the live tier changes, and nothing changes automatically.** The July
-kill trigger fires on a sign flip and the slope stayed negative, so
-`atr_penalty` and `SCORER_CONFIG_VERSION = "scorer-v1-atrtilt-lam1.0-lo5.77-hi8.37"`
-keep running: no version bump, no cohort reset, and the EDGE poolability cohort is
+kill trigger as folded into this registration fires on a sign flip and the slope
+stayed negative, so `atr_penalty` and
+`SCORER_CONFIG_VERSION = "scorer-v1-atrtilt-lam1.0-lo5.77-hi8.37"` keep running: no version bump, no cohort reset, and the EDGE poolability cohort is
 not cut. The question posted on #1227 before the run — whether one of the three
 outcomes would cut the panel a later model trains on — resolved in the benign
 direction. No code, test, configuration, systemd unit or CI workflow reads the
 #1227 verdict or any cluster status, so every consequence of this run is
 documentary.
+
+**What "the trigger did not fire" does and does not cover.** The July line is a
+two-prong OR: retire the tilt if fresh-data ATR-rank rho10 is at most 0, **or** if
+C_l4only is no longer worse than V1. The 2026-09-17 fold-in carried only the SIGN leg
+into this registration, which §6 records — `decide()` takes a slope, a p-value and an
+interval and has no input for a config comparison. So the sign leg is settled and did
+not fire; **the C_l4only-versus-V1 leg has not been re-run on fresh data at all**, and
+this look spent the held-out episodes it would have needed. The live tilt keeps
+running because the leg this registration owns did not fire, not because both legs
+were checked.
 
 **Branch (c) of the July kill line is now textually in play and is NOT settled by
 this output.** That memo's §5 makes the kill line three-way, and the confirmation's
@@ -971,14 +1001,35 @@ numbers in the output.** Six reasons, each sufficient on its own:
    sharing one regime label, so 64 sessions collapsed to 4 runs, i.e. three label
    changes in the whole window. With exactly two states observed that forces **two
    contiguous calendar stretches per arm**. Neither slope rests on 322 or 72
-   independent observations of a regime. The known bias in that counter only
-   undercounts, so the decision to estimate was on the safe side of the floor.
+   independent observations of a regime.
+
+   The counter's bias does NOT run only one way, contrary to what
+   `volatility_sufficiency`'s own docstring claims. That docstring is right about the
+   calendar-gap merging it describes, which can only undercount. It does not cover a
+   second path: the function takes one label per arrival with
+   `drop_duplicates(subset=["arrival"])` applied BEFORE `sort_values("arrival")`, so
+   when several brief dates map onto one arrival session and disagree about
+   `market_state`, the row that wins is decided by the panel's incoming order rather
+   than by any rule, and an arbitrary pick can manufacture a label change and
+   OVERcount runs. At a count of exactly 4 against a floor of 4, one spurious change
+   is the whole difference between "estimated" and "insufficient".
+
+   **Measured on this panel 2026-11-07, after the look was spent, so it spends nothing
+   and reads no outcome: that path exists but did not fire.** Of the 64 arrivals, **1**
+   carries more than one `market_state` value (at most 3 distinct brief dates map onto
+   one arrival), and the regime-episode count is **4 under all three pick rules** — the
+   script's incoming-order pick, the lexically first label per arrival, and the
+   lexically last. The decision to estimate was therefore on the safe side of the
+   floor on this panel, by measurement rather than by the argument the docstring gives.
 3. **The arms pool across the `market_state_config_version` key**, which the
    market-state registration says is never pooled. `_read_brief` does not read that
-   column, so the script cannot partition even in principle. Across the 81 v1 dates
-   `market_state_vix` held one value and never reached its threshold, so every
-   volatile label came from the realized SPY-ATR-quantile leg alone, and the v1.2
-   cohort carries one label value across all 33 of its dates.
+   column, so the script cannot partition even in principle. There are **three** cohorts in the
+   held-out window, not two: `mstate-v1` (from 2026-07-05), `mstate-v1.1`
+   (2026-09-24, #1524) and `mstate-v1.2` (2026-09-25, #1559), the middle one spanning
+   the single day between the two bumps. Across the 81 v1 dates `market_state_vix`
+   held one value and never reached its threshold, so every volatile label there came
+   from the realized SPY-ATR-quantile leg alone, and the v1.2 cohort carries one label
+   value across all 33 of its dates.
 4. **It is not the registered statistic.** July registered an episode-clustered
    comparison of ATR-rank rho10 between `vol=high` and `vol=low` on a single
    two-state axis, with the full four-state grid explicitly outside the family. What
@@ -1031,10 +1082,18 @@ both sit 0.17 to 0.19 outside the lower endpoint, about four realized standard e
 from the estimate. That is the only magnitude claim this result licenses, and it is a
 real one: the discovery magnitude did not survive out of sample.
 
-**The 50%-shrinkage planning effect of −0.189, which the power gate was written
-against, sits 0.0026 outside the lower endpoint.** Treat it as at the very edge of
-what the data still allow rather than as excluded; a margin that small is inside the
-noise of the interval itself.
+**The effect size the run was UNBLOCKED against is not excluded.** Two different
+"half the discovery effect" figures are in play, and they fall on opposite sides of
+the interval, so they must not be conflated:
+
+| figure | basis | against the lower endpoint −0.1864 |
+|---|---|---|
+| **−0.179** — the power gate's own point | half the BURNT standardised ATR effect of −0.358, which `a20_power.py` reports beside the 91.5% (§11.5) | **0.0074 INSIDE the interval** — not excluded at all |
+| −0.189 — §10's grid point | half the July ROW-LEVEL discovery figure of −0.378 | 0.0026 outside |
+
+So the effect the unblocking condition was written against remains fully consistent
+with the data, and §10's grid point sits at the very edge of what the data still allow
+rather than outside it: a margin of 0.0026 is well inside the noise of the interval.
 
 **What the result does NOT rule out is an actionable effect of the registered sign.**
 The interval covers the whole band from −0.10 out to −0.1864, so an effect up to
@@ -1108,8 +1167,10 @@ run all still apply; these are the ones the run itself added or measured.
   have bound by a far larger margin.
 - **Three reporting defects in the interaction block**, none of which can change this
   spent look: `_report_interaction` prints the arrival-cluster count only on the
-  branch that REFUSES to estimate, so this run's per-arm cluster counts are
-  unrecoverable and only "at least `MIN_REGIME_CLUSTERS` = 10 each" can be stated; the
+  branch that REFUSES to estimate, so the run's own record states no per-arm cluster
+  count — recovered by a separate outcome-blind read after the look was spent,
+  `bull_quiet` 54 arrival clusters over 322 episodes and `bull_volatile` **11** over
+  72, the latter barely above `MIN_REGIME_CLUSTERS` = 10; the
   interaction block is the only numeric block printed without a "never a clearing
   path" caveat; and `_report_interaction` has no test.
 - **A VOID would have disclosed the statistics it declares unspent.** `decide`'s

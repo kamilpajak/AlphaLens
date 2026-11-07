@@ -118,8 +118,15 @@ Then implement: `selection_score.py` — `EXT_RAMP_LO/HI` + `LAMBDA_EXT` + `ext_
 > arrival clusters, with a one-sided p of 0.1782 and a 90% interval of [−0.1864,
 > +0.0490] (`atr_confirmation_prereg_2026_09.md` §11; ledger §4 row of that date).
 >
-> **§5's kill line did NOT fire.** Its trigger is an ATR effect of the WRONG sign on
-> fresh data; the slope stayed negative, so the live tilt is `unchanged` and
+> **§5's kill line did NOT fire on the leg that was evaluated, and its other leg was
+> never run.** The bullet above states a two-prong OR: retire the tilt if fresh-data
+> ATR-rank rho10 is at most 0, **or** if C_l4only is no longer worse than V1. The
+> 2026-09-17 fold-in carried only the SIGN leg into #1227 — `decide()` takes a slope,
+> a p-value and an interval and has no input for a config comparison — and that
+> narrowing is recorded in `atr_confirmation_prereg_2026_09.md` §6, not here. So: the
+> sign leg did not fire, because the slope stayed negative. **The C_l4only-versus-V1
+> leg has not been re-run on fresh data at all**, and #1227 spent the held-out
+> episodes it would have needed. The live tilt is therefore `unchanged` and
 > `SCORER_CONFIG_VERSION = "scorer-v1-atrtilt-lam1.0-lo5.77-hi8.37"` keeps running
 > with no version bump and no cohort reset. Branch (a) of the three-way is not
 > reached either, because #1227 did not promote: the slope missed the −0.10 floor by
