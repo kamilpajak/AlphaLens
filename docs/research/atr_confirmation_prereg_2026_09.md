@@ -1,16 +1,23 @@
 # ATR × EDGE — pre-registration of the cluster-1 held-out confirmation (#1227)
 
-**Status:** REGISTERED (frozen 2026-09-23, before any feature-vs-outcome statistic
-was computed on the held-out panel)
+**Status:** **RUN AND SPENT 2026-11-07** — verdict RETIRE, conclusion
+`inconclusive`, live scorer tilt `unchanged`. Result, provenance and the
+retrospective corrections are in §11. Registered and frozen 2026-09-23, before any
+feature-vs-outcome statistic was computed on the held-out panel; everything between
+this line and §11 is left as it was frozen.
 **Cluster:** 1 (`technical_atr_pct`), §3 of [`edge_hypothesis_budget_2026_07.md`](edge_hypothesis_budget_2026_07.md)
-**Looks:** 2 used (Jun sweep, Jul re-run — both DISCOVERY), 1 charged by this study
+**Looks:** CORRECTED 2026-11-07 — **4 cumulative on cluster 1 after this run**. This
+line read "2 used (Jun sweep, Jul re-run — both DISCOVERY), 1 charged by this study".
+The ledger's appended note of 2026-11-06 settled the pre-run count at 3 (Jun sweep,
+Jul re-run, ML corner 2026-07-14) and this study charged the fourth.
 **Family:** 1 (ATR only). MA50 extension and the press gate are NOT in this look.
 **Run trigger:** AMENDED 2026-09-24 — on or after **2026-10-09**, and only once the
 panel clears the registered floors. The original trigger ("on or after 2026-09-24,
 no further accrual condition") rested on a power figure that was wrong; see the
 correction box. **Both conditions were verified met on 2026-11-06:** the date has
 passed and the panel holds 385 ticker-episodes in 63 arrival clusters against floors
-of 300 and 30 (update box below). The trigger is unchanged; it is now satisfied.
+of 300 and 30 (update box below). The trigger is unchanged; it was satisfied, and the
+look RAN on **2026-11-07 at 11:08:38Z** on a panel of 394 episodes in 64 clusters (§11).
 **Sunset:** none (cluster 1 carries no sunset date)
 **Frozen code:** [`apps/alphalens-research/scripts/ml/2026_09_a20_atr_confirmation.py`](../../apps/alphalens-research/scripts/ml/2026_09_a20_atr_confirmation.py)
 — its module docstring is the operative registration; this memo is the rationale
@@ -236,6 +243,14 @@ slope of the registered sign.* It does **not** mean *the true effect is at least
 it was rejected for two measured reasons: it has about 49% power at the planning
 effect, far under the pre-registered 80% gate; and it would retire a true effect
 of −0.15 about 60% of the time, which under rule 4 is permanent.
+
+> **SUPERSEDED 2026-11-07 by the run itself, §11.5 — the two paragraphs above are
+> left as written.** Both figures describe a simulated sampling distribution. On the
+> panel the look actually used, three independent readings of its own output put the
+> slope SE at 0.0716 to 0.0773 rather than 0.0538, which moves the one-sided 0.05
+> boundary out to about −0.118 to −0.127 — PAST the floor. The p-value leg, not the
+> floor, was the binding condition, and the "effective rule is `slope ≤ −0.10`"
+> sentence does not describe this run. The 3.5% false-positive figure goes with it.
 
 **Operating characteristics, disclosed in advance.** Normal approximation at the
 implied SE 0.0552, itself **back-derived from the recorded power curve rather
@@ -474,6 +489,18 @@ floor has already cleared the p-value. The probe refuses to print a promotion ta
 at all if that ever stops being true (`FloorDoesNotBindError`), because the
 slope-only arm would then overstate promotion by the whole p-value leg.
 
+> **SUPERSEDED 2026-11-07 by the run itself, §11.5 — the table and the paragraph
+> above are left as written.** "Confirmed" was the right verdict against the
+> simulator and the wrong one against the panel. The realized slope SE read off the
+> run's own output is 0.0716 (interval half-width), 0.0731 (CR2 t) and 0.0773
+> (bootstrap p), i.e. 1.33 to 1.44 times the 0.0538 measured here, and §10.4's
+> simulated mean half-width of 0.087 against the realized 0.1177 corroborates the
+> same factor of 1.353 from a second direction. At that precision the boundary is
+> about −0.118 to −0.127 and **the floor does NOT bind**. `FloorDoesNotBindError`
+> did not fire before the run because it was evaluated against the simulated SE,
+> which is the only one that existed then. §10.2's and §10.3's tables inherit the
+> same optimism; §11.5 carries the realized figures.
+
 ### 10.2 §4's promotion table: confirmed
 
 | true \|ρ\| | §4 publishes | measured | between-seed sd | gap |
@@ -649,6 +676,543 @@ Two things follow and they point opposite ways:
 
 ## 11. Results
 
-*(Placeholder. Filled by the single run of
-`2026_09_a20_atr_confirmation.py --run`; the verdict is computed and printed by
-the script, never by the analyst.)*
+**Status: the look is SPENT.** It ran once, on 2026-11-07 between 11:08:38Z and
+11:08:59Z, against the VPS production stores. The verdict was computed and printed
+by `decide()`, never chosen: **RETIRE**, conclusion **`inconclusive`** (arm (ii) of
+the pre-committed three-way), live scorer tilt **`unchanged`**. It is terminal under
+ledger rule 4 and is recorded in §4 of the ledger, row 2026-11-07.
+
+Two things in this memo are wrong for the panel the run used, and this section
+corrects both rather than inheriting them: §4's and §10.1's claim that the FLOOR
+binds (§11.5), and §10's operating characteristics, which were measured on a panel
+one day staler than the one that produced the verdict (§11.5).
+
+### 11.1 Provenance
+
+The script writes nothing to disk and prints no provenance of its own, so the
+surrounding fields were captured into the same log around the run.
+
+| field | value |
+|---|---|
+| run window (UTC) | 2026-11-07T11:08:38Z to 11:08:59Z |
+| host | `vmi2478967` (the VPS production host) |
+| repo `HEAD` at the run | `43dd277ecaae2f6ed271461f9f54790c903e2b7b` |
+| script sha256 | `80881456a8b055cddf174f40eda7b243daedfded425caa4b492606493be29f97` |
+| captured log sha256 | `79ff479200275ca909fc90d964436bdd55bd50d35cd07459c5e95e166f3f39fc` |
+| labels store | `~/.alphalens/selection_labels`, passed explicitly as `--labels-dir` |
+| briefs store | `~/.alphalens/thematic_briefs`, passed explicitly as `--briefs-dir` |
+| frozen rule, echoed from the module | `SEED=20260924 N_BOOT=9999 CI_BOOT=2999 ALPHA=0.05 DELTA=0.1 CI_LEVEL=0.9 ALT=less POP=briefed CUTOFF=2026-07-05 FLOORS=300/30` |
+| libraries | pandas 3.0.6, numpy 2.5.0, scipy 1.18.0 |
+| labels fingerprint | `42d81fab645b78ea9fccf9304d978b034ef4dc2460fb3a0a1258283459f3e313` |
+| briefs fingerprint | `6fdab96786ef80863576bfe7ea862d9d72ba1c7ec30b9035c6ea12ff94344f1a` |
+
+**What the fingerprint covers, and what it does not.** It is
+`sha256` over the sorted list of `(file name, byte size)` for every `*.parquet` in
+that directory, 172 files each. It does NOT read parquet contents, so computing it
+spends nothing. It pins which files were present at which size and cannot detect a
+same-size rewrite.
+
+**Why the directories were passed explicitly.** `main` resolves both stores from
+`Path.home()` and never echoes them. A run under a different `HOME` would silently
+read a different tree, and this repository has already paid once for that exact
+mechanism: a container's `Path.home()` resolved a default path to the wrong tree and
+deleted nine dates in production. Passing the paths puts them in the captured shell
+line.
+
+**The registration's promised status census is not printed by `--run`.** The frozen
+PANEL text says of the maturity filter "Counts per status are printed, because an
+excluded row is a disclosure, not a detail", but only `preflight()` calls
+`status_census`. `--preflight` was therefore run into the same log in the same minute,
+immediately before `--run`, so the census and the verdict describe one store state.
+It is outcome-blind and spends nothing.
+
+**Three environment facts were checked before the run, not after.** The script on
+the production host was byte-identical to the one on `origin/main` (same sha256);
+the host's pandas and numpy are exactly what `uv.lock` pins; and `HEAD` on the host
+is an ancestor of `origin/main`, so the registration had not moved under it. `HEAD`
+`43dd277e` predates the merge of §10 (`cb44dc46`, 2026-11-07T00:57Z) by about eight
+hours, which does not matter for the computation — that merge did not touch the
+confirmation script — but it means the host's checkout did not contain §10 or this
+section at the moment of the run.
+
+### 11.2 The outcome-blind preflight, as printed
+
+```
+held-out briefed label rows past 2026-07-05: 1107
+  immature                301  (27.2%)
+  no_close_at_horizon       1  (0.1%)
+  no_open                   1  (0.1%)
+  ok                      804  (72.6%)
+
+held-out brief parquets available to join: 124
+resolved rows available to the panel: 804
+
+THE PANEL: 394 ticker-episodes in 64 arrival clusters
+registration floors: >= 300 episodes, >= 30 arrival clusters
+VERDICT: the panel clears both floors.
+```
+
+No VOID condition was reachable: the panel clears both floors with 94 episodes and
+34 clusters of margin, the join is not empty, no signal column is degenerate (the
+design's condition number is 1.4 and all three VIFs are defined), and no statistic
+came back non-finite — had one, `decide()` would have raised `VoidError` rather than
+returning a verdict.
+
+**A statement in the registration about this count is wrong, in the unsafe
+direction.** `_held_out_episodes` and `panel_shape` both document the blind count as
+an upper bound on the run's, by however many resolved rows carry a null outcome or
+signal. That is not a bound. Dropping an incomplete middle row splits one chained
+episode into two under the rule-5 collapse, so the with-signals path can report MORE
+episodes than the blind path. Here the two agreed exactly at 394, so nothing turned
+on it, and the error is recorded rather than fixed in a frozen file.
+
+### 11.3 The three registered statistics, each with its construction
+
+| statistic | value | construction |
+|---|---|---|
+| standardised partial slope | **−0.0713** | slope of `z(technical_atr_pct)` on `z(sel_ar_20)`, fitted JOINTLY with `technical_ma50_distance_pct` and `n_gates_passed`, episode-weighted, one vote per episode, no winsorization |
+| one-sided p | **0.1782** | restricted wild cluster bootstrap on arrival-session clusters, alternative `less`, B = 9999, seed 20260924; returned as `(1 + hits) / (1 + valid)`, so 0.1782 is exactly 1782/10000 |
+| 90% interval | **[−0.1864, +0.0490]** | equal-tail percentile interval over 2999 resamples of arrival sessions, re-standardised per draw |
+
+Diagnostics, which the registration labels as reported and never a clearing path:
+CR2 t on ATR **−0.976** over 64 clusters; condition number of the design **1.4**;
+VIF `technical_atr_pct` 1.09, `technical_ma50_distance_pct` 1.11, `n_gates_passed`
+1.05; univariate slope **−0.0703**, a sensitivity read and not a second chance.
+
+**The interval and the p-value agree, and the small gap between them is method, not
+noise.** For a `less` alternative the 90% equal-tail interval's upper endpoint is the
+one-sided 95% upper limit, so `hi = +0.0490 > 0` is the same statement as `p > 0.05`.
+Read as a normal quantity the interval implies a one-sided p of 0.1595 against the
+printed 0.1782. The 0.019 gap is larger than the Monte Carlo noise of either figure
+(sd about 0.004) and comes from the two procedures differing: a restricted wild
+bootstrap with CR1 studentisation against an equal-tail percentile interval.
+
+### 11.4 The verdict, as computed
+
+```
+VERDICT: RETIRE — conclusion 'inconclusive'
+LIVE SCORER TILT: unchanged
+```
+
+Each field traces to one clause of `decide()`, and re-running
+`decide(beta=-0.0713, p_value=0.1782, ci=(-0.1864, 0.0490))` on the printed numbers
+reproduces the triple exactly:
+
+- `RETIRE` because `promoted = p_value < ALPHA and beta <= -DELTA` fails on **both**
+  legs. The p-value missed by 0.1282 (0.1782 against 0.05) and the slope missed by
+  0.0287 (−0.0713 against −0.10). This was not a narrow miss on one leg.
+- `inconclusive` because `inside = lo > -DELTA and hi < DELTA` fails on the LOWER
+  endpoint only: −0.1864 sits past −0.10, while +0.0490 sits 0.0510 inside +0.10.
+  The interval still covers actionable effects of the registered sign, so arm (iii)
+  is shut and the cluster retires operationally rather than being falsified.
+- `unchanged` because of the `elif beta < 0` branch. The July kill trigger for the
+  live tilt fires on a sign flip; the slope is negative, so it did not fire.
+
+**No threshold is close enough for the print precision to matter.** `full_run`
+prints the slope at four decimals while `decide` compares full precision, so the
+rounding hides at most 0.00005. The nearest slope-scale boundary is 574 times
+further away than that. The p-value is not rounded at all.
+
+**Rule 4's word is "fails" and this arm is "inconclusive"; the retirement is still
+automatic.** It is this registration's own pre-commitment, §5: anything that is not
+a PASS retires cluster 1 for selection and ordering. It is not a finding that ATR
+failed. The run's own closing text says "Cluster 1 is RETIRED for selection and
+ordering under ledger rule 4", and that scope is imported from rule 3 and §4.1
+rather than from rule 4, which carries no scope of its own and whose operative
+content is that the cluster is not re-tested in later sweeps.
+
+### 11.5 The realized precision — §4's and §10.1's binding condition is WRONG for this run
+
+> **CORRECTION — 2026-11-07, after the run.** §4 states, and §10.1 reports as
+> confirmed, that "the floor, not the p-value, is the binding condition" because the
+> one-sided significance boundary sits at about −0.091. **That is false on the panel
+> this run used.** Both sentences are left as written; this box is the correction.
+> The same claim appears in the module docstring under "WHAT A PASS DOES AND DOES
+> NOT PROVE" and in ledger §4 note 23.B, and it is superseded in all four places.
+
+The run's own output measures its precision three independent ways, and they agree
+with each other and disagree with §10:
+
+| reading | arithmetic | implied slope SE |
+|---|---|---|
+| 90% interval half-width | 0.1177 / 1.6449 | **0.0716** |
+| printed CR2 t | 0.0713 / 0.976 | **0.0731** |
+| printed bootstrap p | SE a normal needs for p = 0.1782 at β = −0.0713 | **0.0773** |
+| §10.1, simulated, 4 seeds × 3000 panels | — | 0.0538, between-seed range [0.0525, 0.0553] |
+
+The three realized readings sit 1.33 to 1.44 times the simulated figure. The gap
+survives the sampling noise of a single-panel SE estimate: at 64 clusters the CR2
+reading's own 95% band is [0.0603, 0.0858], whose lower end still clears the top of
+§10.1's range. A fourth, independent corroboration points the same way: §10.4
+publishes a simulated mean interval half-width of 0.087 with sd 0.0127, and the
+realized half-width of 0.1177 is 2.4 of those standard deviations above it, a ratio
+of 1.353 — the same factor.
+
+**What that changes.** The one-sided 0.05 boundary on this panel was about −0.118 to
+−0.127, not −0.0885. It therefore sits PAST the −0.10 floor on all three readings, so
+the p-value leg, not the floor, was the binding condition: a slope of exactly −0.10
+would have earned a p of **0.081 to 0.098** — 0.0811 at the interval reading, 0.0855 at
+the CR2 reading, 0.0979 at the bootstrap reading — and would not have promoted. This is the exact state in which
+`2026_11_a20_operating_characteristics.py` refuses to publish a promotion grid, via
+`FloorDoesNotBindError`. That refusal did not fire before the run because it was
+evaluated against the simulated SE, which is the only SE that existed then.
+
+**§10.2's and §10.3's tables therefore overstate this look's power**, and the
+realized figures belong beside them. Recomputed informally by normal approximation
+at the realized SE — not a re-run of the probe:
+
+| true \|ρ\| | §10.2 publishes | at the realized SE |
+|---|---|---|
+| 0.10 | 48.9% | **36.3% to 40.2%** |
+| 0.15 | 82.5% | **61.6% to 67.4%** |
+| 0.189 | 95.2% | **78.8% to 84.0%** |
+
+Each range is the spread across the three SE readings; promotion is scored as
+`P(slope ≤ −max(1.6449 × SE, 0.10))`, so the binding leg is whichever of the two is
+stricter — which, at these standard errors, is the p-value leg throughout.
+
+**The unblocking condition that released this run is the uncomfortable number, and it
+is not the 0.189 row.** That condition is at least 80% power at 50% of the discovery
+effect, and the power preflight computes it against the BURNT standardised ATR effect
+of −0.358, so the gate point is **−0.179** rather than the −0.189 §10's grid uses
+(which is half the July ROW-LEVEL −0.378). It was measured at **91.5% ± 1.4%** on
+2026-11-06 at seed 20260922, and 92.2% ± 1.3% at seed 7. At the realized precision the
+same point reads **74.9% to 80.4%**, which STRADDLES the 80% bar rather than clearing
+it: only the most favourable of the three SE readings reaches it at all. **The gate was met honestly and outcome-blind
+before the run**, on the only measurement available; this is a retrospective
+limitation, not a protocol breach. §10.7 had already named the mechanism in advance:
+"the measured SE is the spread of a SIMULATED sampling distribution, not of the real
+one ... these figures are optimistic by an unmeasured amount". The amount is now
+measured, and it is a factor of 1.33 to 1.36 on the standard error.
+
+**§10's panel is not the run's panel.** §10 measured 385 ticker-episodes in 63
+arrival clusters, read 2026-11-06; the verdict came from 394 in 64. The stores are
+mutable and moved overnight by label maturity, not by new files: the file count
+stayed 172 with the newest stem unchanged at `2026-11-06`, while briefed held-out
+label rows went 1079 to 1107 and resolved rows 779 to 804, and the single
+`split_unchecked` row resolved away. The direction is harmless for the SE — a larger
+panel can only tighten it, and rescaling 0.0538 by `sqrt(385/394)` gives 0.0532 — so
+it explains none of the 1.35x gap above. §10's figures describe a panel one day
+stale and must not be quoted as measured on the panel that produced the verdict.
+
+### 11.6 The conclusion arm: (ii), and why not (iii)
+
+Arm (iii) — evidence against actionable effects of this signal, as instrumented —
+was not close on either characterisation of its firing condition:
+
+| characterisation | firing region | where −0.0713 sits |
+|---|---|---|
+| §10.4, measured on 3200 panels across 8 seeds | slope in [−0.0275, +0.0254] | 0.0438 below the lower firing edge |
+| the withdrawn disclosure the docstring still carries | slope in about (−0.009, +0.009) | 7.9 half-widths outside |
+
+**Quote §10.4's figures, not the docstring's.** The operative registration still
+reads "roughly a 13% chance even if the true effect is exactly zero" with a band of
+about (−0.009, +0.009), and unlike its other withdrawn figure that sentence carries
+no supersession marker. §5 and §10.4 supersede it: the arm fires **21.6% ± 0.7pp**
+under a true zero, and its firing range is asymmetric and about three times wider
+than a symmetric reading implies. Amending the docstring is a separate dated act
+and is not taken here.
+
+Containment is strict by design. The rule is `lo > -0.10 and hi < 0.10`, and §5
+states that an interval whose endpoint sits exactly on ±0.10 has not excluded it;
+`test_an_interval_touching_the_bound_is_not_evidence_against` pins that.
+
+### 11.7 The live scorer tilt, and the July three-way's open branch
+
+**Nothing in the live tier changes, and nothing changes automatically.** The July
+kill trigger fires on a sign flip and the slope stayed negative, so
+`atr_penalty` and `SCORER_CONFIG_VERSION = "scorer-v1-atrtilt-lam1.0-lo5.77-hi8.37"`
+keep running: no version bump, no cohort reset, and the EDGE poolability cohort is
+not cut. The question posted on #1227 before the run — whether one of the three
+outcomes would cut the panel a later model trains on — resolved in the benign
+direction. No code, test, configuration, systemd unit or CI workflow reads the
+#1227 verdict or any cluster status, so every consequence of this run is
+documentary.
+
+**Branch (c) of the July kill line is now textually in play and is NOT settled by
+this output.** That memo's §5 makes the kill line three-way, and the confirmation's
+tilt mapping expresses only two branches. Branch (c) reads: ATR alive in exactly one
+volatility state means do NOT retire silently, and register a conditional-penalty
+candidate (`atr_penalty` active only when `vol=high`) for the FOLLOWING window, as
+its own `SCORER_CONFIG_VERSION` and its own Bonferroni entry. The printed per-regime
+arms read on their face like that pattern. They cannot adjudicate it, for two
+reasons: §5 registered the comparison as an episode-clustered contrast of ATR-rank
+rho10 on `car_10` between the two volatility sub-windows, which was not run; and the
+printed arms carry no p-value and no interval, so neither "alive" nor "dead" is
+decided for either state. Producing that contrast now would be a new look on
+held-out episodes the ledger has no slot for. **Nothing may be tilted conditionally
+on the strength of −0.3160.** Branch (c) is recorded here as an OPEN owner decision,
+not as discharged.
+
+### 11.8 The one registered interaction: estimated, and not a finding
+
+The sufficiency check passed and the interaction was estimated, which both §7 and
+the module docstring expected would not happen:
+
+```
+VOLATILITY INTERACTION (the one registered interaction):
+  4 independent regime episodes — estimated below
+  bull_quiet: slope -0.0144 on 322 episodes
+  bull_volatile: slope -0.3160 on 72 episodes
+```
+
+**These two numbers are a disclosure, not a result, and they are the most seductive
+numbers in the output.** Six reasons, each sufficient on its own:
+
+1. **The two slopes are not on a common scale**, so the gap between them is not a
+   difference in effect. `atr_slope` re-standardises whatever frame it is handed, so
+   each arm reports `beta_raw(arm) × sd(ATR within arm) / sd(y within arm)` — its own
+   units. Range restriction in the quiet arm attenuates its number mechanically,
+   with no change in the underlying relation. Identical raw slopes can print as
+   −0.06 and −0.61.
+2. **It passed its floor with zero margin.** `MIN_VOL_EPISODES = 4` and the count was
+   exactly 4 — the weakest possible pass, and the only threshold in the entire
+   output with no slack. The count is maximal runs of consecutive arrival sessions
+   sharing one regime label, so 64 sessions collapsed to 4 runs, i.e. three label
+   changes in the whole window. With exactly two states observed that forces **two
+   contiguous calendar stretches per arm**. Neither slope rests on 322 or 72
+   independent observations of a regime. The known bias in that counter only
+   undercounts, so the decision to estimate was on the safe side of the floor.
+3. **The arms pool across the `market_state_config_version` key**, which the
+   market-state registration says is never pooled. `_read_brief` does not read that
+   column, so the script cannot partition even in principle. Across the 81 v1 dates
+   `market_state_vix` held one value and never reached its threshold, so every
+   volatile label came from the realized SPY-ATR-quantile leg alone, and the v1.2
+   cohort carries one label value across all 33 of its dates.
+4. **It is not the registered statistic.** July registered an episode-clustered
+   comparison of ATR-rank rho10 between `vol=high` and `vol=low` on a single
+   two-state axis, with the full four-state grid explicitly outside the family. What
+   ran is two separate standardised partial OLS slopes grouped by the full
+   four-state `market_state` label, with no contrast statistic and no clustering on
+   the contrast.
+5. **There is an alternative mechanism the output cannot exclude.** `sel_ar_20` is
+   beta-adjusted against IWM with a raw 250-session beta and no intercept, so
+   residual market exposure survives, and it survives largest exactly when realized
+   market volatility is high. High-ATR names carry high beta. Two volatile stretches
+   with any net market move produce a negative ATR slope with no ATR effect present.
+   This was not tested — testing it needs held-out outcomes — and is stated as an
+   unexcluded mechanism, not a measurement.
+6. **One output, two standards of stringency.** The pooled estimate was not allowed
+   to exist below 300 episodes and 30 clusters; an arm slope prints at 72 episodes
+   with no per-arm episode floor and no per-arm regime-episode floor.
+
+Under the single most favourable set of assumptions the arm gap is a nominal 2.2
+sigma, and it stops being even nominal once the slope is allowed to differ between
+calendar stretches, which two stretches per arm cannot measure. The arms also do not
+conflict with the pooled verdict: the pooled slope is, to within 2.5%, the
+episode-weighted average of the two (−0.0695).
+
+**§7's and ledger note 23.G's prediction was wrong about the data as well as the
+outcome.** Both expected "insufficient, not estimated" because `market_state_vix` was
+frozen across the held-out dates; it was frozen only to 2026-09-23 and #1524 fixed
+it. The July memo reserves one charge for this interaction test, and the ledger row
+of 2026-11-07 records that the charge was spent.
+
+`market_state` is point-in-time and is not recomputed: the nightly thematic build
+stamps it with `asof` equal to the brief date, and the confirmation reads the stamped
+column off the brief parquet. Its two caveats are lags rather than lookahead.
+
+### 11.9 What this result rules out, and what it does not
+
+**The honest description is "insufficient precision to settle it", not "no evidence
+of an effect".** The cleanest single fact behind that choice: the 90% interval's
+half-width (0.1177) is LARGER than the smallest actionable effect it was asked to
+rule out (DELTA = 0.10). A look whose interval is wider than its own decision
+threshold cannot separate "zero" from "actionable" in one shot, by construction.
+
+At the realized SE of about 0.072 the estimate sits 1.00 standard errors from a true
+zero and only 0.40 from a true −0.10. This is a precision statement on a normal
+approximation, offered as such: the registration pre-committed no prior, and §10's
+P(promote) figures are frequencies of a DECISION given ρ, never a likelihood for ρ.
+
+**What the interval does rule out is the discovery-scale effect.** The July row-level
+discovery figure of −0.378 and the burnt episode-level standardised effect of −0.358
+both sit 0.17 to 0.19 outside the lower endpoint, about four realized standard errors
+from the estimate. That is the only magnitude claim this result licenses, and it is a
+real one: the discovery magnitude did not survive out of sample.
+
+**The 50%-shrinkage planning effect of −0.189, which the power gate was written
+against, sits 0.0026 outside the lower endpoint.** Treat it as at the very edge of
+what the data still allow rather than as excluded; a margin that small is inside the
+noise of the interval itself.
+
+**What the result does NOT rule out is an actionable effect of the registered sign.**
+The interval covers the whole band from −0.10 out to −0.1864, so an effect up to
+nearly twice DELTA remains consistent with the data. This memo cannot say that ATR
+carries no actionable effect for selection.
+
+**A sibling held-out ATR statistic was already on the record, and it does not
+corroborate.** `experts_last_look_2026_09.md` §6 Part B published, on 2026-09-29, a
+rank correlation of +0.089 for a `−ATR` ordering — so ATR against outcome of about
+−0.089 — over 260 episodes in 47 arrival clusters across 205 tickers, on brief dates
+2026-07-06 to 2026-09-14. The sign and rough magnitude agree with −0.0713, and that
+agreement carries less than it appears to:
+
+- It publishes **no interval of its own**. The p of 0.0666 and the 99.286% interval
+  quoted beside it belong to an elastic-net-minus-baseline delta of −0.125, not to
+  the baseline correlation, so the figure states a point and no precision.
+- Comparability is limited on four axes: outcome column (`car_10` against
+  `sel_ar_20`), horizon (10 against 20 sessions), statistic (a pooled out-of-fold
+  rank Spearman on a univariate ordering against a standardised partial OLS slope
+  fitted jointly with two covariates), and panel (that run was restricted to
+  `source == 'thematic'`). §3 already warns that a partial correlation and a
+  standardised slope are not the same scale.
+- **The two panels are not independent.** The experts window lies entirely inside
+  this panel's window, off the same label store, the same brief store, the same
+  briefed population and the same rule-5 episode unit, so most of those 260 episodes
+  are very likely among these 394. The exact overlap was not measured, because
+  counting it means reading the held-out stores. Two reads sharing one upstream store
+  are one body of data seen through two instruments.
+- **It could not have contaminated this registration.** The docstring froze
+  2026-09-23 and that run was 2026-09-29, so +0.089 could not have informed DELTA,
+  the direction or the estimand.
+
+One ledger question this raises and does not settle: that figure was a held-out
+ATR-versus-outcome statistic charged to cluster 15 rather than cluster 1, while rule 1
+says no look happens off-ledger. Whether a fit-free comparator spends cluster 1's
+budget is the same class of owner interpretation as the rule-4 cap scope decided on
+2026-11-06.
+
+### 11.10 Retrospective limitations
+
+Each with the construction that produced it. The limitations stated in §9 before the
+run all still apply; these are the ones the run itself added or measured.
+
+- **The realized SE was about 0.072 against §10's simulated 0.0538**, so the binding
+  condition flipped from the floor to the p-value and the look's power was lower than
+  the table it was released against (§11.5).
+- **The unblocking gate straddles its own bar retrospectively.** The condition that
+  released the run — at least 80% power at 50% of the burnt standardised ATR effect,
+  so at ρ = −0.179 — was measured at 91.5% ± 1.4% and reads 74.9% to 80.4% at the
+  realized precision. It was met honestly and outcome-blind on the only measurement
+  that existed beforehand, and it is the single figure in this registration that the
+  run's own output most sharply contradicts (§11.5).
+- **§10's figures describe a panel one day stale** (385 episodes in 63 clusters
+  against the run's 394 in 64), and the stores are mutable (§11.5).
+- **The panel is narrower than `POPULATION = "briefed"` names.** §10.6 measured 19 of
+  779 resolved briefed held-out rows with no brief row to join, from
+  `pre_open_recovered` names under #1494, against 75 of 466 on the burnt side. The
+  two panels differ in composition in a way no frozen constant describes, and the
+  exclusion is symmetric with discovery but is selection on post-hoc membership.
+- **Arm (iii)'s advance disclosure was wrong by a factor of about 1.7 in probability
+  and about three in band width** (13% and ±0.009 as disclosed, against 21.6% ± 0.7pp
+  on 3200 panels across 8 seeds with an asymmetric firing range to about ±0.027). It
+  did not bite, because the arm was not close (§11.6).
+- **The blind-path count is not an upper bound on the run's**, contrary to two
+  statements in the registration (§11.2).
+- **The two items §10.7 leaves open are not closed by this run:** the one-sided
+  against two-sided direction mismatch in `a20_power.py` recorded in the preflight
+  memo §7.3, and rule 2's α-spending for this confirmation. The second now matters
+  retrospectively: the look applied a plain one-sided 0.05 while the ledger's own
+  program-level charge is 1.76e-4 per cluster, and at that level the p-value would
+  have bound by a far larger margin.
+- **Three reporting defects in the interaction block**, none of which can change this
+  spent look: `_report_interaction` prints the arrival-cluster count only on the
+  branch that REFUSES to estimate, so this run's per-arm cluster counts are
+  unrecoverable and only "at least `MIN_REGIME_CLUSTERS` = 10 each" can be stated; the
+  interaction block is the only numeric block printed without a "never a clearing
+  path" caveat; and `_report_interaction` has no test.
+- **A VOID would have disclosed the statistics it declares unspent.** `decide`'s
+  `VoidError` message interpolates the slope, the p-value and the interval, and `main`
+  prints it to stderr. The run did not void, so nothing turned on it.
+- **`validate="m:1"` on the brief merge raises `MergeError`**, which is a `ValueError`
+  and not a `VoidError`, so `main`'s handler would have missed it and the run would
+  have died with a traceback and exit 1 rather than the registered exit 8. The look
+  would still have been unspent, because the merge precedes every statistic.
+- **A degenerate or non-finite OUTCOME column is caught nowhere.** `held_out_panel`'s
+  variance loop covers the ATR column and the two covariates only, `_z` zeros a
+  degenerate column instead of raising, and the NaN that should have voided is created
+  and discarded inside `wild_cluster_bootstrap_p`. On a synthetic panel with a constant
+  outcome the run prints `RETIRE / evidence-against / tilt retired` with no void
+  anywhere. It was adjudicated before the run and did not block it, because the
+  degenerate case announces itself in five places at once — a zero slope, a
+  zero-width interval from 2999 resamples, a non-finite CR2 t, a zero univariate
+  slope and a runtime warning — and because the producer closes the non-finite half
+  by construction (`selection_label._positive` rejects any non-finite value before a
+  status of `ok` is written). A pre-agreed reading was recorded before the run: a
+  slope printing exactly `+0.0000` beside a zero-width interval was to be treated as
+  a VOID in the clause's spirit. It did not apply: the slope is −0.0713 and the
+  interval is 0.2354 wide.
+
+### 11.11 What this closes, and what stays open
+
+**Closed permanently.** Cluster 1 for brief SELECTION and ORDERING under ledger
+rule 4, with no re-test and no sweep re-look left; and cluster 1's single rule-3
+confirmation slot, now spent. The owner's decision of 2026-11-06 states that a
+cluster retired under rule 4 has nothing to return to.
+
+**Untouched.** ATR in execution geometry, a different estimand on the ledger's §4.1
+budget, whose annex header says it charges the T5/T7 walk-forward budget rather than
+the §3 covariate family; both registered lenses there, `atr_bracket_1p5` and
+`atr_bracket_1p5_planned`, still read PENDING. ATR as a CONTROL in burnt-panel
+probes. The ATR-only baseline that owner decision D5 requires beside every model.
+And the live tilt itself.
+
+**Corrected, and not what the registration says.** The docstring's FAMILY = 1
+paragraph states that the MA50 extension and the press gate "keep their ledger looks
+unspent". This look charges nothing to clusters 2 and 9, but the ledger's appended
+note of 2026-11-06 settled that cluster 9 stands AT rule 4's cap of two re-looks and
+cluster 2 one PAST it. Neither holds a spare sweep look; each holds one rule-3
+confirmation, under the owner's "outside the cap" interpretation of that date.
+Cluster 1's cumulative look count reads **4** after this run, not 3.
+
+**Open, and each is an owner decision rather than a gap this memo can fill.**
+
+1. **The dated amendment to the operative registration.** The module docstring still
+   reads "WHY IT MAY NOT RUN YET" with "IT IS NOT MET", still carries the withdrawn
+   13% arm-(iii) disclosure unmarked, still cites a withdrawn 419-episode panel in
+   its frozen block, and still states a look count the ledger settled against. The
+   append-only convention licenses a dated amendment that names what each superseded
+   sentence read; it does not license touching any frozen constant or any comparison
+   inside `decide`, which are the rule this verdict was produced under.
+2. **Branch (c) of the July kill line** (§11.7): register a conditional-penalty
+   candidate for a forward window, or record that the branch is unadjudicable on the
+   evidence that exists and close it.
+3. **Whether §4 and §10.1 get their own correction PR** beyond the box in §11.5. The
+   superseded sentence appears in four places.
+4. **Two §3 cluster rows now point at a retired cluster**, and no document says what
+   happens to them: cluster 16, the joint loser flag whose primary leg is "mostly ATR
+   curvature", at 1 look with a status of "pre-register before ordering use" and a
+   sunset of 2026-11 that is now due; and cluster 4 (ROIC), retired with "only
+   residual-ROIC×ATR admissible". Whether a cluster whose content is largely ATR
+   curvature may still enter ordering after cluster 1 was retired for ordering is not
+   written down anywhere.
+5. **Rule 2's α-spending for this confirmation** (§11.10), still not addressed.
+
+### 11.12 The captured run, verbatim
+
+The script's own stdout, unedited. The provenance block around it is in §11.1; the
+full captured log is hashed there.
+
+```
+========================================================================
+ATR HELD-OUT CONFIRMATION — #1227, ledger cluster 1, one-shot
+========================================================================
+panel: 394 ticker-episodes in 64 arrival clusters
+population: briefed; outcome: sel_ar_20; held-out > 2026-07-05
+
+standardised partial slope (ATR): -0.0713
+one-sided wild cluster bootstrap p: 0.1782  (bar 0.05)
+90% cluster-bootstrap interval: [-0.1864, +0.0490]
+smallest actionable effect: |rho| >= 0.1
+
+DIAGNOSTICS (reported, never a clearing path):
+  CR2 t on ATR: -0.976 over 64 clusters
+  condition number of the design: 1.4
+  VIF: technical_atr_pct=1.09, technical_ma50_distance_pct=1.11, n_gates_passed=1.05
+  univariate slope (SENSITIVITY ONLY, not a second chance): -0.0703
+
+VOLATILITY INTERACTION (the one registered interaction):
+  4 independent regime episodes — estimated below
+  bull_quiet: slope -0.0144 on 322 episodes
+  bull_volatile: slope -0.3160 on 72 episodes
+
+========================================================================
+VERDICT: RETIRE — conclusion 'inconclusive'
+LIVE SCORER TILT: unchanged
+Cluster 1 is RETIRED for selection and ordering under ledger rule 4.
+ATR's use in execution geometry is a different estimand on the §4.1
+budget and is untouched. See the pre-committed three-way conclusion
+language in the docstring for what this null does and does not say.
+========================================================================
+```
