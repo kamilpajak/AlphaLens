@@ -658,6 +658,27 @@ Two things follow and they point opposite ways:
   normal cluster and residual draws, ICC applied to residual variance, and real
   burnt signal rows resampled into the held-out cluster sizes. If the true outcome
   distribution is skewed, these figures are optimistic by an unmeasured amount.
+> **ANSWERED 2026-11-07 — the first bullet above is now measured, and it was
+> wrong about which assumption mattered.** The amount is 1.36x on the one reading
+> that is a direct SE. The cause is NONE of the three assumptions this bullet
+> names: normal draws, the ICC on residual variance, and burnt rows resampled into
+> held-out sizes each move the simulated SE by 3% or less. The cause is a mechanism
+> not on the list — the noise is HETEROSKEDASTIC AND ALIGNED WITH THE FEATURE under
+> test, so the panel's noise scale tracks ATR itself, and the simulator gives every
+> observation one scale. Measured on the burnt panel at +0.360 (se 0.101) and put
+> back into the simulator, the session-level reading predicts 0.0707 against the
+> realized 0.0731, closing 88% of the gap as read and 71% once the estimator's own
+> measured upward bias is removed. **The LEVEL of the alignment is NOT identified:**
+> row-level alignment reaches the same realized SE with no clustering at all, and
+> the estimator cannot tell the two apart. The session reading is preferred only
+> because the row-level test has nine times the sample and finds less. The bullet's own
+> framing — "if the true outcome distribution is skewed" — points at the one
+> candidate the measurement rules out. Full construction, every table and the
+> verbatim output: `a20_simulator_precision_gap_2026_11_07.md`. That memo reads
+> held-out SIGNAL columns, which this registration's preflight allowlist barred
+> before the run; its §10 states why that is legal now and leaves the judgement
+> with the owner.
+
 - **`--mode slopes` grades the promote arm as `slope ≤ −DELTA` alone**, relying on
   the floor binding. The floor does bind on all four seeds, but that is an argument
   from the measured SE rather than a bootstrap p-value computed on each simulated
@@ -914,6 +935,19 @@ even that. The direction is harmless for the SE — a larger
 panel can only tighten it, and rescaling 0.0538 by `sqrt(385/394)` gives 0.0532 — so
 it explains none of the 1.35x gap above. §10's figures describe a panel one day
 stale and must not be quoted as measured on the panel that produced the verdict.
+
+> **NARROWED 2026-11-07, same day.** The 1.33-to-1.44 range above mixes one
+> measurement with two back-derivations and should be read with that stated. Only
+> the CR2 reading of 0.0731 is a direct SE estimate; the 0.0716 assumes the
+> registered interval is symmetric, which §10.4 measured that it is not, and the
+> 0.0773 assumes the wild cluster bootstrap null distribution is normal. The single
+> honest figure is **1.36x**. Separately, the realized reading sits at about the
+> 99th percentile of the SIMULATED distribution of a one-panel CR2 SE, which has a
+> relative standard deviation of 13.3% over 12000 panels — so the gap was never
+> impossible under the published simulator, and the case for a biased centre rests
+> on the mechanism measured in `a20_simulator_precision_gap_2026_11_07.md` §7,
+> not on the percentile. Nothing above is withdrawn: the FLOOR still did not bind
+> and the p-value leg was still the binding one.
 
 ### 11.6 The conclusion arm: (ii), and why not (iii)
 

@@ -5,6 +5,16 @@ holds, but the power figures are withdrawn.** The arrival-session wild cluster b
 level on an overlap-aware panel in every cell of the grid, and that verdict survives the correction
 intact. The power column does not: it was computed on a panel counted in the wrong unit. See the
 correction box; §5 holds the original run and §6 the re-run.
+**Power figures qualified again 2026-11-07:** §6's corrected **64.6-66.2%** also comes from
+`a20_power.simulate_panel`, which the spent #1227 look measured to be optimistic on the slope
+standard error by **1.36x** for a reason the registration never disclosed — noise that is
+heteroskedastic and ALIGNED WITH THE FEATURE under test, where the simulator gives every
+observation one noise scale. Those figures stand as SIMULATOR readings and are not realized
+power. See
+[`a20_simulator_precision_gap_2026_11_07.md`](a20_simulator_precision_gap_2026_11_07.md). The
+bootstrap LEVEL verdict, which is this memo's actual subject, is unaffected: it is a size check,
+not a power figure.
+
 **Amends:** [`a20_power_preflight_2026_09.md`](a20_power_preflight_2026_09.md) §2.2 (the
 inference row) and §3 (the method). That memo's 83.9% is not withdrawn; this one asks whether the
 assumption under which it was computed holds, and §5 says.
