@@ -22,6 +22,7 @@ import importlib.util
 import io
 import sys
 import unittest
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -581,8 +582,9 @@ class TestTheProbeEndToEnd(unittest.TestCase):
         12-panel determinism check fell into.
 
         The STRIDE is lowered rather than the panel count raised. Running the
-        real stride of 50 panels cost one cluster bootstrap each and made this
-        single test the most expensive in the research suite; what the test
+        real stride of 50 panels cost one cluster bootstrap PER panel and PER
+        entry of ARM_RHOS, which has two - 100 bootstraps at the registered 2999
+        resamples, measured at 153 s of this module's 165 s. What the test
         exists to prove is that the branch executes and prints, which a stride
         of 2 proves identically.
         """
@@ -604,14 +606,105 @@ class TestTheProbeEndToEnd(unittest.TestCase):
         self.assertIn("SMOKE TEST, not a measurement", printed)
         self.assertIn("may not be published", printed)
 
+    def _record_bootstrap_sizes(self) -> list[int]:
+        """Record the `n_boot` every `slope_ci` call receives, and skip the work.
+
+        `_load_sibling` re-executes the confirmation module on every call, so
+        patching `slope_ci` after the fact does not survive into the run: the
+        LOADER is the only seam. Returning a fixed interval rather than calling
+        through is deliberate - it makes the two wiring tests cost nothing, and
+        the real bootstrap still runs end-to-end in
+        `test_the_arms_mode_reports_the_evidence_against_arm`.
+        """
+        seen: list[int] = []
+        real_loader = opchar._load_sibling
+        self.addCleanup(setattr, opchar, "_load_sibling", real_loader)
+
+        def loader(stem, name):
+            module = real_loader(stem, name)
+            if stem == "2026_09_a20_atr_confirmation":
+                default = module.CI_BOOT
+
+                def spy(panel, *, n_boot=default, seed=module.SEED, level=module.CI_LEVEL):
+                    seen.append(n_boot)
+                    return -0.05, 0.05
+
+                module.slope_ci = spy
+            return module
+
+        opchar._load_sibling = loader
+        return seen
+
+    def test_the_ci_boot_flag_reaches_the_bootstrap(self):
+        """The one line this whole change rests on. Asserting on the PRINTED
+        header cannot see it: the header echoes the parsed flag, so deleting
+        `n_boot=ci_boot` from the `slope_ci` call leaves every string assertion
+        green while the suite silently goes back to costing 29 s for this class.
+        Measured by removing that keyword: 4.5 s -> 28.7 s, 0 failures.
+        """
+        seen = self._record_bootstrap_sizes()
+        self._run("--mode", "arms", "--sims", "2", "--seed", "31", "--ci-boot", str(_SMOKE_BOOT))
+        self.assertTrue(seen, "slope_ci was never called, so nothing was observed")
+        self.assertEqual({_SMOKE_BOOT}, set(seen))
+
     def test_the_default_bootstrap_is_the_registered_one_and_is_not_labelled(self):
-        """The flag defaults to the frozen CI_BOOT, and a run at the registered
-        value must carry no smoke-test marker. One panel is enough to pin the
-        wiring; the cost is one bootstrap, not one per panel."""
+        """Absent the flag, every call must use the FROZEN constant, and the
+        header must say positively that this is the registered interval."""
         conf = self.conf()
-        printed = self._run("--mode", "arms", "--sims", "1", "--seed", "29")
-        self.assertIn(f"CI_BOOT {conf.CI_BOOT}", printed)
+        seen = self._record_bootstrap_sizes()
+        printed = self._run("--mode", "arms", "--sims", "2", "--seed", "29")
+        self.assertEqual({conf.CI_BOOT}, set(seen))
+        self.assertIn(f"CI_BOOT {conf.CI_BOOT} (the registered value)", printed)
         self.assertNotIn("SMOKE TEST", printed)
+        self.assertNotIn("[SMOKE BOOT", printed)
+
+    def test_a_bootstrap_above_the_registered_one_is_not_called_a_smoke_test(self):
+        """A larger resample count is the one direction that buys precision.
+        Equality alone would label it unpublishable, which is backwards."""
+        conf = self.conf()
+        seen = self._record_bootstrap_sizes()
+        printed = self._run(
+            "--mode",
+            "arms",
+            "--sims",
+            "2",
+            "--seed",
+            "37",
+            "--ci-boot",
+            str(conf.CI_BOOT + 1),
+        )
+        self.assertEqual({conf.CI_BOOT + 1}, set(seen))
+        self.assertIn("ABOVE the registered", printed)
+        self.assertNotIn("SMOKE TEST", printed)
+        self.assertIn(f"[CI_BOOT {conf.CI_BOOT + 1}]", printed)
+
+    def test_one_panel_reports_no_spread_instead_of_nan(self):
+        """`np.std(..., ddof=1)` on one observation is zero degrees of freedom:
+        numpy warns and returns nan, which would print as a figure."""
+        seen = self._record_bootstrap_sizes()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            printed = self._run("--mode", "arms", "--sims", "1", "--seed", "41")
+        self.assertEqual(1, len(set(seen)))
+        self.assertIn("sd of the slope: not defined on one panel", printed)
+        self.assertNotIn("nan", printed)
+
+    def test_a_bootstrap_below_one_is_refused_before_the_structure_read(self):
+        """`slope_ci(n_boot=0)` dies on `np.percentile([], ...)` inside the
+        FROZEN confirmation script, an IndexError naming neither the flag nor
+        the file, and only after the structure read has cost minutes."""
+        for value in ("0", "-5"):
+            with self.subTest(ci_boot=value):
+                with self.assertRaises(SystemExit):
+                    with contextlib.redirect_stderr(io.StringIO()):
+                        opchar.main(["--mode", "arms", "--ci-boot", value])
+
+    def test_the_flag_is_refused_in_the_mode_that_ignores_it(self):
+        """`--mode slopes` computes no interval, so the flag would be accepted
+        and silently do nothing after a 15-minute wait."""
+        with self.assertRaises(SystemExit):
+            with contextlib.redirect_stderr(io.StringIO()):
+                opchar.main(["--mode", "slopes", "--ci-boot", "9"])
 
     def test_the_power_structure_is_reachable_from_the_command_line(self):
         printed = self._run(

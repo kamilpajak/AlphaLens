@@ -424,17 +424,31 @@ def _report_arms(
     ci_boot: int,
 ) -> None:
     columns = [conf.ATR, *conf.COVARIATES]
-    registered = ci_boot == conf.CI_BOOT
-    print(f"\ninterval: CI_BOOT {ci_boot}, CI_LEVEL {conf.CI_LEVEL}")
-    if not registered:
-        # The dominant cost of this mode is one cluster bootstrap PER simulated
-        # panel, so a smoke run has to be able to shrink it. A figure computed at
-        # a reduced bootstrap is not the registered interval, and the report says
-        # so in its own output rather than leaving it to whoever reads the shell
-        # history: a number is a claim, and this one would be a different claim.
+    # The dominant cost of this mode is one cluster bootstrap PER simulated panel,
+    # so a smoke run has to be able to shrink it. A figure computed at any other
+    # resample count is not the registered interval, and the report says which it
+    # used in its own output rather than leaving it to whoever still has the shell
+    # history: a number is a claim, and that would be a different claim.
+    #
+    # Three cases, not two. A bootstrap ABOVE the registered value is also not the
+    # registered interval, but calling it a smoke test would be backwards - it is
+    # the one direction that buys precision - so it gets its own line.
+    if ci_boot == conf.CI_BOOT:
+        tag = ""
+        print(f"\ninterval: CI_BOOT {ci_boot} (the registered value), CI_LEVEL {conf.CI_LEVEL}")
+    elif ci_boot < conf.CI_BOOT:
+        tag = f" [SMOKE BOOT {ci_boot}]"
+        print(f"\ninterval: CI_BOOT {ci_boot}, CI_LEVEL {conf.CI_LEVEL}")
         print(
-            f"   *** NOT the registered CI_BOOT of {conf.CI_BOOT}. This run is a SMOKE "
+            f"   *** BELOW the registered CI_BOOT of {conf.CI_BOOT}. This run is a SMOKE "
             f"TEST, not a measurement, and its figures may not be published. ***"
+        )
+    else:
+        tag = f" [CI_BOOT {ci_boot}]"
+        print(f"\ninterval: CI_BOOT {ci_boot}, CI_LEVEL {conf.CI_LEVEL}")
+        print(
+            f"   *** ABOVE the registered CI_BOOT of {conf.CI_BOOT}. Not the registered "
+            f"interval either; publish it as its own measurement, not as section 10's. ***"
         )
     print("section 5 discloses the evidence-against arm at about 13% under a true zero")
     for rho in ARM_RHOS:
@@ -488,7 +502,10 @@ def _report_arms(
                 )
         share = inside / float(sims)
         half = float(np.mean(widths)) / 2.0
-        print(f"\ntrue |rho| {rho:.2f}, {sims} panels, seed {seed + round(rho * 1000)}")
+        # The tag repeats here rather than only in the header: a long run puts
+        # dozens of progress lines between the header and this block, and what
+        # gets copied into a memo is this block.
+        print(f"\ntrue |rho| {rho:.2f}, {sims} panels, seed {seed + round(rho * 1000)}{tag}")
         print(
             f"   evidence-against arm fires {100 * share:.1f}% "
             f"+-{100 * monte_carlo_error(share, sims):.1f}pp  ({inside}/{sims})"
@@ -503,7 +520,12 @@ def _report_arms(
             )
         else:
             print("   MEASURED: the arm never fired, so it has no firing range")
-        print(f"   sd of the slope {float(np.std(betas, ddof=1)):.4f}")
+        if len(betas) > 1:
+            print(f"   sd of the slope {float(np.std(betas, ddof=1)):.4f}")
+        else:
+            # ddof=1 on one observation is zero degrees of freedom: numpy warns
+            # and returns nan, which would print as if it were a measurement.
+            print("   sd of the slope: not defined on one panel")
         for arm in ("confirmed", "unchanged", "retired"):
             frequency = arms.count(arm) / float(sims)
             print(
@@ -536,6 +558,17 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     args = parser.parse_args(argv)
+    if args.ci_boot is not None:
+        if args.mode != "arms":
+            parser.error(
+                "--ci-boot applies to --mode arms only; --mode slopes computes no interval"
+            )
+        if args.ci_boot < 1:
+            # `slope_ci` would leave `draws` empty and die inside the FROZEN
+            # confirmation script on `np.percentile([], ...)`, an IndexError
+            # naming neither this flag nor this file - and only after the
+            # structure read has already cost minutes.
+            parser.error(f"--ci-boot must be at least 1, got {args.ci_boot}")
 
     power = _load_sibling("a20_power", "_a20_power_for_opchar")
     conf = _load_sibling("2026_09_a20_atr_confirmation", "_a20_confirmation_for_opchar")
