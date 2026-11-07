@@ -1219,13 +1219,16 @@ Cluster 1's cumulative look count reads **4** after this run, not 3.
 
 **Open, and each is an owner decision rather than a gap this memo can fill.**
 
-1. **The dated amendment to the operative registration.** The module docstring still
-   reads "WHY IT MAY NOT RUN YET" with "IT IS NOT MET", still carries the withdrawn
-   13% arm-(iii) disclosure unmarked, still cites a withdrawn 419-episode panel in
-   its frozen block, and still states a look count the ledger settled against. The
-   append-only convention licenses a dated amendment that names what each superseded
-   sentence read; it does not license touching any frozen constant or any comparison
-   inside `decide`, which are the rule this verdict was produced under.
+1. ~~**The dated amendment to the operative registration.**~~ **TAKEN 2026-11-07.**
+   The item read: the module docstring still reads "WHY IT MAY NOT RUN YET" with
+   "IT IS NOT MET", still carries the withdrawn 13% arm-(iii) disclosure unmarked,
+   still cites a withdrawn 419-episode panel in its frozen block, and still states a
+   look count the ledger settled against. The amendment is the `THE RUN` block at the
+   end of that docstring, with short in-place markers on each superseded passage. It
+   adds dated prose only: all 19 frozen constants were compared against the
+   pre-amendment file and none drifted, and `decide()` was re-run on six branch cases
+   including this run's own verdict with no change. Every superseded sentence is left
+   as written and named in the block, per the append-only convention.
 2. **Branch (c) of the July kill line** (§11.7): register a conditional-penalty
    candidate for a forward window, or record that the branch is unadjudicable on the
    evidence that exists and close it.

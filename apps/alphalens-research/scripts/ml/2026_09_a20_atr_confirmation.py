@@ -9,6 +9,14 @@ confirmation is retired and is NOT re-tested. Companion memo with the full
 rationale, the operating characteristics and the limitations:
 `docs/research/atr_confirmation_prereg_2026_09.md`.
 
+THE LOOK IS SPENT. It ran once, 2026-11-07 at 11:08:38Z, on the VPS production
+stores: slope -0.0713, one-sided p 0.1782 against a bar of 0.05, 90% interval
+[-0.1864, +0.0490], on 394 ticker-episodes in 64 arrival clusters. VERDICT
+RETIRE, conclusion `inconclusive`, live scorer tilt `unchanged`. Everything
+between here and "THE RUN" at the end of this docstring is the registration AS
+FROZEN and is written in the future tense. The sentences the run superseded are
+left as written and are named in that block. Results: memo §11.
+
 REGISTRATION (frozen 2026-09-23, BEFORE any held-out feature-vs-outcome
 statistic was computed). Everything read on the held-out side to date is
 outcome-blind and disclosed in the memo: episode and cluster counts, label
@@ -18,6 +26,7 @@ read. `--run` refuses to execute before RUN_NOT_BEFORE without an explicit
 this registration is merged before the look, never alongside it.
 
 WHY IT MAY NOT RUN YET  (amended 2026-09-24; it read "WHY IT MAY RUN NOW")
+DISCHARGED 2026-11-06 and SUPERSEDED 2026-11-07 - see THE RUN (2) and (3).
 The unblocking condition #1227 wrote for itself is ">= 80% power at 50% of the
 July discovery effect for the ATR test". IT IS NOT MET. The figures that said it
 was - 83.9% under a three-member Holm family, 92.9% at the family of one - were
@@ -48,7 +57,9 @@ pre-specified 7.5% bar. Mixed price adjustment
 split-adjusted) and the yfinance stale-OHLCV cache census (three logged
 fallbacks, all in the burnt window, none in the panel).
 
-FAMILY = 1. ATR only. MA50 extension (69% power) and the press gate (5% power,
+FAMILY = 1. ATR only. (The sentence below about clusters 2 and 9 keeping their
+looks unspent is SUPERSEDED - see THE RUN (7). The family of one is not.)
+MA50 extension (69% power) and the press gate (5% power,
 a burnt effect of +0.026 whose interval straddles zero) are NOT in this look and
 keep their ledger looks unspent. No Holm correction applies to a family of one;
 the bar is the plain one-sided 0.05.
@@ -107,7 +118,9 @@ PROMOTE iff one-sided p < 0.05 AND the point estimate <= -0.10. Otherwise
 RETIRE.
 
 WHAT A PASS DOES AND DOES NOT PROVE - stated here, before the run, because the
-honest reading is not the flattering one. The binding condition is the FLOOR,
+honest reading is not the flattering one. SUPERSEDED 2026-11-07: the floor did
+NOT bind on the panel the run used - see THE RUN (3). As written before the run:
+The binding condition is the FLOOR,
 not the p-value: at the measured precision the one-sided significance boundary
 is about -0.091, so any estimate that clears -0.10 is already significant. A
 PASS therefore means "the held-out estimate crossed the actionable line with a
@@ -141,7 +154,9 @@ test; a 95% interval would make arm (iii) unreachable by construction):
       falsified";
 (iii) the interval lies entirely inside (-0.10, +0.10) -> evidence against
       actionable effects of this signal, as instrumented.
-DISCLOSED IN ADVANCE: arm (iii) needs a point estimate inside about
+DISCLOSED IN ADVANCE, and WITHDRAWN 2026-11-07 - the measured figure is 21.6%
++-0.7pp over an asymmetric range, see THE RUN (4). As disclosed before the run:
+arm (iii) needs a point estimate inside about
 (-0.009, +0.009) and so has roughly a 13% chance even if the true effect is
 exactly zero. In practice this three-way will almost always land on (i) or (ii).
 Saying that now is the difference between a limitation and an excuse.
@@ -222,6 +237,114 @@ estimate is episode-level on a different label; `sel_ar_20` is beta-adjusted
 against IWM with a raw 250-session beta and no intercept; the implied SE quoted
 above is a normal approximation back-derived from a bootstrap power curve, not a
 measured standard error.
+
+THE RUN - amendment of 2026-11-07, written AFTER the look was spent
+This is the only text in this docstring composed once a held-out
+feature-vs-outcome statistic existed. It adds dated prose and nothing else.
+No frozen constant moved, no comparison inside `decide` changed, and the
+estimand, the panel definition, DELTA, ALPHA, ALTERNATIVE, CI_LEVEL, N_BOOT,
+CI_BOOT, SEED, the MIN_ floors, RUN_NOT_BEFORE, DISCOVERY_CUTOFF, POPULATION,
+OUTCOME, STATUS_RESOLVED, the signal and covariate names, the regime column,
+the decision rule, the conclusion language and the tilt mapping are all exactly
+as frozen on 2026-09-23. Every sentence superseded below is LEFT AS WRITTEN and
+named here, which is this repository's append-only convention and the reason
+this block sits at the end rather than in place.
+
+(1) WHAT RAN. Once, 2026-11-07 11:08:38Z to 11:08:59Z, on host vmi2478967
+    against the VPS production stores, at repo HEAD 43dd277e with this file at
+    sha256 80881456..., pandas 3.0.6 / numpy 2.5.0 / scipy 1.18.0. Store
+    fingerprints over file names and sizes: labels 42d81fab..., briefs
+    6fdab967..., 172 parquets each. The panel was 394 ticker-episodes in 64
+    arrival clusters. Slope -0.0713; one-sided p 0.1782 against 0.05; 90%
+    interval [-0.1864, +0.0490]. VERDICT RETIRE, conclusion `inconclusive`,
+    live scorer tilt `unchanged`. Promotion failed on BOTH legs. Full record,
+    with the construction of every figure: companion memo §11. Ledger: §4 row
+    2026-11-07.
+
+(2) "WHY IT MAY NOT RUN YET" is DISCHARGED. It reads "IT IS NOT MET" of the
+    >= 80% power condition #1227 wrote for itself. That condition was verified
+    MET on 2026-11-06, outcome-blind, before the run: 385 episodes in 63
+    clusters, ATR power 91.5% +-1.4% at seed 20260922 and 92.2% +-1.3% at
+    seed 7, n_sims 400 (`a20_power_preflight_2026_09.md` §8). The heading and
+    its sentence stand as the dated measurement of a growing panel that they
+    were. See (3) for what the run then said about that same figure.
+
+(3) THE FLOOR DID NOT BIND, and this is the one place where this registration
+    reasoned wrongly about its own test. "WHAT A PASS DOES AND DOES NOT PROVE"
+    says "The binding condition is the FLOOR, not the p-value: at the measured
+    precision the one-sided significance boundary is about -0.091, so any
+    estimate that clears -0.10 is already significant." On the panel the run
+    used that is FALSE. Three independent readings of the run's own output put
+    the slope standard error at 0.0716 (interval half-width), 0.0731 (printed
+    CR2 t) and 0.0773 (printed bootstrap p), against the 0.0538 the simulator
+    measured one day earlier - a factor of 1.33 to 1.44. The one-sided 0.05
+    boundary was therefore about -0.118 to -0.127, STRICTER than the -0.10
+    floor, so the P-VALUE leg was binding and a slope of exactly -0.10 would
+    have earned a p of 0.081 to 0.098. Consequence for (2): at the realized
+    precision the unblocking gate reads 74.9% to 80.4% rather than 91.5%, so it
+    STRADDLES its own 80% bar retrospectively. The gate was met honestly and
+    outcome-blind on the only measurement that existed beforehand; this is a
+    retrospective limitation and not a protocol breach. Arithmetic: memo §11.5.
+
+(4) THE ARM (iii) DISCLOSURE IS WITHDRAWN. "CONCLUSION LANGUAGE" says the arm
+    "needs a point estimate inside about (-0.009, +0.009) and so has roughly a
+    13% chance even if the true effect is exactly zero", and adds that the
+    three-way "will almost always land on (i) or (ii)". Measured on 3200
+    simulated panels across 8 seeds: the arm fires 21.6% +-0.7pp under a true
+    zero, and its firing region is NOT a symmetric band - the measured range is
+    [-0.0275, +0.0254], about three times wider than the figure above implies
+    (memo §10.4). Unlike the OPERATING CHARACTERISTICS table two paragraphs
+    above it, that sentence carried no supersession marker until now. It did
+    not bite: the realized lower endpoint -0.1864 shut the arm by 0.0864.
+
+(5) "it must be re-derived before the look is spent" is DISCHARGED. The
+    OPERATING CHARACTERISTICS table was re-derived by measurement on 2026-11-07
+    and published as memo §10, before the run. §10's own figures are
+    superseded in turn by (3): they were measured on a SIMULATED sampling
+    distribution and on a panel one day staler than the run's (385 episodes in
+    63 clusters against 394 in 64).
+
+(6) THE LOOK COUNT. The opening paragraph says "Cluster 1 has spent 2 of its
+    lifetime looks (June sweep, July re-run, both DISCOVERY)". The ledger's
+    appended note of 2026-11-06 settled the pre-run count at THREE - June
+    sweep, July re-run, and the ML corner of 2026-07-14 - so cluster 1 reads
+    FOUR after this run.
+
+(7) FAMILY = 1 still holds; the reason given for it no longer does. That
+    section says the MA50 extension and the press gate "keep their ledger looks
+    unspent". This look charges nothing to clusters 2 and 9, but the same
+    2026-11-06 ledger note settled that cluster 9 stands AT rule 4's cap of two
+    re-looks and cluster 2 one PAST it. Neither holds a spare SWEEP look; each
+    holds one rule-3 confirmation.
+
+(8) WHAT MADE THE LOOK LEGAL AT THREE PRIOR LOOKS. Rule 4 caps a cluster at two
+    re-looks. The owner decided on 2026-11-06 that the cap governs SWEEP
+    re-looks and that the rule-3 confirmation sits OUTSIDE it. That reading is
+    what permitted this run, and it is recorded in the ledger §4 appended note
+    of that date rather than in this file.
+
+(9) THE VOLATILITY INTERACTION WAS ESTIMATED, which this registration and the
+    ledger both expected it would not be. Their reason - that
+    `market_state_vix` is frozen across the held-out dates - was itself stale:
+    the freeze ended 2026-09-24 (#1524). The sufficiency check passed at
+    exactly MIN_VOL_EPISODES = 4, the weakest possible pass, and printed
+    bull_quiet -0.0144 on 322 episodes against bull_volatile -0.3160 on 72.
+    Those two numbers are a DISCLOSURE and not a result. The first reason is
+    sufficient on its own: `atr_slope` re-standardises whatever frame it is
+    handed, so each arm reports its own units and the gap between them is not a
+    difference in effect. Five more, including that the arms pool across three
+    `market_state_config_version` cohorts and that the registered statistic was
+    a rank-correlation contrast rather than two subgroup slopes: memo §11.8.
+    Nothing may be tilted conditionally on -0.3160.
+
+(10) WHAT THIS AMENDMENT DOES NOT DO. It does not re-grade the verdict, which
+     `decide` computed and printed. It does not reopen cluster 1: rule 4
+     retired it for SELECTION and ORDERING and it is not re-tested. It does not
+     touch ATR in execution geometry, a different estimand on the ledger's §4.1
+     budget. And it does not settle branch (c) of the July kill line
+     (`selection_score_v2_ext_tilt_decision_2026_07_06.md` §5), which remains an
+     OPEN owner decision - its sign leg did not fire, and its second leg,
+     C_l4only against V1, was never re-run on fresh data at all.
 """
 
 from __future__ import annotations
@@ -258,6 +381,13 @@ SEED = 20260924
 #: Below either of these the run is VOID, not a verdict. Both sit comfortably
 #: under the outcome-blind panel measured on 2026-09-23 (419 episodes, 35
 #: clusters), so only a broken join or a mass maturity failure trips them.
+#:
+#: SUPERSEDED 2026-11-07 (the two lines above are left as written; the VALUES are
+#: unchanged and were never in question). 419 episodes in 35 clusters was
+#: withdrawn by this file's own 2026-09-24 amendment and replaced with 206 in 33
+#: - BELOW the 300 floor, which is precisely why RUN_NOT_BEFORE had to move. So
+#: MIN_EPISODES did bind, for about six weeks. The panel the run actually used
+#: was 394 episodes in 64 arrival clusters and cleared both floors with margin.
 MIN_EPISODES = 300
 MIN_CLUSTERS = 30
 
