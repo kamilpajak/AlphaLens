@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import dataclasses
 import datetime as dt
 import hashlib
 import io
@@ -1196,6 +1197,10 @@ _PINNED_FIRST_OUTCOMES = (
 
 #: ``TestTheSimulatorHonoursTheFamily``'s configuration at n_sims 40, wcb_boot 99,
 #: seed 101, measured on the unmodified module.
+#: Panels behind :data:`_PINNED_POWER`. One flipped panel is 1/40 of the
+#: frequency, which is the tolerance that test allows and the reason it has one.
+_PINNED_POWER_SIMS = 40
+
 _PINNED_POWER = {"atr": 0.15, "ma50": 0.075, "press": 0.025}
 
 
@@ -1240,6 +1245,24 @@ class TestTheDefaultDgpIsPinnedToALiteral(unittest.TestCase):
                 self.assertAlmostEqual(float(y[i]), expected, places=12)
 
     def test_the_default_power_figure_at_a_fixed_seed_is_the_stored_one(self):
+        """Within ONE panel, because a power figure is not portable to the digit.
+
+        A power figure is a count of Holm rejections over ``n_sims`` panels, so
+        it passes through a p-value compared against a bar. A one-ULP difference
+        in the BLAS behind ``pinv``/``lstsq`` can flip a single panel across that
+        bar and move the frequency by exactly ``1 / n_sims``, with nothing wrong.
+
+        Measured 2026-11-07 on this exact case: macOS arm64 reads
+        ``atr`` 0.150 and Linux CI reads 0.175, a difference of 0.025 = 1/40,
+        with ``ma50`` and ``press`` identical on both. The first draft of this
+        test used ``assertEqual`` and went red on CI for that reason alone.
+
+        The EXACT, portable pin on the default path is the sha256 of the panel
+        above: pure arithmetic on the draws, no threshold, so it catches any
+        movement of the random stream to the byte. This test adds the weaker but
+        still useful check that the frequency has not moved by more than one
+        panel, which a real change to the noise model would exceed by far.
+        """
         rng = np.random.default_rng(3)
         power = pre.simulate_power(
             burnt_signals=rng.normal(size=(200, 3)),
@@ -1247,11 +1270,19 @@ class TestTheDefaultDgpIsPinnedToALiteral(unittest.TestCase):
             effects={"atr": -0.05, "ma50": -0.02, "press": 0.0},
             sd_y=0.165,
             icc=0.06,
-            n_sims=40,
+            n_sims=_PINNED_POWER_SIMS,
             wcb_boot=99,
             seed=101,
         )
-        self.assertEqual(power, _PINNED_POWER)
+        self.assertEqual(set(power), set(_PINNED_POWER))
+        one_panel = 1.0 / _PINNED_POWER_SIMS
+        for name, expected in _PINNED_POWER.items():
+            with self.subTest(hypothesis=name):
+                self.assertLessEqual(
+                    abs(power[name] - expected),
+                    one_panel,
+                    f"{name} moved by more than one panel: {power[name]} against {expected}",
+                )
 
     def test_the_pin_can_refute(self):
         # Without this the three pins above would also pass against a mechanism
@@ -1516,10 +1547,16 @@ class TestThePowerBracket(unittest.TestCase):
             arms={arm: {"atr": p} for arm, p in zip(pre.BRACKET_ARMS, powers, strict=True)},
             alignments={
                 "homoskedastic": None,
+                # The CALIBRATED pair, matching `power_bracket`'s own default.
+                # This helper stands in for a real bracket, so a helper left on
+                # the measured readings would have every test that uses it
+                # exercising an arm configuration the library never produces.
                 pre.ALIGNMENT_SESSION: pre.NoiseAlignment(
-                    pre.MEASURED_GAM_SESSION, pre.ALIGNMENT_SESSION
+                    pre.GAM_AT_REALIZED_SE_SESSION, pre.ALIGNMENT_SESSION
                 ),
-                pre.ALIGNMENT_ROW: pre.NoiseAlignment(pre.MEASURED_GAM_ROW, pre.ALIGNMENT_ROW),
+                pre.ALIGNMENT_ROW: pre.NoiseAlignment(
+                    pre.GAM_AT_REALIZED_SE_ROW, pre.ALIGNMENT_ROW
+                ),
             },
             target="atr",
             shrinkage=pre.GATE_SHRINKAGE,
@@ -1573,6 +1610,52 @@ class TestThePowerBracket(unittest.TestCase):
         self.assertEqual(
             (session, row), (pre.GAM_AT_REALIZED_SE_SESSION, pre.GAM_AT_REALIZED_SE_ROW)
         )
+
+    def test_a_mapping_with_an_unknown_level_is_refused(self):
+        # Without this, a typo silently falls back to the calibrated default for
+        # BOTH arms and the caller gets a bracket they did not ask for. Caught by
+        # mutation: removing the guard left the whole suite green.
+        with self.assertRaises(ValueError) as caught:
+            pre.power_bracket(**self.kwargs, gam={"sesion": 0.9})
+        self.assertIn("sesion", str(caught.exception))
+
+    def test_a_partial_mapping_fills_the_other_arm_from_the_calibrated_default(self):
+        # The fallback is a decision worth pinning: nothing else stops it
+        # becoming zero, or the measured reading, by accident.
+        bracket = pre.power_bracket(**self.kwargs, gam={pre.ALIGNMENT_SESSION: 0.9})
+        self.assertEqual(bracket.alignments[pre.ALIGNMENT_SESSION].gam, 0.9)
+        self.assertEqual(bracket.alignments[pre.ALIGNMENT_ROW].gam, pre.GAM_AT_REALIZED_SE_ROW)
+
+    def test_an_empty_mapping_is_the_calibrated_pair(self):
+        bracket = pre.power_bracket(**self.kwargs, gam={})
+        self.assertEqual(
+            (
+                bracket.alignments[pre.ALIGNMENT_SESSION].gam,
+                bracket.alignments[pre.ALIGNMENT_ROW].gam,
+            ),
+            (pre.GAM_AT_REALIZED_SE_SESSION, pre.GAM_AT_REALIZED_SE_ROW),
+        )
+
+    def test_a_non_numeric_mapping_value_names_the_level(self):
+        with self.assertRaises(ValueError) as caught:
+            pre.power_bracket(**self.kwargs, gam={pre.ALIGNMENT_ROW: "big"})
+        self.assertIn(pre.ALIGNMENT_ROW, str(caught.exception))
+
+    def test_a_default_magnitude_is_refused_for_another_feature(self):
+        # The calibrated pair is a fact about the ATR slope. Applying it to
+        # another feature would print an ATR calibration sentence beside that
+        # feature's span, which is the one way this module can still publish a
+        # number with a false claim next to it.
+        with self.assertRaises(ValueError) as caught:
+            pre.power_bracket(**self.kwargs, feature="ma50", target="ma50")
+        message = str(caught.exception)
+        self.assertIn("ma50", message)
+        self.assertIn("measure_noise_alignment", message)
+
+    def test_another_feature_works_once_its_own_magnitude_is_given(self):
+        bracket = pre.power_bracket(**self.kwargs, feature="ma50", target="ma50", gam=0.25)
+        self.assertEqual(bracket.alignments[pre.ALIGNMENT_SESSION].feature, "ma50")
+        self.assertEqual(bracket.alignments[pre.ALIGNMENT_SESSION].gam, 0.25)
 
     def test_a_per_level_override_can_reach_the_measured_pair(self):
         # One scalar `gam` cannot express two levels on two scales, so the
@@ -1693,6 +1776,47 @@ class TestTheBracketRefusesToCollapse(unittest.TestCase):
         printed = buffer.getvalue()
         self.assertIn("NO BRACKET VERDICT", printed)
         self.assertNotIn("BRACKET VERDICT: every corner", printed)
+
+    def test_the_calibration_clause_describes_the_arms_that_actually_ran(self):
+        # An earlier version printed the calibrated sentence unconditionally, so
+        # arms run at any other magnitude sat beside a sentence that read as a
+        # description of them. That is the same inconsistency the DEFAULT was
+        # already fixed for once, reappearing on the documented --alignment-gam
+        # path. Caught by mutation: forcing the clause on left the suite green.
+        at_default = TestThePowerBracket._hand_built((0.95, 0.90, 0.88), 4000)
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            pre.print_power_bracket(at_default)
+        printed = buffer.getvalue()
+        self.assertIn("the arms run at the CALIBRATED pair", printed)
+        self.assertNotIn("do NOT run at the calibrated pair", printed)
+
+        elsewhere = dataclasses.replace(
+            at_default,
+            alignments={
+                "homoskedastic": None,
+                pre.ALIGNMENT_SESSION: pre.NoiseAlignment(0.1, pre.ALIGNMENT_SESSION),
+                pre.ALIGNMENT_ROW: pre.NoiseAlignment(0.1, pre.ALIGNMENT_ROW),
+            },
+        )
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            pre.print_power_bracket(elsewhere)
+        printed = buffer.getvalue()
+        self.assertIn("do NOT run at the calibrated pair", printed)
+        self.assertNotIn("the arms run at the CALIBRATED pair", printed)
+
+    def test_the_printed_span_names_what_it_covers_and_what_it_does_not(self):
+        # Two LEVELS at one magnitude each, not the range of magnitudes the data
+        # admits, and the projections are not bracketed at all.
+        bracket = TestThePowerBracket._hand_built((0.95, 0.90, 0.88), 4000)
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            pre.print_power_bracket(bracket)
+        printed = buffer.getvalue()
+        self.assertIn("two LEVELS at one magnitude each", printed)
+        self.assertIn("gate DATE above are NOT bracketed", printed)
+        self.assertIn(f"{pre.REALIZED_SLOPE_SE_CR2_RELATIVE_SD:.1%}", printed)
 
     def test_a_resolved_span_does_return_a_number(self):
         # The positive control: otherwise the refusal could be unconditional.
@@ -2049,6 +2173,49 @@ class TestTheAlignmentFlags(unittest.TestCase):
         self.assertEqual(code, 0)
         return buffer.getvalue()
 
+    def test_a_zero_magnitude_is_refused_at_parse_time(self):
+        # The dataclass half of this guard was pinned; the CLI half was not.
+        # Caught by mutation: relaxing the CLI check from <= 0 to < 0 left the
+        # whole suite green, and the failure then surfaced as a raw ValueError
+        # traceback instead of a clean parser error.
+        buffer = io.StringIO()
+        with contextlib.redirect_stderr(buffer), self.assertRaises(SystemExit):
+            pre.main(
+                [
+                    "--labels-dir",
+                    str(self.root / "nowhere"),
+                    "--briefs-dir",
+                    str(self.root / "nowhere"),
+                    "--alignment-bracket",
+                    "--alignment-gam",
+                    "0",
+                ]
+            )
+        message = buffer.getvalue()
+        self.assertIn("strictly positive", message)
+        # The way out, which no earlier message named.
+        self.assertIn("Omit --alignment-gam", message)
+
+    def test_a_non_finite_magnitude_is_refused_without_the_zero_explanation(self):
+        # The zero explanation is wrong for nan, and one combined branch printed
+        # it for nan and for negatives too.
+        buffer = io.StringIO()
+        with contextlib.redirect_stderr(buffer), self.assertRaises(SystemExit):
+            pre.main(
+                [
+                    "--labels-dir",
+                    str(self.root / "nowhere"),
+                    "--briefs-dir",
+                    str(self.root / "nowhere"),
+                    "--alignment-bracket",
+                    "--alignment-gam",
+                    "nan",
+                ]
+            )
+        message = buffer.getvalue()
+        self.assertIn("must be finite", message)
+        self.assertNotIn("homoskedastic corner", message)
+
     def test_a_magnitude_without_a_bracket_is_refused_before_the_read(self):
         # The likeliest accident is someone wanting "the aligned number". It is
         # caught at parse time, with the reason - and the labels dir below does
@@ -2211,7 +2378,20 @@ class TestTheAlignmentFlags(unittest.TestCase):
             self.assertEqual(disclosure["memo"], pre.ALIGNMENT_MEMO)
             self.assertEqual(disclosure["optimism_ratio"], pre.SIMULATOR_OPTIMISM_RATIO)
             self.assertEqual(disclosure["realized_slope_se_cr2"], pre.REALIZED_SLOPE_SE_CR2)
-            # The two things a reader of the artifact alone would otherwise miss.
+            # The calibration target's OWN noise. Without these a reader of the
+            # artifact would take 0.0731 for a constant, and the magnitudes that
+            # reach it inherit its spread.
+            self.assertEqual(
+                disclosure["realized_slope_se_cr2_relative_sd"],
+                pre.REALIZED_SLOPE_SE_CR2_RELATIVE_SD,
+            )
+            self.assertEqual(
+                disclosure["realized_slope_se_cr2_percentile"],
+                pre.REALIZED_SLOPE_SE_CR2_PERCENTILE,
+            )
+            self.assertIn("one panel", disclosure["calibration_target_is_one_panel"])
+            self.assertIn(pre.ALIGNMENT_FEATURE, disclosure["calibrated_pair_is_feature_specific"])
+            # The things a reader of the artifact alone would otherwise miss.
             self.assertIn("not identified", disclosure["level_not_identified"])
             self.assertIn("gate", disclosure["projections_are_not_bracketed"])
 

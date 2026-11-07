@@ -402,6 +402,20 @@ SIMULATED_SLOPE_SE_PUBLISHED = 0.0538
 REALIZED_SLOPE_SE_CR2 = 0.0731
 SIMULATOR_OPTIMISM_RATIO = 1.36
 
+#: The calibration target's OWN noise, which the magnitudes below inherit. The
+#: realized 0.0731 is ONE panel's CR2 estimate, and a one-panel CR2 estimate over
+#: 64 clusters has this relative spread and sits at about this percentile of the
+#: simulated distribution (memo sections 8 and 7.4). Centring the simulator on an
+#: upper-tail draw is the conservative direction for a BOUND, which is why the
+#: magnitudes are not changed — but a quoted span inherits this uncertainty and
+#: must say so.
+REALIZED_SLOPE_SE_CR2_RELATIVE_SD = 0.133
+REALIZED_SLOPE_SE_CR2_PERCENTILE = 99
+
+#: The sceptical end of the session reading, after correcting the estimator's own
+#: measured upward bias (memo section 7.4.1: 71% of the gap rather than 88%).
+MEASURED_GAM_SESSION_BIAS_CORRECTED = 0.303
+
 #: What the section 7.3 estimator reads back when a known truth is simulated, and
 #: its size under homoskedasticity against a nominal 5% (section 7.5, 1500 panels
 #: per row). The session arm OVER-READS a session truth and still reads clearly
@@ -639,9 +653,14 @@ def simulate_power(
 
 
 class AlignmentLevelNotIdentifiedError(RuntimeError):
-    """The identified set straddles the gate, so no single power figure is
-    defensible: the session and row readings reach the realized precision at
-    magnitudes that differ by about a factor of two."""
+    """The span straddles the gate, so no single power figure is defensible.
+
+    The session and row levels reach the realized precision at magnitudes that
+    differ by about a factor of two, and the span covers those two LEVELS at one
+    magnitude each. It is deliberately not called "the identified set": the range
+    of MAGNITUDES the data admits is wider still, the session reading's own 95%
+    interval running to 0.558, which lies outside every corner the bracket runs.
+    """
 
 
 #: The identified set, ordered OPTIMISTIC FIRST. The homoskedastic corner is the
@@ -706,6 +725,11 @@ class PowerBracket:
 
         The one scalar accessor on this type, so reaching for a number can never
         hand back the homoskedastic corner that an ordered container would.
+
+        **Returning a number does not mean the gate is cleared.** The span
+        resolves on either side of the bar, so this also returns when every
+        corner sits BELOW it. The caller compares the value against ``bar``
+        itself; :func:`print_power_bracket` prints which side it was.
         """
         if self.is_resolved(bar=bar):
             return min(self.arms[arm][self.target] for arm in BRACKET_ARMS)
@@ -721,8 +745,8 @@ class PowerBracket:
         # 1.36x optimistic. Returning any single arm here would print in the
         # same format as a measured power figure.
         raise AlignmentLevelNotIdentifiedError(
-            f"{self.target} power at the gate spans {low:.1%} to {high:.1%} across the "
-            f"identified set (homoskedastic {homo:.1%}, session gam "
+            f"{self.target} power at the gate spans {low:.1%} to {high:.1%} across two LEVELS "
+            f"at one magnitude each (homoskedastic {homo:.1%}, session gam "
             f"{gam_session.gam if gam_session is not None else float('nan'):.3f} -> "
             f"{session:.1%}, row gam "
             f"{gam_row.gam if gam_row is not None else float('nan'):.3f} -> {row:.1%}, "
@@ -790,6 +814,20 @@ def power_bracket(
         ALIGNMENT_SESSION: GAM_AT_REALIZED_SE_SESSION,
         ALIGNMENT_ROW: GAM_AT_REALIZED_SE_ROW,
     }
+    if gam is None and feature != ALIGNMENT_FEATURE:
+        # The calibrated pair is a fact about ATR: 0.0731 is the realized CR2
+        # standard error of the ATR SLOPE on `sel_ar_20`. Applying it to another
+        # feature would print an ATR calibration sentence beside that feature's
+        # span. The memo's own route 1 requires each feature's own `gam` on burnt
+        # data, so this refuses instead of guessing.
+        raise ValueError(
+            f"no default magnitude for feature {feature!r}: the calibrated pair "
+            f"({GAM_AT_REALIZED_SE_SESSION:.3f} on sessions, {GAM_AT_REALIZED_SE_ROW:.3f} on "
+            f"rows) is calibrated to the realized CR2 standard error of the "
+            f"{ALIGNMENT_FEATURE!r} slope and is not transferable. Measure this feature's own "
+            f"magnitude with measure_noise_alignment and pass it as gam "
+            f"({ALIGNMENT_MEMO} section 7.5)."
+        )
     if gam is None:
         chosen = defaults
     elif isinstance(gam, Mapping):
@@ -799,7 +837,15 @@ def power_bracket(
                 f"gam mapping carries unknown levels {unknown}; the aligned corners are "
                 f"{list(ALIGNMENT_LEVELS)}"
             )
-        chosen = {level: gam.get(level, defaults[level]) for level in ALIGNMENT_LEVELS}
+        chosen = {}
+        for level in ALIGNMENT_LEVELS:
+            value = gam.get(level, defaults[level])
+            try:
+                chosen[level] = float(value)
+            except (TypeError, ValueError) as exc:
+                # A bare TypeError from `math.isfinite` names neither the level
+                # nor the key the caller got wrong.
+                raise ValueError(f"gam[{level!r}] must be a number, got {value!r}") from exc
     else:
         chosen = dict.fromkeys(ALIGNMENT_LEVELS, gam)
     alignments: dict[str, NoiseAlignment | None] = {
@@ -862,14 +908,52 @@ def print_power_bracket(
             f"[95% {low:.1%}, {high:.1%}]"
         )
     low, high = bracket.span()
+    # The span covers two LEVELS at one magnitude each. It is NOT the range of
+    # magnitudes the data admits: the session reading's own 95% interval runs to
+    # 0.558, which lies outside every corner here. Calling it "the identified
+    # set" promised more than it covers.
     print(
-        f"    span {low:.1%} to {high:.1%}; the LEVEL is not identified "
-        f"({REALIZED_SLOPE_SE_CR2:.4f} is reached at gam {GAM_AT_REALIZED_SE_SESSION:.3f} on "
-        f"sessions and {GAM_AT_REALIZED_SE_ROW:.3f} on rows)"
+        f"    span {low:.1%} to {high:.1%} over two LEVELS at one magnitude each; "
+        f"the level is not identified"
+    )
+    session_gam = bracket.alignments[ALIGNMENT_SESSION]
+    row_gam = bracket.alignments[ALIGNMENT_ROW]
+    calibrated = (
+        session_gam is not None
+        and row_gam is not None
+        and session_gam.gam == GAM_AT_REALIZED_SE_SESSION
+        and row_gam.gam == GAM_AT_REALIZED_SE_ROW
+    )
+    if calibrated:
+        print(
+            f"      the arms run at the CALIBRATED pair: {REALIZED_SLOPE_SE_CR2:.4f} is reached "
+            f"at gam {GAM_AT_REALIZED_SE_SESSION:.3f} on sessions and "
+            f"{GAM_AT_REALIZED_SE_ROW:.3f} on rows"
+        )
+    else:
+        # An earlier version printed the calibrated sentence unconditionally, so
+        # arms run at any other magnitude sat beside a sentence that read as a
+        # description of them. That is the same inconsistency this printer was
+        # fixed for once already.
+        print(
+            f"      the arms do NOT run at the calibrated pair "
+            f"({GAM_AT_REALIZED_SE_SESSION:.3f} / {GAM_AT_REALIZED_SE_ROW:.3f}, which is what "
+            f"reaches {REALIZED_SLOPE_SE_CR2:.4f}); this span is not calibrated to the "
+            f"realized precision"
+        )
+    print(
+        f"      the target itself is one panel: {REALIZED_SLOPE_SE_CR2:.4f} carries a "
+        f"{REALIZED_SLOPE_SE_CR2_RELATIVE_SD:.1%} relative sd and sits near the "
+        f"{REALIZED_SLOPE_SE_CR2_PERCENTILE}th percentile of the simulated distribution; "
+        f"the sceptical session magnitude is {MEASURED_GAM_SESSION_BIAS_CORRECTED:.3f}"
+    )
+    print(
+        "      the cluster-count search and the gate DATE above are NOT bracketed: both are "
+        "computed on the homoskedastic corner only"
     )
     if not bracket.is_resolved(bar=bar):
         print(
-            f"    NO BRACKET VERDICT: the identified set crosses the {bar:.0%} bar; quote the "
+            f"    NO BRACKET VERDICT: the span crosses the {bar:.0%} bar; quote the "
             f"span, not a corner. Re-run with more than --n-sims {bracket.n_sims} if the "
             f"corners overlap."
         )
@@ -1034,6 +1118,19 @@ def precision_disclosure() -> dict[str, Any]:
         "memo": ALIGNMENT_MEMO,
         "simulated_slope_se_published": SIMULATED_SLOPE_SE_PUBLISHED,
         "realized_slope_se_cr2": REALIZED_SLOPE_SE_CR2,
+        "realized_slope_se_cr2_relative_sd": REALIZED_SLOPE_SE_CR2_RELATIVE_SD,
+        "realized_slope_se_cr2_percentile": REALIZED_SLOPE_SE_CR2_PERCENTILE,
+        "calibration_target_is_one_panel": (
+            f"the magnitudes that reach it inherit its noise: one panel's CR2 estimate over 64 "
+            f"clusters carries a relative sd of {REALIZED_SLOPE_SE_CR2_RELATIVE_SD:.1%} and this "
+            f"draw sits near the {REALIZED_SLOPE_SE_CR2_PERCENTILE}th percentile; the sceptical "
+            f"session magnitude after the estimator's bias is "
+            f"{MEASURED_GAM_SESSION_BIAS_CORRECTED:.3f}"
+        ),
+        "calibrated_pair_is_feature_specific": (
+            f"it is calibrated to the {ALIGNMENT_FEATURE!r} slope and is not transferable; "
+            f"power_bracket refuses a default magnitude for another feature"
+        ),
         "optimism_ratio": SIMULATOR_OPTIMISM_RATIO,
         "homoskedastic_default": (
             "the default DGP gives every observation ONE noise scale, which is the "
@@ -1554,13 +1651,29 @@ def main(argv: list[str] | None = None) -> int:
                 "without --alignment-bracket; a single aligned power figure is not identified "
                 f"({ALIGNMENT_MEMO} section 7.5)"
             )
-        if not math.isfinite(args.alignment_gam) or args.alignment_gam <= 0:
+        way_out = (
+            f"Omit --alignment-gam to run each level at the magnitude that reaches the "
+            f"realized precision ({GAM_AT_REALIZED_SE_SESSION:.3f} on sessions, "
+            f"{GAM_AT_REALIZED_SE_ROW:.3f} on rows)."
+        )
+        # Three branches, because one message that explained the ZERO case was
+        # printed for a negative magnitude and for nan as well, describing a
+        # situation the user was not in.
+        if not math.isfinite(args.alignment_gam):
+            parser.error(f"--alignment-gam must be finite, got {args.alignment_gam}. {way_out}")
+        if args.alignment_gam == 0:
             parser.error(
-                f"--alignment-gam must be a finite, strictly positive magnitude, got "
-                f"{args.alignment_gam}. A zero magnitude is the homoskedastic corner, not a "
-                f"second arm: it makes both aligned corners bit-identical to it, the span "
-                f"zero-wide, and the one scalar accessor hand back the corner measured to be "
-                f"{SIMULATOR_OPTIMISM_RATIO}x optimistic."
+                f"--alignment-gam must be strictly positive, got {args.alignment_gam}. A zero "
+                f"magnitude is the homoskedastic corner, not a second arm: it makes both "
+                f"aligned corners bit-identical to it, the span zero-wide, and the one scalar "
+                f"accessor hand back the corner measured to be "
+                f"{SIMULATOR_OPTIMISM_RATIO}x optimistic. {way_out}"
+            )
+        if args.alignment_gam < 0:
+            parser.error(
+                f"--alignment-gam must be positive, got {args.alignment_gam}. A negative "
+                f"magnitude says the QUIET sessions carry the loud noise, which nothing "
+                f"measured supports. {way_out}"
             )
     if args.alignment_feature != ALIGNMENT_FEATURE and not (
         args.alignment_bracket or args.measure_alignment
@@ -1663,9 +1776,11 @@ def main(argv: list[str] | None = None) -> int:
         # read as a third population (`TestThePopulationFlag` pins that contract).
         # The cost is one duplicated block per population; the benefit is that
         # every recorded figure carries its condition locally.
-        disclosure = precision_disclosure()
         for record in out.values():
-            record[PRECISION_DISCLOSURE_KEY] = disclosure
+            # A fresh dict per population rather than one shared object: nothing
+            # mutates it today, but a shared mutable value inside a serialised
+            # artifact is a defect waiting for its first consumer.
+            record[PRECISION_DISCLOSURE_KEY] = precision_disclosure()
 
         # Dataclasses are written as STRUCTURED data, not as a stringified repr:
         # `asdict` recurses into the per-arm NoiseAlignment values, so a recorded
