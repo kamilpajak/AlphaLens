@@ -72,6 +72,51 @@ what this memo will be able to quote:
   correlation statements under alignment are now MEASURED DIRECTIONS, and the exact form that
   survives is the session level leaving the within-cluster correlation at the `icc`.
 
+**CORRECTION, 2026-11-09 — the defect count above, and what the pairing claim rests on.**
+The sentence above reads "Nine defects in the three-arm size experiment were found by mutation and
+fixed". That is the FIRST repair round's count. Three rounds ran in total, on 9, 11 and 18 findings;
+5 of the first 9 and 2 of the next 11 came back only half fixed and were re-opened, and two of the
+defects were introduced by an earlier repair round. The count is superseded, not the claim it was
+attached to.
+
+The pairing claim in this section — "paired draw for draw on one seed", which is what makes a
+corner-to-corner difference the MECHANISM rather than three independent Monte Carlo draws — was
+checked more narrowly than it was stated, and is now checked along both axes it was missing.
+Measured 2026-11-09, each mutation applied alone to `rejection_rate` against the `test_a20*.py`
+glob at 508 tests:
+
+| mutation | before | after |
+|---|---|---|
+| de-pair every method except `arrival` | 508 OK | RED, `TestThePairingHoldsForEveryPublishedMethod` |
+| de-pair only when `n_sims` exceeds the fixture's 5 | 508 OK | RED, `TestThePairingDoesNotDependOnHowManyPanelsRun` |
+| per-arm `clusters`, passed positionally | 508 OK | RED, the inference-invariant case |
+| per-arm `coef_idx`, passed positionally | RED by an `IndexError` elsewhere | RED, named as a pairing break |
+
+The first of those flips a published decision: at `block5` the row corner's size moves from 0.075
+to 0.085, from holding the 7.5% bar to missing it, which deletes that corner's power figure and
+withholds the span. Three of the four published methods were unpinned for pairing, because the
+pairing fixture's calendar is six sessions, where `block10` and `block20` leave ONE cluster and
+`rejection_rate` refuses them — so the method axis needed its own 40-session fixture rather than
+an extra case on the old one.
+
+The panel axis cannot be matched in a unit suite: every published figure comes from 2000 panels.
+What is checked instead is the invariant that makes a five-panel fixture representative —
+`rejection_rate` seeds its generator ONCE and then loops, so panels 1..K are the same draw whether
+`n_sims` is K or 2K. A break conditioned on `n_sims`, or on a panel index below 2K, diverges that
+prefix. A de-pairing inert on every fixture and active on every real run is the worst shape there
+is, because the suite reports it as absent.
+
+One further correction in the same area, to a cross-reference rather than to a number.
+`TestTheMarginalSpreadSurvivesAlignment` was named as what pins the noise SCALE and did not: an
+exact no-op of `a20_power._alignment_scale` left both its cases green, because a scale of ones also
+holds the spread at `sd_y` and its normaliser case compared the function's output against an
+`np.exp` the test recomputed itself. Its fixture was also degenerate at the session level — four
+identical clusters, so that branch returns exactly 1.0 in every row by arithmetic, sd 0.0000,
+whatever it computes. The no-op direction is now a case of its own, on distinct cluster slices, at
+a threshold of half the MEASURED spread (0.4137 at the session level, 0.3803 at the row level).
+
+Neither correction edits the size claim above.
+
 Neither item edits the size claim above. The claim still waits for its real-store run.
 
 **Amends:** [`a20_power_preflight_2026_09.md`](a20_power_preflight_2026_09.md) §2.2 (the

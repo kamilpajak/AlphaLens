@@ -33,6 +33,7 @@ feature-aligned noise the module now simulates:
 from __future__ import annotations
 
 import contextlib
+import inspect
 import io
 import re
 import unittest
@@ -1657,12 +1658,56 @@ class TestTheAlignmentFixtureIsNotDegenerate(unittest.TestCase):
                 self.assertFalse(np.array_equal(off, on))
 
 
+#: Floor on the spread of the scale itself, as a fraction of the spread
+#: MEASURED on the fixture below. Measured 2026-11-09 at ``_TEST_GAM`` on
+#: distinct cluster slices: sd 0.4137 at the session level and 0.3803 at the row
+#: level. A fraction rather than a literal because the margin has to be
+#: proportional to the effect; against an exact no-op the scale has sd 0.0, so
+#: the margin is the whole effect.
+_SCALE_SPREAD_FLOOR = 0.5
+_MEASURED_SCALE_SPREAD = {"session": 0.4137, "row": 0.3803}
+
+
 class TestTheMarginalSpreadSurvivesAlignment(unittest.TestCase):
-    """The normaliser holds ``sd_y``, and it is PANEL-WIDE for a reason."""
+    """The normaliser holds ``sd_y``, and it is PANEL-WIDE for a reason.
+
+    This class is named by the pairing classes as what pins the SCALE, and until
+    2026-11-09 it did not. Replacing ``a20_power._alignment_scale``'s return with
+    ``np.ones`` - an exact no-op of the whole mechanism - left both of its cases
+    green: the spread case passes trivially, because a scale of ones also leaves
+    the spread at ``sd_y``, and the normaliser case compares the function's
+    output against ``np.exp(...)`` that the test recomputes ITSELF, so both sides
+    moved together. The glob caught that mutation elsewhere, in
+    ``TestTheAlignmentFixtureIsNotDegenerate``, so the cross-reference was half
+    true.
+
+    Two different no-ops have to be refused, and the class covered one:
+
+    | no-op                                  | refused by                   |
+    |----------------------------------------|------------------------------|
+    | the raw exponential, no normaliser     | ``test_the_normaliser_is_what_holds_it`` |
+    | the identity, scale of ones everywhere | ``test_the_scale_is_not_flat`` |
+
+    A third trap is in the fixture rather than the mechanism. The normaliser
+    case built its clusters as ``[column[:3]] * 4`` - the same three rows four
+    times - where every cluster MEAN is equal, so the session branch returns
+    exactly 1.0 in every row (sd 0.0000) whatever it computes. That fixture could
+    never have checked the session level at all, so the new case uses distinct
+    slices and covers both levels.
+    """
 
     _COLUMN = _z(np.random.default_rng(23).normal(0.0, 1.0, 300)).reshape(-1, 1)
     _SIZES = [3] * 4
     _SD_Y = 2.0
+
+    def _distinct_cluster_slices(self):
+        """One slice per cluster, so the cluster MEANS differ.
+
+        ``[column[:3]] * 4`` has four identical clusters, which makes the
+        session-level scale the identity by arithmetic rather than by mechanism.
+        """
+        bounds = np.cumsum([0, *self._SIZES])
+        return [self._COLUMN[bounds[j] : bounds[j + 1]] for j in range(len(self._SIZES))]
 
     def _pooled_spread(self, *, alignment, n_panels=1500):
         """Spread of EVERY row of many panels, pooled without per-panel demeaning.
@@ -1709,6 +1754,33 @@ class TestTheMarginalSpreadSurvivesAlignment(unittest.TestCase):
         raw = np.concatenate([np.exp(_TEST_GAM * x[:, 0]) for x in xs])
         self.assertAlmostEqual(float(np.mean(np.concatenate(scaled) ** 2)), 1.0, places=9)
         self.assertGreater(float(np.mean(raw**2)), 1.1)
+
+    def test_the_scale_is_not_flat(self):
+        # The OTHER no-op, the one this class used to miss: a scale of ones
+        # everywhere holds the spread at `sd_y` and has mean square exactly 1.0,
+        # so both of the cases above pass on it. What a no-op cannot do is VARY.
+        # On distinct cluster slices, because `[column[:3]] * 4` makes the
+        # session branch the identity by arithmetic.
+        xs = self._distinct_cluster_slices()
+        for level in (ov.ALIGNMENT_SESSION, ov.ALIGNMENT_ROW):
+            scaled = np.concatenate(
+                a20_power._alignment_scale(
+                    xs, alignment=ov.NoiseAlignment(_TEST_GAM, level), names=["atr"]
+                )
+            )
+            with self.subTest(level=level):
+                self.assertGreater(
+                    float(np.std(scaled)),
+                    _SCALE_SPREAD_FLOOR * _MEASURED_SCALE_SPREAD[level],
+                )
+
+    def test_that_fixture_really_has_distinct_clusters(self):
+        # The positive control on the fixture the case above needs. With equal
+        # cluster means the session branch returns 1.0 in every row whatever it
+        # computes, which is how the original fixture hid the session level.
+        means = [float(np.mean(x[:, 0])) for x in self._distinct_cluster_slices()]
+        self.assertEqual(len(set(means)), len(self._SIZES))
+        self.assertGreater(float(np.std(means)), 0.1)
 
 
 class TestTheLoadingColumnFollowsTheFeatureName(unittest.TestCase):
@@ -2053,6 +2125,8 @@ class TestEachCornerIsSimulatedAtItsOwnCorner(unittest.TestCase):
 #: n_sims = 2 a case that skipped panel 1 would still only have one panel left.
 #: Raised from three when the class grew to cover the power pass as well, so a
 #: break conditioned on a panel index is visible over a wider range of indices.
+#: What covers a break conditioned on an n_sims LARGER than this is
+#: :class:`TestThePairingDoesNotDependOnHowManyPanelsRun`, not this number.
 _PAIRING_SIMS = 5
 
 #: The gate magnitudes the pairing fixture's POWER pass runs at. Named here
@@ -2061,6 +2135,127 @@ _PAIRING_SIMS = 5
 #: ``y`` until the signal is subtracted.
 _PAIRING_GATE_EFFECTS = {"atr": 0.4, "ma50": 0.0}
 _PAIRING_NULL_EFFECTS = {"atr": 0.0, "ma50": 0.0}
+
+#: Everything the bootstrap is asked that must be IDENTICAL across the three
+#: corners. ``y`` is deliberately absent: the aligned arms' outcome differs by
+#: the scale, which is the mechanism under test, and
+#: ``test_the_scale_is_not_itself_the_identity`` asserts that it does differ.
+#: Everything else names the QUESTION rather than the data, so a per-arm value
+#: there makes the three rejection rates answers to different questions.
+_INFERENCE_INVARIANTS = ("X", "clusters", "coef_idx", "n_boot", "seed", "alternative")
+
+
+def _same_argument(a, b) -> bool:
+    """Equality for one recorded argument, array-aware.
+
+    The bootstrap is handed arrays and scalars in the same call, and ``==`` on
+    two arrays is an array, which is truthy for a one-row panel and raises for
+    any other. So the comparison dispatches on type rather than trusting ``==``.
+    """
+    if isinstance(a, np.ndarray) or isinstance(b, np.ndarray):
+        return bool(np.array_equal(a, b))
+    return bool(a == b)
+
+
+class _PairedRun:
+    """What the two spies saw during one ``size_under_alignment`` call.
+
+    ``panels`` and ``boot_calls`` are keyed ``(pass_name, arm)`` with ``arm``
+    ``None`` for the homoskedastic corner, and hold their entries in the order
+    the run produced them.
+    """
+
+    def __init__(self, panels, boot_calls, pass_effects, cell):
+        self.panels = panels
+        self.boot_calls = boot_calls
+        self.pass_effects = pass_effects
+        self.cell = cell
+
+
+def _paired_run(**args) -> _PairedRun:
+    """Run one cell at all three corners, watching the two seams that can de-pair.
+
+    The seams are :func:`simulate_overlapping_panel`, for the panels, and
+    ``wild_cluster_bootstrap_p``, for the inference stream. Both are recorded as
+    the run actually called them, because every earlier version of this class
+    asserted pairing on a RECONSTRUCTION - first of the panels from a recorded
+    ``seed`` field, then from a recorded ``seed`` kwarg - and a reconstruction
+    cannot see a break that happens after the thing it reconstructs from.
+
+    The bootstrap spy records the POSITIONAL arguments under their parameter
+    names as well as the keyword ones, because the four that decide the
+    inference - ``y``, ``X``, ``clusters``, ``coef_idx`` - are all passed
+    positionally. A spy that kept only ``kwargs`` left them unobserved.
+    """
+    from unittest import mock
+
+    import alphalens_research.diagnostics.options_retro as retro
+
+    panels: dict[tuple[str, str | None], list] = {}
+    boot_calls: dict[tuple[str, str | None], list[dict]] = {}
+    pass_effects: dict[str, dict[str, float]] = {}
+    current: dict[str, Any] = {"key": ("size", None)}
+
+    real_sim = ov.simulate_overlapping_panel
+    real_boot = retro.wild_cluster_bootstrap_p
+    boot_params = [p.name for p in inspect.signature(real_boot).parameters.values()]
+
+    def sim_spy(**kwargs):
+        out = real_sim(**kwargs)
+        alignment = kwargs["alignment"]
+        arm = None if alignment is None else alignment.level
+        pass_name = "power" if any(kwargs["effects"].values()) else "size"
+        current["key"] = (pass_name, arm)
+        pass_effects[pass_name] = dict(kwargs["effects"])
+        panels.setdefault(current["key"], []).append(out)
+        return out
+
+    def boot_spy(*call_args, **kwargs):
+        recorded = dict(zip(boot_params, call_args, strict=False))
+        recorded.update(kwargs)
+        # Every parameter of the real function, so one added later cannot slip
+        # in unobserved: a defaulted argument the caller omits is recorded at
+        # its default rather than left out.
+        for name, param in inspect.signature(real_boot).parameters.items():
+            recorded.setdefault(name, param.default)
+        boot_calls.setdefault(current["key"], []).append(recorded)
+        return real_boot(*call_args, **kwargs)
+
+    with (
+        mock.patch.object(ov, "simulate_overlapping_panel", sim_spy),
+        mock.patch.object(retro, "wild_cluster_bootstrap_p", boot_spy),
+    ):
+        cell = ov.size_under_alignment(
+            null_effects=dict(_PAIRING_NULL_EFFECTS),
+            gate_effects=dict(_PAIRING_GATE_EFFECTS),
+            gam=_TEST_GAM,
+            **args,
+        )
+    return _PairedRun(panels, boot_calls, pass_effects, cell)
+
+
+def _rebuilt_signal(effects: dict[str, float], x_all: np.ndarray) -> np.ndarray:
+    """The signal term as the simulator composed it, from the design matrix.
+
+    A left fold over the effects in their own order against the feature columns
+    of ``x_all`` (column 0 is the intercept). The design matrix is asserted equal
+    across arms, so a signal rebuilt from it is the same for all three.
+    """
+    signal = np.zeros(len(x_all), dtype=float)
+    for i, name in enumerate(effects):
+        signal = signal + effects[name] * x_all[:, i + 1]
+    return signal
+
+
+def _expected_scale(
+    *, x_all: np.ndarray, cluster_sizes: list[int], level: str, names: list[str]
+) -> np.ndarray:
+    """The per-row scale for one arm, rebuilt from the design matrix."""
+    bounds = np.cumsum([0, *cluster_sizes])
+    xs = [x_all[bounds[j] : bounds[j + 1], 1:] for j in range(len(cluster_sizes))]
+    return np.concatenate(
+        a20_power._alignment_scale(xs, alignment=ov.NoiseAlignment(_TEST_GAM, level), names=names)
+    )
 
 
 class TestThePairingReachesTheSimulatedPanels(unittest.TestCase):
@@ -2071,118 +2266,53 @@ class TestThePairingReachesTheSimulatedPanels(unittest.TestCase):
     THEMSELVES - every panel of the run, as ``rejection_rate`` actually simulated
     them - and on the bootstrap calls it actually made.
 
-    The first version of this class spied on ``rejection_rate``, captured its
-    ``seed`` kwarg and then REBUILT one panel per arm from
-    ``default_rng(call["seed"])``. That moved the assertion one level closer to
-    the panels, not all the way: anything that de-paired the arms INSIDE
-    ``rejection_rate``, after the seed was received, was invisible. Measured
-    2026-11-08, each mutation applied alone to ``rejection_rate``, against the
-    ``test_a20*.py`` glob as it stood that day:
+    THREE earlier versions of this class each asserted pairing one level away
+    from the thing that runs, and each left a de-pairing mutation green. Measured
+    2026-11-08 and 2026-11-09, each mutation applied alone against the
+    ``test_a20*.py`` glob:
 
-    | mutation                                                     | suite |
-    |--------------------------------------------------------------|-------|
-    | ``if alignment is not None: rng.normal()`` after the seed     | OK    |
-    | per-arm offset on the ``wild_cluster_bootstrap_p`` seed       | OK    |
-    | ``if done > 1 and alignment is not None: rng.normal()``       | OK    |
+    | version asserted on                  | mutation left green                 |
+    |--------------------------------------|-------------------------------------|
+    | a recorded ``seed`` FIELD             | ``rng.normal()`` inside the loop    |
+    | a recorded ``seed`` KWARG             | per-arm bootstrap seed              |
+    | the SIZE pass only                    | the same two, scoped to power       |
+    | the ``arrival`` method only           | de-pairing every other method       |
+    | ``kwargs`` of the bootstrap only      | per-arm ``clusters``                |
 
-    The second of those matters most for the published figures, because they ARE
-    bootstrap p-value rejection rates: the bootstrap draws are half of the
-    docstring's "PAIRED draw for draw", and that half was entirely unpinned.
+    The second row matters most for the published figures, because they ARE
+    bootstrap p-value rejection rates: the bootstrap draws are half of "PAIRED
+    draw for draw". The fourth flips a published decision - at ``block5`` the row
+    corner's size moves from 0.075 to 0.085, from holding the 7.5% bar to missing
+    it, which deletes its power figure.
 
-    The second version spied on both seams but recorded a panel only when the
-    effects were all zero, so it observed the SIZE pass and never the POWER
-    pass. That is the half that matters most: ``power_span`` comes off the power
-    pass and the span is the figure this module publishes. Measured the same
-    day, each mutation applied alone and scoped to the power pass by
-    ``any(effects.values())``, both left the whole glob green:
+    So this version records BOTH passes keyed by ``(pass, arm)``, records the
+    bootstrap's POSITIONAL arguments under their parameter names, and is joined
+    by two classes that extend its reach along the two axes it cannot cover on
+    one fixture: :class:`TestThePairingHoldsForEveryPublishedMethod` and
+    :class:`TestThePairingDoesNotDependOnHowManyPanelsRun`.
 
-    | mutation (power pass only)                                   | suite |
-    |--------------------------------------------------------------|-------|
-    | ``if alignment is not None: rng.normal()`` after the seed     | OK    |
-    | ``+ 7`` on the ``wild_cluster_bootstrap_p`` seed              | OK    |
-
-    So this version records BOTH passes, keyed by ``(pass, arm)``, and asserts
-    pairing on each separately. The seams are :func:`simulate_overlapping_panel`,
-    for the panels, and ``wild_cluster_bootstrap_p``, for the inference stream;
-    the bootstrap spy keeps the WHOLE kwargs dict rather than the seed alone, so
-    a per-arm ``n_boot`` is caught too.
-
-    Two bounds on what this class can see, so a later reader does not have to
-    rediscover them. Pairing is asserted over ``_PAIRING_SIMS`` panels of a
-    ``_two_signal_cell``, so a break conditioned on a LARGER panel index, or on
-    an ``n_sims`` larger than this fixture's, is outside its reach. And the
-    noise case RECONSTRUCTS the scale by calling
-    :func:`a20_power._alignment_scale`, the same function the simulator calls,
-    so it cannot observe a change to the scale itself - both sides move
-    together. What pins the scale is
-    ``TestTheMarginalSpreadSurvivesAlignment`` and
-    ``TestTheAlignmentFixtureIsNotDegenerate``; this class pins the pairing and
-    the composition.
+    One bound remains, stated so a later reader does not have to rediscover it.
+    The noise case RECONSTRUCTS the scale by calling
+    :func:`a20_power._alignment_scale`, the same function the simulator calls, so
+    it cannot observe a change to the scale itself - both sides move together.
+    What pins the scale is ``TestTheAlignmentFixtureIsNotDegenerate`` and
+    ``TestTheMarginalSpreadSurvivesAlignment``; the second of those was itself
+    green under an exact no-op of the scale until the no-op direction was added
+    to it, so the cross-reference is only as good as that case.
     """
 
     @classmethod
     def setUpClass(cls):
-        from unittest import mock
-
-        import alphalens_research.diagnostics.options_retro as retro
-
         cls.args = _two_signal_cell(n_sims=_PAIRING_SIMS)
-        # Panels per (pass, arm), in simulation order. Both passes, because the
-        # power pass is where `power_span` comes from.
-        cls.panels: dict[tuple[str, str | None], list] = {}
-        # Whole bootstrap kwargs per (pass, arm), in the order they were made.
-        cls.boot_calls: dict[tuple[str, str | None], list[dict]] = {}
-        # The effects each pass ran at, read off the call rather than restated,
-        # so the noise case rebuilds the signal the simulator really injected.
-        cls.pass_effects: dict[str, dict[str, float]] = {}
-        current: dict[str, Any] = {"key": ("size", None)}
-
-        real_sim = ov.simulate_overlapping_panel
-        real_boot = retro.wild_cluster_bootstrap_p
-
-        def sim_spy(**kwargs):
-            out = real_sim(**kwargs)
-            alignment = kwargs["alignment"]
-            arm = None if alignment is None else alignment.level
-            pass_name = "power" if any(kwargs["effects"].values()) else "size"
-            current["key"] = (pass_name, arm)
-            cls.pass_effects[pass_name] = dict(kwargs["effects"])
-            cls.panels.setdefault(current["key"], []).append(out)
-            return out
-
-        def boot_spy(*args, **kwargs):
-            cls.boot_calls.setdefault(current["key"], []).append(dict(kwargs))
-            return real_boot(*args, **kwargs)
-
-        with (
-            mock.patch.object(ov, "simulate_overlapping_panel", sim_spy),
-            mock.patch.object(retro, "wild_cluster_bootstrap_p", boot_spy),
-        ):
-            cls.cell = ov.size_under_alignment(
-                null_effects=dict(_PAIRING_NULL_EFFECTS),
-                gate_effects=dict(_PAIRING_GATE_EFFECTS),
-                gam=_TEST_GAM,
-                **cls.args,
-            )
-
-    def _signal(self, pass_name: str, x_all: np.ndarray) -> np.ndarray:
-        # The signal term as the simulator composed it: a left fold over the
-        # effects in their own order, against the feature columns of `x_all`
-        # (column 0 is the intercept). `x_all` is asserted equal across arms by
-        # `test_every_corner_draws_the_same_design_matrix_in_every_panel`, so a
-        # signal rebuilt from it is the same for all three arms of a pass.
-        signal = np.zeros(len(x_all), dtype=float)
-        for i, name in enumerate(self.pass_effects[pass_name]):
-            signal = signal + self.pass_effects[pass_name][name] * x_all[:, i + 1]
-        return signal
+        cls.seen = _paired_run(**cls.args)
 
     def test_the_spy_saw_every_panel_of_both_passes_of_every_corner(self):
         # The positive control on the instrument itself. Without it, a spy that
         # captured nothing past panel 1, or nothing on the power pass, would
-        # make every case below vacuous - which is exactly how the previous two
+        # make every case below vacuous - which is exactly how the previous
         # versions of this class failed.
         self.assertEqual(
-            {key: len(panels) for key, panels in self.panels.items()},
+            {key: len(panels) for key, panels in self.seen.panels.items()},
             {
                 (pass_name, arm): _PAIRING_SIMS
                 for pass_name in ("size", "power")
@@ -2195,45 +2325,42 @@ class TestThePairingReachesTheSimulatedPanels(unittest.TestCase):
         # this is the control that the power cases below are not vacuous for a
         # second reason: the fixture's corners DO reach the power pass, and they
         # reach it at the effects this class rebuilds the signal from.
-        self.assertEqual(self.pass_effects["power"], _PAIRING_GATE_EFFECTS)
-        self.assertEqual(self.pass_effects["size"], _PAIRING_NULL_EFFECTS)
+        self.assertEqual(self.seen.pass_effects["power"], _PAIRING_GATE_EFFECTS)
+        self.assertEqual(self.seen.pass_effects["size"], _PAIRING_NULL_EFFECTS)
         self.assertEqual(
-            [self.cell["arms"][arm]["power"] is None for arm in ov.BRACKET_ARMS],
+            [self.seen.cell["arms"][arm]["power"] is None for arm in ov.BRACKET_ARMS],
             [False, False, False],
         )
 
     def test_every_corner_draws_the_same_design_matrix_in_every_panel(self):
         for pass_name in ("size", "power"):
-            home = [panel[1] for panel in self.panels[(pass_name, None)]]
+            home = [panel[1] for panel in self.seen.panels[(pass_name, None)]]
             for level in (ov.ALIGNMENT_SESSION, ov.ALIGNMENT_ROW):
                 for i, (got, want) in enumerate(
-                    zip(self.panels[(pass_name, level)], home, strict=True)
+                    zip(self.seen.panels[(pass_name, level)], home, strict=True)
                 ):
                     with self.subTest(pass_name=pass_name, level=level, panel=i):
                         self.assertTrue(np.array_equal(got[1], want))
 
     def test_the_underlying_noise_draws_are_the_same_up_to_the_scale_in_every_panel(self):
-        sizes = self.args["cluster_sizes"]
-        bounds = np.cumsum([0, *sizes])
         for pass_name in ("size", "power"):
+            effects = self.seen.pass_effects[pass_name]
             for level in (ov.ALIGNMENT_SESSION, ov.ALIGNMENT_ROW):
                 for i, (aligned, home) in enumerate(
                     zip(
-                        self.panels[(pass_name, level)],
-                        self.panels[(pass_name, None)],
+                        self.seen.panels[(pass_name, level)],
+                        self.seen.panels[(pass_name, None)],
                         strict=True,
                     )
                 ):
                     with self.subTest(pass_name=pass_name, level=level, panel=i):
                         home_y, home_x, _c = home
-                        signal = self._signal(pass_name, home_x)
-                        xs = [home_x[bounds[j] : bounds[j + 1], 1:] for j in range(len(sizes))]
-                        scale = np.concatenate(
-                            a20_power._alignment_scale(
-                                xs,
-                                alignment=ov.NoiseAlignment(_TEST_GAM, level),
-                                names=list(self.pass_effects[pass_name]),
-                            )
+                        signal = _rebuilt_signal(effects, home_x)
+                        scale = _expected_scale(
+                            x_all=home_x,
+                            cluster_sizes=self.args["cluster_sizes"],
+                            level=level,
+                            names=list(effects),
                         )
                         # `y = signal + noise * scale`, so the scale divides out
                         # of the NOISE and not out of `y`. On the size pass the
@@ -2242,23 +2369,41 @@ class TestThePairingReachesTheSimulatedPanels(unittest.TestCase):
                             np.allclose(aligned[0] - signal, (home_y - signal) * scale, atol=1e-12)
                         )
 
-    def test_the_bootstrap_stream_is_paired_too(self):
+    def test_the_inference_each_arm_asks_for_is_the_same_question(self):
         # The published figures are bootstrap p-value rejection rates, so the
-        # bootstrap draws are half of "paired draw for draw". A per-arm bootstrap
-        # seed leaves the panels identical and the rejection rates independent.
-        # The WHOLE kwargs dict, not the seed alone, so a per-arm `n_boot` -
-        # which changes the inference and leaves every seed intact - is caught.
+        # bootstrap draws are half of "paired draw for draw". A per-arm seed
+        # leaves the panels identical and the rejection rates independent; a
+        # per-arm `clusters` or `coef_idx` makes the three rates answers to
+        # different questions, and both are passed POSITIONALLY.
         for pass_name in ("size", "power"):
-            home = self.boot_calls[(pass_name, None)]
+            home = self.seen.boot_calls[(pass_name, None)]
             for level in (ov.ALIGNMENT_SESSION, ov.ALIGNMENT_ROW):
-                with self.subTest(pass_name=pass_name, level=level):
-                    self.assertEqual(self.boot_calls[(pass_name, level)], home)
+                for i, (got, want) in enumerate(
+                    zip(self.seen.boot_calls[(pass_name, level)], home, strict=True)
+                ):
+                    for key in _INFERENCE_INVARIANTS:
+                        with self.subTest(pass_name=pass_name, level=level, panel=i, arg=key):
+                            self.assertTrue(_same_argument(got[key], want[key]))
+
+    def test_the_spy_observes_every_argument_the_bootstrap_takes(self):
+        # The guard that keeps the case above honest as the callee changes. The
+        # previous spy kept `kwargs` only, so the four positional arguments -
+        # two of which decide the inference - were unobserved by every case in
+        # this class, and a per-arm `clusters` was green.
+        import alphalens_research.diagnostics.options_retro as retro
+
+        parameters = set(inspect.signature(retro.wild_cluster_bootstrap_p).parameters)
+        for key, calls in self.seen.boot_calls.items():
+            with self.subTest(key=key):
+                self.assertEqual(set(calls[0]), parameters)
+        # And the invariant list must not silently stop covering a parameter.
+        self.assertEqual(parameters - {"y"}, set(_INFERENCE_INVARIANTS))
 
     def test_the_bootstrap_stream_really_advances_between_panels(self):
         # The control for the case above: a constant seed would make it pass
         # while telling nothing about the sequence.
         for pass_name in ("size", "power"):
-            seeds = [call["seed"] for call in self.boot_calls[(pass_name, None)]]
+            seeds = [call["seed"] for call in self.seen.boot_calls[(pass_name, None)]]
             with self.subTest(pass_name=pass_name):
                 self.assertEqual((len(seeds), len(set(seeds))), (_PAIRING_SIMS, _PAIRING_SIMS))
 
@@ -2269,25 +2414,292 @@ class TestThePairingReachesTheSimulatedPanels(unittest.TestCase):
         for arm in (None, ov.ALIGNMENT_SESSION, ov.ALIGNMENT_ROW):
             with self.subTest(arm=arm):
                 self.assertNotEqual(
-                    [call["seed"] for call in self.boot_calls[("size", arm)]],
-                    [call["seed"] for call in self.boot_calls[("power", arm)]],
+                    [call["seed"] for call in self.seen.boot_calls[("size", arm)]],
+                    [call["seed"] for call in self.seen.boot_calls[("power", arm)]],
                 )
 
     def test_the_scale_is_not_itself_the_identity(self):
-        # The refutation control: without it both cases above would pass on a
+        # The refutation control: without it the cases above would pass on a
         # mechanism that quietly did nothing, which is the shape this whole
         # class exists to catch.
         for pass_name in ("size", "power"):
             for level in (ov.ALIGNMENT_SESSION, ov.ALIGNMENT_ROW):
                 for i, (aligned, home) in enumerate(
                     zip(
-                        self.panels[(pass_name, level)],
-                        self.panels[(pass_name, None)],
+                        self.seen.panels[(pass_name, level)],
+                        self.seen.panels[(pass_name, None)],
                         strict=True,
                     )
                 ):
                     with self.subTest(pass_name=pass_name, level=level, panel=i):
                         self.assertFalse(np.array_equal(aligned[0], home[0]))
+
+
+#: A calendar long enough that EVERY published method leaves at least two
+#: clusters. The pairing fixture's own calendar is six sessions, where
+#: ``block10`` and ``block20`` collapse to ONE cluster and ``rejection_rate``
+#: refuses them, so the method axis cannot be swept on it - it needs its own
+#: fixture rather than an extra ``subTest``.
+_EVERY_METHOD_OFFSETS = list(range(40))
+_EVERY_METHOD_SIZES = [2] * 40
+
+#: Clusters each method leaves on that calendar, measured 2026-11-09. Asserted,
+#: not just recorded: a method that silently collapsed to one block would make
+#: its pairing case pass while testing the same labels as another method.
+_CLUSTERS_PER_METHOD = {"arrival": 40, "block5": 8, "block10": 4, "block20": 2}
+
+#: Two panels per corner per method. The panel axis is covered at
+#: ``_PAIRING_SIMS`` by the class above and unboundedly by the class below, so
+#: this fixture buys the METHOD axis and pays as little as possible for it: the
+#: whole four-method sweep runs in about 1.1 s.
+_METHOD_SWEEP_SIMS = 2
+
+
+class TestThePairingHoldsForEveryPublishedMethod(unittest.TestCase):
+    """The grid publishes four methods; pairing used to be asserted for one.
+
+    ``TestThePairingReachesTheSimulatedPanels`` runs a ``_two_signal_cell``,
+    whose method is ``arrival``. The method reaches the inference only through
+    ``labels_for_method``, so a de-pairing conditioned on the method is a
+    plausible shape and was entirely unobserved: measured 2026-11-09,
+    ``if alignment is not None and method != ARRIVAL_METHOD: rng.normal()``
+    inside ``rejection_rate`` left the whole ``test_a20*.py`` glob green at 508
+    tests, and at ``block5`` it moves the row corner's size from 0.075 to 0.085
+    - from holding the 7.5% bar to missing it, which deletes that corner's power
+    figure and withholds the span.
+
+    Three of the four published methods were unpinned for pairing. This class
+    pins all four, on a calendar where all four are legal.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.args = {
+            "burnt_signals": np.random.default_rng(1).normal(0.0, 1.0, (80, 2)),
+            "arrival_offsets": list(_EVERY_METHOD_OFFSETS),
+            "cluster_sizes": list(_EVERY_METHOD_SIZES),
+            "sd_y": 1.0,
+            "icc": 0.4,
+            "shared_fraction": 0.5,
+            "horizon": 20,
+            "coef_name": "atr",
+            "n_sims": _METHOD_SWEEP_SIMS,
+            "wcb_boot": 5,
+            "seed": 1,
+        }
+        cls.runs = {method: _paired_run(method=method, **cls.args) for method in ov.METHODS}
+
+    def test_this_calendar_really_leaves_every_method_its_own_clusters(self):
+        # The positive control on the fixture. Without it a method that
+        # collapsed to one block would be asserting another method's labels, and
+        # a method that raised would not be in `runs` at all.
+        self.assertEqual(set(self.runs), set(ov.METHODS))
+        got = {
+            method: len(
+                set(
+                    ov.labels_for_method(
+                        method=method,
+                        arrival_offsets=self.args["arrival_offsets"],
+                        cluster_sizes=self.args["cluster_sizes"],
+                    ).tolist()
+                )
+            )
+            for method in ov.METHODS
+        }
+        self.assertEqual(got, _CLUSTERS_PER_METHOD)
+
+    def test_every_method_saw_every_panel_of_both_passes_of_every_corner(self):
+        for method, run in self.runs.items():
+            with self.subTest(method=method):
+                self.assertEqual(
+                    {key: len(panels) for key, panels in run.panels.items()},
+                    {
+                        (pass_name, arm): _METHOD_SWEEP_SIMS
+                        for pass_name in ("size", "power")
+                        for arm in (None, ov.ALIGNMENT_SESSION, ov.ALIGNMENT_ROW)
+                    },
+                )
+
+    def test_every_method_draws_one_design_matrix_for_all_three_corners(self):
+        for method, run in self.runs.items():
+            for pass_name in ("size", "power"):
+                home = [panel[1] for panel in run.panels[(pass_name, None)]]
+                for level in (ov.ALIGNMENT_SESSION, ov.ALIGNMENT_ROW):
+                    for i, (got, want) in enumerate(
+                        zip(run.panels[(pass_name, level)], home, strict=True)
+                    ):
+                        with self.subTest(method=method, pass_name=pass_name, level=level, panel=i):
+                            self.assertTrue(np.array_equal(got[1], want))
+
+    def test_every_method_scales_the_same_noise_draw(self):
+        for method, run in self.runs.items():
+            for pass_name in ("size", "power"):
+                effects = run.pass_effects[pass_name]
+                for level in (ov.ALIGNMENT_SESSION, ov.ALIGNMENT_ROW):
+                    for i, (aligned, home) in enumerate(
+                        zip(
+                            run.panels[(pass_name, level)],
+                            run.panels[(pass_name, None)],
+                            strict=True,
+                        )
+                    ):
+                        with self.subTest(method=method, pass_name=pass_name, level=level, panel=i):
+                            home_y, home_x, _c = home
+                            signal = _rebuilt_signal(effects, home_x)
+                            scale = _expected_scale(
+                                x_all=home_x,
+                                cluster_sizes=self.args["cluster_sizes"],
+                                level=level,
+                                names=list(effects),
+                            )
+                            self.assertTrue(
+                                np.allclose(
+                                    aligned[0] - signal,
+                                    (home_y - signal) * scale,
+                                    atol=1e-12,
+                                )
+                            )
+
+    def test_every_method_asks_all_three_corners_the_same_question(self):
+        for method, run in self.runs.items():
+            for pass_name in ("size", "power"):
+                home = run.boot_calls[(pass_name, None)]
+                for level in (ov.ALIGNMENT_SESSION, ov.ALIGNMENT_ROW):
+                    for i, (got, want) in enumerate(
+                        zip(run.boot_calls[(pass_name, level)], home, strict=True)
+                    ):
+                        for key in _INFERENCE_INVARIANTS:
+                            with self.subTest(
+                                method=method, pass_name=pass_name, level=level, panel=i, arg=key
+                            ):
+                                self.assertTrue(_same_argument(got[key], want[key]))
+
+    def test_the_methods_really_ask_different_questions_of_each_other(self):
+        # The control that keeps the cases above from passing on four runs of
+        # one method: the cluster labels handed to the bootstrap must DIFFER
+        # between methods, or `labels_for_method` is not reaching the inference.
+        seen = {
+            method: run.boot_calls[("size", None)][0]["clusters"].tobytes()
+            for method, run in self.runs.items()
+        }
+        self.assertEqual(len(set(seen.values())), len(ov.METHODS))
+
+
+class TestThePairingDoesNotDependOnHowManyPanelsRun(unittest.TestCase):
+    """Every published figure comes from 2 000 panels; pairing is checked on five.
+
+    No fixture in a unit suite can run 2 000 panels, so the number itself cannot
+    be matched. What CAN be checked is the invariant that makes the small
+    fixture representative: ``rejection_rate`` seeds its generator ONCE and then
+    loops, so panels 1..K are the same draw whether ``n_sims`` is K or 2K. If
+    that holds, a break conditioned on ``n_sims`` - or on a panel index below 2K
+    - shows up as the prefix diverging.
+
+    Measured 2026-11-09, and this is why the class exists:
+    ``if alignment is not None and n_sims > 5: rng.normal()`` inside
+    ``rejection_rate`` left the whole ``test_a20*.py`` glob green at 508 tests.
+    A de-pairing inert on every fixture and active on every real run is the
+    worst shape of all, because the suite reports it as absent.
+
+    This calls ``rejection_rate`` directly rather than ``size_under_alignment``,
+    on purpose: the loop under test is there, and the two-stage gate would
+    otherwise decide whether the power pass runs at all from a size estimate
+    that legitimately differs between K and 2K panels.
+    """
+
+    _SMALL = _PAIRING_SIMS
+    _LARGE = 2 * _PAIRING_SIMS
+
+    @classmethod
+    def setUpClass(cls):
+        from unittest import mock
+
+        cls.args = _two_signal_cell()
+        cls.panels: dict[tuple[int, str, str | None], list] = {}
+        real_sim = ov.simulate_overlapping_panel
+
+        def run(n_sims, pass_name, effects, alignment):
+            arm = None if alignment is None else alignment.level
+            key = (n_sims, pass_name, arm)
+
+            def sim_spy(**kwargs):
+                out = real_sim(**kwargs)
+                cls.panels.setdefault(key, []).append(out)
+                return out
+
+            with mock.patch.object(ov, "simulate_overlapping_panel", sim_spy):
+                ov.rejection_rate(
+                    effects=dict(effects),
+                    alignment=alignment,
+                    **{**cls.args, "n_sims": n_sims},
+                )
+
+        for n_sims in (cls._SMALL, cls._LARGE):
+            for pass_name, effects in (
+                ("size", _PAIRING_NULL_EFFECTS),
+                ("power", _PAIRING_GATE_EFFECTS),
+            ):
+                for level in (None, *ov.ALIGNED_ARMS):
+                    run(
+                        n_sims,
+                        pass_name,
+                        effects,
+                        None if level is None else ov.NoiseAlignment(_TEST_GAM, level),
+                    )
+
+    def _keys(self):
+        for pass_name in ("size", "power"):
+            for arm in (None, *ov.ALIGNED_ARMS):
+                yield pass_name, arm
+
+    def test_both_runs_produced_the_panels_they_were_asked_for(self):
+        # The positive control on the instrument, as everywhere else in this
+        # area: a spy that captured nothing would make the prefix case vacuous.
+        got = {key: len(panels) for key, panels in self.panels.items()}
+        self.assertEqual(
+            got,
+            {
+                (n_sims, pass_name, arm): n_sims
+                for n_sims in (self._SMALL, self._LARGE)
+                for pass_name, arm in self._keys()
+            },
+        )
+
+    def test_the_short_run_is_the_prefix_of_the_long_one(self):
+        # The invariant that makes a five-panel fixture say something about a
+        # two-thousand-panel run. It fails for a break conditioned on `n_sims`
+        # and for one conditioned on a panel index up to 2K.
+        for pass_name, arm in self._keys():
+            short = self.panels[(self._SMALL, pass_name, arm)]
+            long = self.panels[(self._LARGE, pass_name, arm)]
+            for i, (a, b) in enumerate(zip(short, long, strict=False)):
+                with self.subTest(pass_name=pass_name, arm=arm, panel=i):
+                    self.assertTrue(np.array_equal(a[0], b[0]))
+                    self.assertTrue(np.array_equal(a[1], b[1]))
+
+    def test_the_long_run_is_still_paired_over_all_of_its_panels(self):
+        # The other half: the prefix could match while the arms de-paired on the
+        # panels only the long run has.
+        for pass_name in ("size", "power"):
+            home = self.panels[(self._LARGE, pass_name, None)]
+            for level in ov.ALIGNED_ARMS:
+                for i, (got, want) in enumerate(
+                    zip(self.panels[(self._LARGE, pass_name, level)], home, strict=True)
+                ):
+                    with self.subTest(pass_name=pass_name, level=level, panel=i):
+                        self.assertTrue(np.array_equal(got[1], want[1]))
+
+    def test_the_long_run_really_has_panels_the_short_one_does_not(self):
+        # The control on the arithmetic: if both runs were the same length the
+        # prefix case would be the pairing case restated.
+        self.assertGreater(self._LARGE, self._SMALL)
+        for pass_name, arm in self._keys():
+            with self.subTest(pass_name=pass_name, arm=arm):
+                self.assertEqual(
+                    len(self.panels[(self._LARGE, pass_name, arm)])
+                    - len(self.panels[(self._SMALL, pass_name, arm)]),
+                    self._LARGE - self._SMALL,
+                )
 
 
 def _two_signal_cell(**overrides):
