@@ -1,10 +1,13 @@
 # A20 overlap inference — does the #1227 power gate survive the 20-session window?
 
 **Status:** COMPLETE 2026-09-23, **re-run 2026-09-24 on a corrected panel — the assumption still
-holds, but the power figures are withdrawn.** **The size verdict itself is UNDER MEASUREMENT since
-2026-11-07**: it was measured under homoskedastic noise only, and the instrument to test it under
-feature-aligned noise now exists but has not been run on the real stores. See the 2026-11-07 note
-below. The arrival-session wild cluster bootstrap keeps its
+holds, but the power figures are withdrawn.** **The size verdict was MEASURED under feature-aligned
+noise on 2026-11-08 and is now RESTRICTED, not withdrawn**: it holds on the ``kappa = 0`` rows and
+is not established either way on the ``kappa = fitted`` rows, where one crossing candidate is
+unresolved at 2000 panels. **No power figure is licensed at any corner**, because no power span
+resolves above the 80% gate bar. See the 2026-11-07 note and the 2026-11-08 real-store run below.
+Between 2026-11-07 and that run this line read "UNDER MEASUREMENT since 2026-11-07 ... has not been
+run on the real stores". The arrival-session wild cluster bootstrap keeps its
 level on an overlap-aware panel in every cell of the grid, and that verdict survives the correction
 intact. The power column does not: it was computed on a panel counted in the wrong unit. See the
 correction box; §5 holds the original run and §6 the re-run.
@@ -15,10 +18,16 @@ heteroskedastic and ALIGNED WITH THE FEATURE under test, where the simulator giv
 observation one noise scale. Those figures stand as SIMULATOR readings and are not realized
 power. See
 [`a20_simulator_precision_gap_2026_11_07.md`](a20_simulator_precision_gap_2026_11_07.md). The
-bootstrap LEVEL verdict, which is this memo's actual subject, is unaffected: it is a size check,
-not a power figure.
+bootstrap LEVEL verdict, which is this memo's actual subject, is unaffected ON THE
+``kappa = 0`` ROWS: there it is a size check, not a power figure. On the
+``kappa = fitted`` rows it is NOT established either way. That restriction is the edit this
+section pre-authorised, and the 2026-11-08 real-store run below is what licensed it; before that
+run the sentence carried no restriction and read "is unaffected: it is a size check, not a power
+figure".
 
-**That last sentence is UNDER MEASUREMENT as of 2026-11-07 and was asserted, never measured.** A
+**That last sentence was asserted and never measured when it was written, was UNDER MEASUREMENT
+from 2026-11-07, and was MEASURED on 2026-11-08 — see the real-store run below, which is what
+restricted it.** A
 wild cluster bootstrap's SIZE under heteroskedasticity correlated with the regressor is not
 obviously its size under homoskedasticity, especially at few clusters, where leverage concentrates
 in the high-|x| clusters. This module chooses between four inference methods BY SIZE (7.5%,
@@ -121,6 +130,146 @@ a threshold of half the MEASURED spread (0.4137 at the session level, 0.3803 at 
 Neither correction edits the size claim above.
 
 Neither item edits the size claim above. The claim still waits for its real-store run.
+
+## THE REAL-STORE RUN, 2026-11-08 — the size claim is restricted, not withdrawn
+
+This is the run this section pre-authorised: 2000 panels x 399 bootstrap replications at all three
+noise corners, on the REAL stores, not on a fixture and not on a low-count Mac run. It answers the
+sentence marked UNDER MEASUREMENT above.
+
+**The verdict is NO VERDICT on the full grid and SURVIVES on the ``kappa = 0`` rows alone.** Those
+are two different readings of the same run and both belong here.
+
+### Construction
+
+| | |
+|---|---|
+| host | `vmi2478967`, the VPS production host, one core of eight at `nice 19` |
+| started / finished (UTC) | 2026-11-08T12:24:33Z / 2026-11-08T20:07:29Z, wall clock 7:42:56 |
+| run tree | detached worktree at `5bc9971e`; the main checkout was left untouched at `43dd277e` |
+| script sha256 | `9c16a21a4e8e303826989c0bad81352df9e185caf3de94425405f2268b304cff` |
+| sibling `a20_power.py` sha256 | `82a1ee07924f109382261340735b92841493b0d7538cfb1f538d6137b04d531c` |
+| labels store | `~/.alphalens/selection_labels`, 173 parquets, name+size fingerprint `9a19c01d0fad0722…` |
+| briefs store | `~/.alphalens/thematic_briefs`, 173 parquets, fingerprint `a14de4217727997b…` |
+| versions | python 3.13.7, numpy 2.5.0, pandas 3.0.6, scipy 1.18.0 — the same four as the spent #1227 look |
+| arguments | `--n-sims 2000 --wcb-boot 399 --seed 20261109 --alignment-size --population briefed` |
+| output | `~/a20_realrun_20261108T122433Z.{json,log}` on that host; the log carries this provenance block, written BEFORE the run started |
+
+**Outcome-blind.** `load_held_out` reads an allowlist of five STRUCTURAL columns — `brief_date`,
+`ticker`, `anchor_session`, `briefed_any_theme`, `sel_label_status_20` — and no outcome column, so
+the held-out side enters as a CALENDAR. `sel_ar_20` is read only by `burnt_panel`, whose brief join
+is filtered to `path.stem <= 2026-07-05`. No held-out outcome value was read and no budget slot is
+charged.
+
+### The panel it ran on is not the panel the published figures were calibrated to
+
+| quantity | the published calibration | **this run, read 2026-11-08** |
+|---|---|---|
+| held-out episodes | 45 clusters x 4 | **407 episodes in 65 clusters over 69 sessions** |
+| burnt episodes | 197-198 | **198** |
+| `sd(y)` | 0.1417 | **0.1681** |
+| `icc` | 0.061 | **0.0505** |
+| fitted loading kappa | 0.264 | **0.1411** |
+
+The fitted kappa is about HALF the value every earlier synthetic run used, and `kappa = fitted` is
+the one loading where the feature-dependence is applied twice. That matters for reading the table
+below against the earlier claim, and it is the reason this run can differ from a fixture run
+without either being wrong.
+
+### The per-arm table
+
+| phi | loading | method | homosk. | session gam 0.400 | row gam 0.205 | held h/s/r | power span vs 80% |
+|---|---|---|---|---|---|---|---|
+| 0.00 | kappa=0 | arrival | 5.5% | 5.5% +/-1.0 | 5.4% +/-1.0 | yes/yes/yes | 58.1-91.6% **straddles** |
+| 0.00 | kappa=0 | block5 | 5.3% | 5.0% +/-1.0 | 5.2% +/-1.0 | yes/yes/yes | 55.8-86.9% **straddles** |
+| 0.00 | kappa=0 | block10 | 5.7% | 5.0% +/-1.0 | 5.5% +/-1.0 | yes/yes/yes | 47.5-76.6% |
+| 0.00 | kappa=0 | block20 | 3.8% | 3.8% +/-0.8 | 4.0% +/-0.9 | yes/yes/yes | 15.2-23.6% |
+| 0.00 | kappa=fitted | arrival | 5.5% | 5.5% +/-1.0 | 5.4% +/-1.0 | yes/yes/yes | 58.1-91.6% **straddles** |
+| 0.00 | kappa=fitted | block5 | 5.3% | 5.0% +/-1.0 | 5.2% +/-1.0 | yes/yes/yes | 55.8-86.9% **straddles** |
+| 0.00 | kappa=fitted | block10 | 5.7% | 5.0% +/-1.0 | 5.5% +/-1.0 | yes/yes/yes | 47.5-76.6% |
+| 0.00 | kappa=fitted | block20 | 3.8% | 3.8% +/-0.8 | 4.0% +/-0.9 | yes/yes/yes | 15.2-23.6% |
+| 0.50 | kappa=0 | arrival | 4.9% | 5.1% +/-1.0 | 5.3% +/-1.0 | yes/yes/yes | 57.9-90.5% **straddles** |
+| 0.50 | kappa=0 | block5 | 4.8% | 4.5% +/-0.9 | 4.5% +/-0.9 | yes/yes/yes | 51.8-85.9% **straddles** |
+| 0.50 | kappa=0 | block10 | 5.2% | 4.8% +/-0.9 | 5.3% +/-1.0 | yes/yes/yes | 43.1-74.0% |
+| 0.50 | kappa=0 | block20 | 4.3% | 3.7% +/-0.8 | 3.4% +/-0.8 | yes/yes/yes | 16.2-20.8% |
+| 0.50 | kappa=fitted | arrival | 5.1% | 5.9% +/-1.0 | 6.8% +/-1.1 | yes/yes/yes | 56.8-90.2% **straddles** |
+| 0.50 | kappa=fitted | block5 | 4.5% | 4.9% +/-0.9 | 5.6% +/-1.0 | yes/yes/yes | 50.2-85.2% **straddles** |
+| 0.50 | kappa=fitted | block10 | 5.1% | 5.1% +/-1.0 | 5.6% +/-1.0 | yes/yes/yes | 42.0-73.0% |
+| 0.50 | kappa=fitted | block20 | 3.5% | 4.1% +/-0.9 | 3.6% +/-0.8 | yes/yes/yes | 13.0-22.4% |
+| 1.00 | kappa=0 | arrival | 4.9% | 5.0% +/-1.0 | 5.4% +/-1.0 | yes/yes/yes | 58.7-92.2% **straddles** |
+| 1.00 | kappa=0 | block5 | 5.1% | 4.9% +/-0.9 | 5.5% +/-1.0 | yes/yes/yes | 55.1-88.8% **straddles** |
+| 1.00 | kappa=0 | block10 | 5.6% | 4.9% +/-0.9 | 5.9% +/-1.0 | yes/yes/yes | 45.7-77.3% |
+| 1.00 | kappa=0 | block20 | 4.5% | 4.3% +/-0.9 | 4.0% +/-0.9 | yes/yes/yes | 17.1-22.9% |
+| 1.00 | kappa=fitted | arrival | 5.5% | 6.3% +/-1.1 | 7.8% +/-1.2 | yes/yes/**NO** | **withheld** |
+| 1.00 | kappa=fitted | block5 | 5.2% | 6.0% +/-1.0 | 7.3% +/-1.1 | yes/yes/yes | 50.7-86.6% **straddles** |
+| 1.00 | kappa=fitted | block10 | 5.5% | 5.8% +/-1.0 | 6.2% +/-1.1 | yes/yes/yes | 40.9-75.6% |
+| 1.00 | kappa=fitted | block20 | 3.5% | 3.7% +/-0.8 | 3.6% +/-0.8 | yes/yes/yes | 14.0-23.1% |
+
+### The verdict, both readings
+
+- **Full grid: `claim_survives: None`**, cause `unresolved`. One crossing candidate and three
+  (arm, method) corners are unresolved at 2000 panels, so neither answer is distinguishable from
+  Monte Carlo noise.
+- **`kappa = 0` rows alone: the claim SURVIVES**, resolved. No method crosses the 7.5% size bar
+  only under alignment, and all four methods hold size at all three corners.
+- `refutation_is_composed: null` — there is no refutation to report.
+- `methods_holding_size` and `ordering_changed` are **withheld on both surfaces**, with
+  `holding_sets_are_measurements: false`. An unresolved (arm, method) is dropped from a holding
+  set, so publishing the set would publish a truncated measurement and an ordering answer computed
+  from it.
+
+The one unresolved crossing candidate, which is the cell the earlier synthetic claim turned on:
+
+| | synthetic, as published | **real store, 2026-11-08** |
+|---|---|---|
+| homoskedastic | 5.90% [4.95, 7.02] | **5.5%** |
+| session-aligned, gam 0.400 | not run in that claim | 6.3% +/-1.1, held |
+| row-aligned, gam 0.205 | 9.70% [8.48, 11.08] | **7.8% [6.8, 9.1], did NOT hold the bar** |
+| reading | disjoint intervals, a RESOLVED crossing | the interval STRADDLES the 7.5% bar |
+| power span | not reported | **withheld** — a corner missed the bar |
+
+So the crossing is still there in the point estimate: 5.5% to 7.8%, past a bar of 7.5%, at phi 1.00,
+`kappa = fitted`, method `arrival`, row-aligned. It is no longer RESOLVED. At half the fitted kappa
+the gap fell from 9.70% to 7.8% and landed on the bar. Neither "the claim survives" nor "the claim
+is refuted" may be read off it. The three unresolved (arm, method) corners are session/`arrival`,
+row/`arrival` and row/`block5` — the two methods with the most clusters, which is where leverage
+concentrates.
+
+### A finding this run was not looking for: no power span resolves ABOVE the gate
+
+Every power figure here is an identified SET over the three noise corners, not a number, and the
+80% gate bar falls inside most of those sets. Over the 24 cells:
+
+| the span against the 80% bar | cells | which |
+|---|---|---|
+| resolved BELOW it | 12 | every `block10` (max 77.3%) and `block20` (max 23.6%) cell |
+| STRADDLES it, so it is not an answer | 11 | every `arrival` and `block5` cell but one |
+| withheld, a corner missed the size bar | 1 | `arrival` at phi 1.00, `kappa = fitted` |
+
+**No span resolves above the bar.** `arrival` at the merged preflight's own assumption (phi 0.00,
+`kappa = 0`) reads 58.1-92.2% across the corners, and the merged 83.9% sits inside that. So the
+gate question — does the arrival-session bootstrap clear 80% power — is not answered by this run,
+and the reason is not that the answer is bad but that the identified set spans the bar. This bears
+on [`a20_power_preflight_2026_09.md`](a20_power_preflight_2026_09.md) §2.2 and §3, which this memo
+already amends; whether that memo's figure is restated is a separate act and is not done here.
+
+### One more measured difference: the size RANKING moves
+
+At phi 1.00, `kappa = fitted`, the pair (`arrival`, `block20`) swaps rank by distance from the
+nominal 5%, in BOTH aligned arms. `size_rank_changed` records it per arm. It is not a bar crossing,
+so it does not refute anything on its own, but it is the mechanism this section named in advance:
+if alignment moves the sizes, it can move WHICH METHOD WINS.
+
+### What this run does and does not license
+
+- It licenses the restriction applied above: the level verdict holds on the `kappa = 0` rows and is
+  not established on the `kappa = fitted` rows.
+- It does NOT license withdrawing the sentence. The `kappa = 0` reading is resolved and favourable.
+- It does NOT license a power figure for any method at any corner, because no span resolves above
+  the 80% bar.
+- Re-running at more than 2000 panels would resolve the one straddling cell. That is a compute
+  decision, not a new look: it reads no held-out outcome. The owner's call, and it is the only
+  thing standing between this and a two-state answer.
 
 **Amends:** [`a20_power_preflight_2026_09.md`](a20_power_preflight_2026_09.md) §2.2 (the
 inference row) and §3 (the method). That memo's 83.9% is not withdrawn; this one asks whether the
