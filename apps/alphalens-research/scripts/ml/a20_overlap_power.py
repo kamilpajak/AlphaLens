@@ -1335,18 +1335,24 @@ def one_size_reading(
             f"same at all three corners ({kept})"
         )
 
-    # The holding sets and the ordering answer are MEASUREMENTS everywhere
-    # except on the unresolved branch, where an unresolved method was dropped
-    # from the holding set - so an empty set there means "nobody could tell" and
-    # not "nothing held", and the ordering answer is a comparison of two sets
-    # neither of which was resolved. The screen refuses to print them there. The
-    # artifact used to carry them anyway, with `ordering_changed: false` written
-    # on the very run whose test asserts that string never reaches the screen,
-    # and with the unresolved methods silently dropped. A CLI's human and machine
-    # renderings carry the SAME facts, so both surfaces withhold them, and
-    # `holding_sets_are_measurements` is the field a consumer reads instead of
-    # inferring the suppression from a null.
-    are_measurements = no_verdict_cause != NO_VERDICT_UNRESOLVED
+    # The holding sets and the ordering answer are MEASUREMENTS exactly when
+    # NOTHING was left unresolved, because an unresolved (arm, method) is
+    # DROPPED from the holding set - so an empty set then means "nobody could
+    # tell" and not "nothing held", and the ordering answer is a comparison of
+    # two sets neither of which was resolved. The artifact used to carry them
+    # anyway, with `ordering_changed: false` written on the very run whose test
+    # asserts that string never reaches the screen. A CLI's human and machine
+    # renderings carry the SAME facts, so both surfaces withhold them, and this
+    # field is what a consumer reads instead of inferring the suppression from a
+    # null.
+    #
+    # Keyed on `unresolved` and NOT on `no_verdict_cause`: the cause is assigned
+    # only on the unresolved branch, and `elif unresolved:` sits AFTER
+    # `if crossings:`. A table with a resolved crossing AND an unresolved
+    # method-corner therefore takes the CROSSING branch with `unresolved`
+    # non-empty, and a cause-keyed gate published the truncated sets there as
+    # measurements. `unresolved` exists on every branch; the cause does not.
+    are_measurements = not unresolved
     return {
         "size_tolerance": size_tolerance,
         "n_sims": n_sims,
@@ -1808,13 +1814,16 @@ def main(argv: list[str] | None = None) -> int:
         print("\n  THE SIZE CLAIM UNDER TEST, from this memo's own qualifier: 'the bootstrap")
         print("  LEVEL verdict is unaffected: it is a size check, not a power figure'")
         print(f"  {verdict['verdict_line']}")
-        if verdict["no_verdict_cause"] == NO_VERDICT_UNRESOLVED:
-            # Both are vacuous on THIS branch and standing alone they read as
-            # measurements: an unresolved method is DROPPED from the holding
-            # set, so "none" covers an empty set and a set nobody could resolve.
-            # Gated on the CAUSE, not on `claim_survives is None`: that is also
-            # true on the nothing-holds branch, where every corner IS resolved
-            # and the empty sets are a reading.
+        if not verdict["holding_sets_are_measurements"]:
+            # Vacuous whenever anything was left unresolved and standing alone
+            # they read as measurements: an unresolved method is DROPPED from the
+            # holding set, so "none" covers both an empty set and a set nobody
+            # could resolve. Gated on the PAYLOAD FIELD, so the screen and
+            # `--out-json` cannot disagree about what was withheld. Not on
+            # `claim_survives is None`, which is also true on the nothing-holds
+            # branch where every corner IS resolved and the empty sets are a
+            # reading; and not on `no_verdict_cause`, which is unset on the
+            # crossing branch even when that branch carries unresolved corners.
             print(f"    methods holding size: {NOT_RESOLVED_LABEL}")
             print(f"    ordering changed: {NOT_RESOLVED_LABEL}")
         else:

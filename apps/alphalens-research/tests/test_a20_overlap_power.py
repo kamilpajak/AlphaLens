@@ -3120,6 +3120,102 @@ class TestAnEmptyMeasurementIsNoVerdict(unittest.TestCase):
         self.assertEqual(verdict["methods_holding_size"][ov.HOMOSKEDASTIC_ARM], ("arrival",))
 
 
+#: A size sitting exactly ON the tolerance, so its Wilson interval straddles the
+#: bar at any simulation count and the (arm, method) corner cannot be resolved.
+_STRADDLING_SIZE = ov.SIZE_TOLERANCE
+
+
+def _crossing_plus_unresolved_rows() -> list:
+    """One resolved crossing and one unresolvable method, in the same cell.
+
+    The table that separates the two candidate gates. ``arrival`` crosses in the
+    session arm and is resolved; ``block5`` sits on the bar at every corner, so
+    all three of its (arm, method) corners are unresolved and ``block5`` is
+    DROPPED from every holding set. ``crossings`` is non-empty, so the verdict
+    takes the CROSSING branch while ``unresolved`` is non-empty too.
+    """
+    cell = {"shared_fraction": 1.0, "loading": ov.COMPOSED_LOADING}
+    return [
+        *_synthetic_rows(session_size=_CROSSING_SIZE, row_size=_SAFE_SIZE),
+        {
+            **cell,
+            "method": "block5",
+            "size": _STRADDLING_SIZE,
+            "arms": {arm: _arm_cell(_STRADDLING_SIZE) for arm in ov.BRACKET_ARMS},
+        },
+    ]
+
+
+class TestTheSuppressionIsKeyedOnWhatWasUnresolved(unittest.TestCase):
+    """A truncated holding set is not a measurement on ANY branch, crossing included.
+
+    The suppression and the field that names it were keyed on
+    ``no_verdict_cause``, which is assigned only on the unresolved branch. But
+    ``elif unresolved:`` sits AFTER ``if crossings:``, so a table carrying BOTH a
+    resolved crossing and an unresolvable method takes the crossing branch with
+    ``no_verdict_cause`` still ``None`` - and a cause-keyed gate then published
+    the truncated sets there as measurements.
+
+    Measured on the fixture below before the gate was changed: the payload
+    carried ``holding_sets_are_measurements: true``, a ``methods_holding_size``
+    reading ``session: ()`` - which looks like "the session corner held nothing"
+    when ``block5`` was merely unresolvable there - and, worse,
+    ``ordering_changed: true``, a refutation-shaped claim computed from two sets
+    that had each silently lost a method. Replacing the gate with ``unresolved``
+    left the whole glob green, which is the finding: the correct predicate and
+    the delivered one were indistinguishable to the suite.
+
+    ``unresolved`` exists on every branch; the cause does not. That is the whole
+    reason the gate reads the quantity rather than the branch label.
+    """
+
+    def _verdict(self):
+        return _verdict(_crossing_plus_unresolved_rows())
+
+    def test_this_fixture_really_takes_the_crossing_branch(self):
+        # The positive control. Without it every case below could be passing
+        # through the unresolved branch, where the old gate was already right.
+        verdict = self._verdict()
+        self.assertEqual(verdict["refuting_branch"], ov.REFUTING_BRANCH_CROSSING)
+        self.assertIs(verdict["claim_survives"], False)
+
+    def test_that_branch_leaves_the_cause_unset(self):
+        # Why the old gate could not see this table: the field it keyed on is
+        # `None` here, which it read as "nothing was suppressed".
+        self.assertIsNone(self._verdict()["no_verdict_cause"])
+
+    def test_and_it_still_carries_unresolved_corners(self):
+        verdict = self._verdict()
+        self.assertEqual(len(verdict["unresolved_method_corners"]), len(ov.BRACKET_ARMS))
+        self.assertEqual(verdict["unresolved_cells"], [])
+
+    def test_the_holding_sets_are_not_reported_as_measurements(self):
+        self.assertIs(self._verdict()["holding_sets_are_measurements"], False)
+
+    def test_the_truncated_holding_sets_are_withheld_from_the_artifact(self):
+        self.assertIsNone(self._verdict()["methods_holding_size"])
+
+    def test_the_ordering_answer_computed_from_them_is_withheld_too(self):
+        # The one that mattered most: it used to be published as `true`, a
+        # refutation-shaped claim derived from sets that had each lost a method.
+        self.assertIsNone(self._verdict()["ordering_changed"])
+
+    def test_the_crossing_it_did_resolve_is_still_published(self):
+        # The positive control on the suppression: withholding two fields must
+        # not withhold the finding the table does support.
+        verdict = self._verdict()
+        self.assertEqual(len(verdict["crosses_only_under_alignment"]), 1)
+        self.assertEqual(verdict["crosses_only_under_alignment"][0]["method"], "arrival")
+
+    def test_a_table_with_nothing_unresolved_still_reports_its_sets(self):
+        # The other direction, so the gate is not passing on a constant.
+        verdict = _verdict(_synthetic_rows(session_size=_CROSSING_SIZE, row_size=_SAFE_SIZE))
+        self.assertEqual(verdict["unresolved"], [])
+        self.assertIs(verdict["holding_sets_are_measurements"], True)
+        self.assertIsNotNone(verdict["methods_holding_size"])
+        self.assertIsNotNone(verdict["ordering_changed"])
+
+
 #: A size that is not a measurement at all. Both reach the comparisons as
 #: `nan <= tolerance` -> False ("did not hold") and `verdict_is_resolved(nan, n)`
 #: -> True ("resolved"), which is how an all-NaN table reported the claim
@@ -3760,6 +3856,86 @@ class TestTheNothingHoldsBranchDoesNotClaimItCouldNotTell(unittest.TestCase):
         self.assertIsNone(self.verdict["refutation_is_composed"])
         self.assertIn("refutation is composed: n/a", self.printed)
         self.assertNotIn("refutation is composed: False", self.printed)
+
+
+class TestTheScreenWithholdsThemOnTheCrossingBranchToo(unittest.TestCase):
+    """The screen gate reads the same field the artifact does, on every branch.
+
+    The companion to :class:`TestTheSuppressionIsKeyedOnWhatWasUnresolved`, which
+    pins the payload. ``main`` gated the ``(not resolved)`` label on
+    ``no_verdict_cause``, so on a CROSSING table that also carries unresolved
+    method-corners the screen printed the truncated holding sets and
+    ``ordering changed: True`` while the payload - correctly - withheld both.
+    Keying the screen on ``holding_sets_are_measurements`` makes the two
+    surfaces share one predicate, so they cannot drift apart again; mutating the
+    screen back to the cause left the whole glob green, which is why this class
+    exists.
+
+    The verdict is the REAL one, built by ``size_verdict``; only its delivery
+    into ``main`` is substituted, because no fixture small enough for this suite
+    reaches a crossing and an unresolvable method through the simulator at once.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+
+        cls.verdict = _verdict(_crossing_plus_unresolved_rows())
+        cls._tmp = tempfile.TemporaryDirectory()
+        store = _Store(Path(cls._tmp.name), n_held=45)
+        buffer = io.StringIO()
+        with (
+            mock.patch.object(ov, "size_verdict", lambda *a, **k: cls.verdict),
+            contextlib.redirect_stdout(buffer),
+        ):
+            ov.main(
+                [
+                    "--labels-dir",
+                    str(store.labels),
+                    "--briefs-dir",
+                    str(store.briefs),
+                    "--n-sims",
+                    "2",
+                    "--wcb-boot",
+                    "5",
+                    "--alignment-size",
+                ]
+            )
+        cls.printed = buffer.getvalue()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
+
+    def test_this_fixture_really_reaches_the_crossing_branch_with_unresolved_corners(self):
+        # The positive control, in both halves: the branch AND the thing that
+        # makes the sets vacuous on it.
+        self.assertEqual(self.verdict["refuting_branch"], ov.REFUTING_BRANCH_CROSSING)
+        self.assertIsNone(self.verdict["no_verdict_cause"])
+        self.assertTrue(self.verdict["unresolved"])
+
+    def test_no_holding_set_is_printed_as_a_measurement(self):
+        for arm in ov.BRACKET_ARMS:
+            with self.subTest(arm=arm):
+                self.assertNotIn(f"methods holding size, {arm}:", self.printed)
+
+    def test_the_ordering_answer_is_not_printed_either(self):
+        # It used to print `True` here - a refutation-shaped claim read off two
+        # sets that had each silently lost an unresolvable method.
+        self.assertNotIn("ordering changed: True", self.printed)
+        self.assertNotIn("ordering changed: False", self.printed)
+
+    def test_both_are_labelled_unresolved_instead(self):
+        self.assertIn(f"methods holding size: {ov.NOT_RESOLVED_LABEL}", self.printed)
+        self.assertIn(f"ordering changed: {ov.NOT_RESOLVED_LABEL}", self.printed)
+
+    def test_the_crossing_it_did_resolve_still_reaches_the_screen(self):
+        # Withholding two fields must not withhold the finding the table does
+        # support, or the suppression would be hiding the refutation itself.
+        self.assertIn("does NOT survive", self.printed)
+        self.assertIn("crosses only under alignment", self.printed)
 
 
 class TestTheDisclosureReachesBothSurfaces(unittest.TestCase):
