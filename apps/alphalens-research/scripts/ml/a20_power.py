@@ -562,8 +562,13 @@ def simulate_panel(
     :func:`power_bracket` for the identified set and :data:`ALIGNMENT_MEMO`.
 
     ``a20_overlap_power.simulate_overlapping_panel`` is a second copy of this
-    DGP and has NO aligned path. Its bit-identical pin against this function
-    therefore covers the off path only.
+    DGP and now has an aligned path of its own. It is not a second MECHANISM:
+    that module imports :class:`NoiseAlignment` and :func:`_alignment_scale`
+    from here and composes them the same way, ``sig + (noise) * s`` with one
+    scale for the WHOLE residual. At ``shared_fraction = 0`` its aligned path is
+    therefore bit-identical to this one, and
+    ``tests/test_a20_overlap_power.py::TestThePhiZeroEquivalence`` pins that on
+    both paths. If the composition there ever changes, that pin goes red.
     """
     names = list(effects)
     var_resid = residual_variance(burnt_signals, effects, sd_y)
@@ -1108,11 +1113,29 @@ class AlignmentEstimate:
     row_points: int
 
 
-def precision_disclosure() -> dict[str, Any]:
+#: The surfaces THIS module computes on the homoskedastic corner only. It is the
+#: default of ``precision_disclosure``'s one argument rather than a fixed entry,
+#: because a reusing module has different surfaces.
+PROJECTIONS_NOTE_HERE = (
+    "the cluster-count search and the gate DATE are computed on the "
+    "homoskedastic corner only; --alignment-bracket does not move them"
+)
+
+
+def precision_disclosure(*, projections_note: str | None = None) -> dict[str, Any]:
     """What every power figure this module prints is conditional on.
 
     Written into the JSON artifact as well as the human output, because the
     artifact is what a memo quotes and a silent artifact defeats the point.
+
+    Every entry but one is a measured fact and is shared verbatim by any module
+    that reuses this disclosure. ``projections_note`` is the exception: it names
+    WHICH of the caller's own surfaces are left on the homoskedastic corner, and
+    those differ per module. ``a20_overlap_power`` has no cluster-count search,
+    no gate date and no ``--alignment-bracket`` flag, so reusing this module's
+    sentence there would write a false claim into that module's artifact — which
+    is precisely what the disclosure exists to prevent. The default is this
+    module's own sentence, so its merged output and artifact do not move.
     """
     return {
         "memo": ALIGNMENT_MEMO,
@@ -1143,8 +1166,7 @@ def precision_disclosure() -> dict[str, Any]:
             f"identified"
         ),
         "projections_are_not_bracketed": (
-            "the cluster-count search and the gate DATE are computed on the "
-            "homoskedastic corner only; --alignment-bracket does not move them"
+            PROJECTIONS_NOTE_HERE if projections_note is None else projections_note
         ),
     }
 
