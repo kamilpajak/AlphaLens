@@ -2428,5 +2428,40 @@ class TestTheAlignmentFlags(unittest.TestCase):
         self.assertEqual(estimate.session_points, 6)
 
 
+class TestTheDisclosureDefaultIsUnchanged(unittest.TestCase):
+    """``precision_disclosure`` gained an argument; its default must not move.
+
+    ``a20_overlap_power`` reuses this disclosure rather than copying it, but one
+    key cannot be reused verbatim: ``projections_are_not_bracketed`` names the
+    cluster-count search, the gate DATE and ``--alignment-bracket``, none of
+    which exist in that module. So the sentence became an argument. This pins
+    that the argument's default is still the exact string this module's own
+    merged artifact carries.
+    """
+
+    _MERGED_NOTE = (
+        "the cluster-count search and the gate DATE are computed on the "
+        "homoskedastic corner only; --alignment-bracket does not move them"
+    )
+
+    def test_calling_it_with_no_argument_returns_the_merged_sentence(self):
+        self.assertEqual(
+            pre.precision_disclosure()["projections_are_not_bracketed"], self._MERGED_NOTE
+        )
+
+    def test_a_caller_with_other_surfaces_can_name_them_instead(self):
+        note = "only the per-arm sizes and powers are bracketed here"
+        self.assertEqual(
+            pre.precision_disclosure(projections_note=note)["projections_are_not_bracketed"], note
+        )
+
+    def test_overriding_the_note_moves_nothing_else(self):
+        default = pre.precision_disclosure()
+        overridden = pre.precision_disclosure(projections_note="something else entirely")
+        del default["projections_are_not_bracketed"]
+        del overridden["projections_are_not_bracketed"]
+        self.assertEqual(default, overridden)
+
+
 if __name__ == "__main__":
     unittest.main()

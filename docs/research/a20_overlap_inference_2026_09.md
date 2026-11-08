@@ -1,7 +1,10 @@
 # A20 overlap inference — does the #1227 power gate survive the 20-session window?
 
 **Status:** COMPLETE 2026-09-23, **re-run 2026-09-24 on a corrected panel — the assumption still
-holds, but the power figures are withdrawn.** The arrival-session wild cluster bootstrap keeps its
+holds, but the power figures are withdrawn.** **The size verdict itself is UNDER MEASUREMENT since
+2026-11-07**: it was measured under homoskedastic noise only, and the instrument to test it under
+feature-aligned noise now exists but has not been run on the real stores. See the 2026-11-07 note
+below. The arrival-session wild cluster bootstrap keeps its
 level on an overlap-aware panel in every cell of the grid, and that verdict survives the correction
 intact. The power column does not: it was computed on a panel counted in the wrong unit. See the
 correction box; §5 holds the original run and §6 the re-run.
@@ -14,6 +17,62 @@ power. See
 [`a20_simulator_precision_gap_2026_11_07.md`](a20_simulator_precision_gap_2026_11_07.md). The
 bootstrap LEVEL verdict, which is this memo's actual subject, is unaffected: it is a size check,
 not a power figure.
+
+**That last sentence is UNDER MEASUREMENT as of 2026-11-07 and was asserted, never measured.** A
+wild cluster bootstrap's SIZE under heteroskedasticity correlated with the regressor is not
+obviously its size under homoskedasticity, especially at few clusters, where leverage concentrates
+in the high-|x| clusters. This module chooses between four inference methods BY SIZE (7.5%,
+Bradley's liberal criterion) and refuses a power figure to any method that exceeds it — so if
+alignment moves the sizes, it can move WHICH METHOD WINS. `a20_overlap_power.py --alignment-size`
+now runs every cell of the grid at three noise corners (homoskedastic, session-aligned at gam 0.400,
+row-aligned at 0.205), paired draw for draw on one seed, and `size_verdict` reports a three-state
+answer: the claim survives, it does not, or the cells it depends on are unresolved. The sentence
+above may only be edited — restricted to the `kappa = 0` rows, or withdrawn — after the
+publishable 2000-panel x 399-bootstrap run on the REAL stores, with the per-arm table, its
+construction and its read date published beside it. It must not be edited on a low-count Mac run or
+on a fixture.
+
+**The instrument was repaired on 2026-11-08 and now reports BOTH readings (2026-11-08).** Nine
+defects in the three-arm size experiment were found by mutation and fixed; none of them moved the
+default homoskedastic path, whose twelve bit-identity digests still match. Two of the nine change
+what this memo will be able to quote:
+
+- `size_verdict` computes a SECOND verdict on the `kappa = 0` rows alone, reports
+  `refutation_is_composed`, and its verdict line states which reading refuted. A cell at
+  `kappa = fitted` applies the feature-dependence TWICE — a linear loading of the shared shock and
+  an exponential rescaling of the whole residual — and the two magnitudes do not add, so a
+  refutation arriving only from such a cell is a different claim from one the single-mechanism rows
+  share. `--single-mechanism-only` runs the `kappa = 0` grid on its own, which is what makes the
+  restriction this section pre-authorises reachable rather than hypothetical.
+- The ROW-level closed form for what alignment does to the two correlation forms is WITHDRAWN. It
+  was published as `E[exp(gam*x)]**2 / E[exp(2*gam*x)]` on the feature column, on the grounds that
+  the panel-wide normaliser cancels. It does not: that normaliser is `sqrt(mean(s**2))` over the
+  panel's OWN rows, so it is random and correlated with the rows whose covariance the form
+  describes. Read 2026-11-08 over 40 000 panels at panel seed 5, gam 0.6, eight clusters of two
+  rows, icc 0.4, phi 0, on the seeded column draw the suite's own fixture uses (`_z` of a
+  400-point draw from `default_rng(31)`), the form understated the simulated within-cluster
+  correlation by 1.04× on a gaussian column, 1.43× on a lognormal one at sigma 0.2, 5.06× at sigma
+  0.4 and 38.65× at sigma 0.6; the same four columns on a differently SHAPED panel, one cluster of
+  two rows, read 1.13× / 1.66× / 6.18× / 48.78×, so the quantity is not a function of the column
+  at all. The simulated side of that comparison carries a Monte Carlo error: at 40 000 panels its
+  standard deviation over ten independent panel seeds is 0.0051, which is about plus or minus
+  0.8× on the 38.65×, so a recomputation landing on 38.2× has reproduced this and not
+  contradicted it. The error is a function of the DRAW as well as of the shape: over 200
+  independent sigma 0.6 draws, seeds 0..199, 4 000 panels each, the ratio spans 1.01× to 132.60×
+  with a median 2.37×. Seed 31 reads 36.61× in that spread and ranks 195th of its 200 draws, the
+  97.5th percentile with five draws worse, so the headline is a bad draw and not a central
+  estimate; this is why the column seed is named here. Every figure in this paragraph is derived
+  from the recipe by `TestThereIsNoClosedFormForTheRowLevel`, in
+  `apps/alphalens-research/tests/test_a20_overlap_power.py`, which carries the three tables, their
+  seeds and the spread; that class also checks this paragraph against them.
+  These figures AGREE with the adversarial finding that prompted the deletion (1.45× / 5.10× /
+  38.8× on the lognormal columns). An earlier version of this paragraph said "2.00× on a lognormal
+  one" from a table whose lognormal column named no seed and did not reproduce; it understated the
+  error by about 22× at the worst column. Nothing in this memo quoted the form itself. Both
+  correlation statements under alignment are now MEASURED DIRECTIONS, and the exact form that
+  survives is the session level leaving the within-cluster correlation at the `icc`.
+
+Neither item edits the size claim above. The claim still waits for its real-store run.
 
 **Amends:** [`a20_power_preflight_2026_09.md`](a20_power_preflight_2026_09.md) §2.2 (the
 inference row) and §3 (the method). That memo's 83.9% is not withdrawn; this one asks whether the
@@ -122,6 +181,19 @@ above would be a check that could not fail:
 | 0.3 | −0.035 | **+0.067** |
 | 0.6 | −0.035 | **+0.166** |
 | 1.0 | −0.035 | **+0.245** |
+
+> **The magnitudes in this table are PENDING RE-MEASUREMENT (2026-11-07).**
+> `score_autocovariance` sorted sessions LEXICOGRAPHICALLY, so with ten or more clusters "lag 1"
+> paired session 1 with session 10. Measured 2026-11-07 on a 35-session fixture whose per-session
+> score is a monotone ramp, so the true value is known: calendar order reads **+0.914**,
+> lexicographic order **+0.527**. The sign of the error is **not** predictable — three AR(1) panels
+> at ρ = 0.6 gave gaps of +0.236, +0.019 and −0.142, so one read the scrambled panel as *more*
+> dependent than it is. The function now sorts numerically and refuses a label that is not an
+> integer string. The **conclusion** of this section survives both orderings (a level shift barely
+> reaches the coefficient, and the loaded channel does reach it), because the comparison that
+> carries it is between κ arms measured the same way. The **magnitudes** in the table do not
+> survive, and they are re-measured on the next real-store run rather than edited here from a
+> fixture.
 
 ### 3.3 Size before power
 
@@ -289,6 +361,17 @@ the bootstrap to mishandle.
 
 **Power: 64.6–66.2%, against a bar of 80%.** At 2000 simulations the Monte Carlo error is about
 ±1.1 points, so the widest reading is [64.0, 68.1]. The bar is not in that interval.
+
+**Those are HOMOSKEDASTIC-CORNER readings, and the bracket over them is withheld (2026-11-07).**
+Every figure in the table above comes from a DGP that gives each observation one noise scale, the
+assumption measured 1.36× optimistic on the slope standard error. `--alignment-size` now computes
+size AND power per corner, as fields on each row, and the module's two-stage refusal WINS over the
+bracket: a corner whose size missed the 7.5% bar contributes no power figure, and a span missing a
+corner is not a span, so `power_span` is withheld and `power_span_withheld_reason` names the arm
+responsible. That shape is deliberate. If alignment pushes the arrival-session bootstrap over the
+bar on the real panel, then no method is entitled to carry 64.6–66.2% there, and the driver must
+show that rather than fill the column. No bracketed replacement is published here until the
+2000-panel run on the real stores exists.
 
 **A corroboration that is not an echo.** `a20_power.py` reports 66.7% at the family of one on the
 2026-09-24 panel; this module reports 66.1% on the 2026-09-23 one. The two use DIFFERENT data
