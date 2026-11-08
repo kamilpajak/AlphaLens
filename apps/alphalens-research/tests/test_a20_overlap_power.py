@@ -1659,7 +1659,7 @@ class TestTheAlignmentFixtureIsNotDegenerate(unittest.TestCase):
 
 
 #: Floor on the spread of the scale itself, as a fraction of the spread
-#: MEASURED on the fixture below. Measured 2026-11-09 at ``_TEST_GAM`` on
+#: MEASURED on the fixture below. Measured 2026-11-08 at ``_TEST_GAM`` on
 #: distinct cluster slices: sd 0.4137 at the session level and 0.3803 at the row
 #: level. A fraction rather than a literal because the margin has to be
 #: proportional to the effect; against an exact no-op the scale has sd 0.0, so
@@ -1672,7 +1672,7 @@ class TestTheMarginalSpreadSurvivesAlignment(unittest.TestCase):
     """The normaliser holds ``sd_y``, and it is PANEL-WIDE for a reason.
 
     This class is named by the pairing classes as what pins the SCALE, and until
-    2026-11-09 it did not. Replacing ``a20_power._alignment_scale``'s return with
+    2026-11-08 it did not. Replacing ``a20_power._alignment_scale``'s return with
     ``np.ones`` - an exact no-op of the whole mechanism - left both of its cases
     green: the spread case passes trivially, because a scale of ones also leaves
     the spread at ``sd_y``, and the normaliser case compares the function's
@@ -2268,7 +2268,7 @@ class TestThePairingReachesTheSimulatedPanels(unittest.TestCase):
 
     THREE earlier versions of this class each asserted pairing one level away
     from the thing that runs, and each left a de-pairing mutation green. Measured
-    2026-11-08 and 2026-11-09, each mutation applied alone against the
+    2026-11-08 and 2026-11-08, each mutation applied alone against the
     ``test_a20*.py`` glob:
 
     | version asserted on                  | mutation left green                 |
@@ -2443,7 +2443,7 @@ class TestThePairingReachesTheSimulatedPanels(unittest.TestCase):
 _EVERY_METHOD_OFFSETS = list(range(40))
 _EVERY_METHOD_SIZES = [2] * 40
 
-#: Clusters each method leaves on that calendar, measured 2026-11-09. Asserted,
+#: Clusters each method leaves on that calendar, measured 2026-11-08. Asserted,
 #: not just recorded: a method that silently collapsed to one block would make
 #: its pairing case pass while testing the same labels as another method.
 _CLUSTERS_PER_METHOD = {"arrival": 40, "block5": 8, "block10": 4, "block20": 2}
@@ -2461,7 +2461,7 @@ class TestThePairingHoldsForEveryPublishedMethod(unittest.TestCase):
     ``TestThePairingReachesTheSimulatedPanels`` runs a ``_two_signal_cell``,
     whose method is ``arrival``. The method reaches the inference only through
     ``labels_for_method``, so a de-pairing conditioned on the method is a
-    plausible shape and was entirely unobserved: measured 2026-11-09,
+    plausible shape and was entirely unobserved: measured 2026-11-08,
     ``if alignment is not None and method != ARRIVAL_METHOD: rng.normal()``
     inside ``rejection_rate`` left the whole ``test_a20*.py`` glob green at 508
     tests, and at ``block5`` it moves the row corner's size from 0.075 to 0.085
@@ -2595,7 +2595,7 @@ class TestThePairingDoesNotDependOnHowManyPanelsRun(unittest.TestCase):
     that holds, a break conditioned on ``n_sims`` - or on a panel index below 2K
     - shows up as the prefix diverging.
 
-    Measured 2026-11-09, and this is why the class exists:
+    Measured 2026-11-08, and this is why the class exists:
     ``if alignment is not None and n_sims > 5: rng.normal()`` inside
     ``rejection_rate`` left the whole ``test_a20*.py`` glob green at 508 tests.
     A de-pairing inert on every fixture and active on every real run is the

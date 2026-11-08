@@ -72,7 +72,10 @@ what this memo will be able to quote:
   correlation statements under alignment are now MEASURED DIRECTIONS, and the exact form that
   survives is the session level leaving the within-cluster correlation at the `icc`.
 
-**CORRECTION, 2026-11-09 — the defect count above, and what the pairing claim rests on.**
+**CORRECTION, 2026-11-08 — the defect count above, and what the pairing claim rests on.**
+(An earlier version of this note dated these measurements 2026-11-09, which is tomorrow. They
+were made on 2026-11-08; the date is corrected in place rather than in a second box, because a
+box would leave two dates standing for one measurement.)
 The sentence above reads "Nine defects in the three-arm size experiment were found by mutation and
 fixed". That is the FIRST repair round's count. Three rounds ran in total, on 9, 11 and 18 findings;
 5 of the first 9 and 2 of the next 11 came back only half fixed and were re-opened, and two of the
@@ -82,7 +85,7 @@ attached to.
 The pairing claim in this section — "paired draw for draw on one seed", which is what makes a
 corner-to-corner difference the MECHANISM rather than three independent Monte Carlo draws — was
 checked more narrowly than it was stated, and is now checked along both axes it was missing.
-Measured 2026-11-09, each mutation applied alone to `rejection_rate` against the `test_a20*.py`
+Measured 2026-11-08, each mutation applied alone to `rejection_rate` against the `test_a20*.py`
 glob at 508 tests:
 
 | mutation | before | after |
