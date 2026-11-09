@@ -93,26 +93,64 @@ class TestTheLakeReadIsRestricted(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.stores = _Stores(Path(tmp.name))
         self.stores.write_lake_run("20261105T010000000Z", [_news_row("wanted"), _news_row("junk")])
+        # The window read is cached, so every test starts from a cold cache or
+        # it would read a frame another test wrote.
+        news_source.load_lake_window.cache_clear()
+        self.addCleanup(news_source.load_lake_window.cache_clear)
+
+    def _with_lake(self, needed_ids) -> pd.DataFrame:
+        with mock.patch.object(news_source, "READ_NEWS_LAKE", True):
+            return news_source.with_lake(
+                pd.DataFrame(), self.stores.lake, _ASOF, 30, needed_ids=needed_ids
+            )
 
     def test_only_the_ids_asked_for_come_back(self) -> None:
-        got = news_source.load_lake_window(
-            self.stores.lake, _ASOF, lookback_days=30, needed_ids=frozenset({"wanted"})
-        )
-        self.assertEqual(list(got["id"]), ["wanted"])
+        self.assertEqual(list(self._with_lake(frozenset({"wanted"}))["id"]), ["wanted"])
 
-    def test_no_restriction_reads_everything(self) -> None:
-        """Back-compatible: the parameter is optional and absent means today."""
-        got = news_source.load_lake_window(self.stores.lake, _ASOF, lookback_days=30)
-        self.assertEqual(sorted(got["id"]), ["junk", "wanted"])
+    def test_no_restriction_keeps_everything(self) -> None:
+        """``None`` means no restriction, which is the pre-existing behaviour."""
+        self.assertEqual(sorted(self._with_lake(None)["id"]), ["junk", "wanted"])
 
-    def test_an_empty_id_set_reads_nothing(self) -> None:
-        """A theme with no events must not pay for a lake read at all."""
+    def test_an_empty_id_set_never_touches_the_lake(self) -> None:
+        """A theme with no events must not pay for the read, even cold.
+
+        The pushdown this replaced got that for free. An in-memory filter has to
+        ask for it, so the property is asserted rather than assumed.
+        """
         with mock.patch.object(news_source.pd, "read_parquet") as spy:
-            got = news_source.load_lake_window(
-                self.stores.lake, _ASOF, lookback_days=30, needed_ids=frozenset()
-            )
+            got = self._with_lake(frozenset())
         self.assertTrue(got.empty)
         spy.assert_not_called()
+
+    def test_the_window_is_read_ONCE_however_many_themes_ask(self) -> None:
+        """The whole point of the change: one read per run, not one per theme.
+
+        Measured on the production lake, a per-theme read cost about 5.4 s
+        because all 93 files are opened whatever is asked for.
+        """
+        real = news_source.pd.read_parquet
+        calls: list[object] = []
+
+        def counting(path, *a, **kw):
+            calls.append(path)
+            return real(path, *a, **kw)
+
+        with mock.patch.object(news_source.pd, "read_parquet", counting):
+            first = self._with_lake(frozenset({"wanted"}))
+            after_first = len(calls)
+            second = self._with_lake(frozenset({"junk"}))
+        self.assertEqual(list(first["id"]), ["wanted"])
+        self.assertEqual(list(second["id"]), ["junk"])
+        self.assertEqual(
+            len(calls),
+            after_first,
+            f"the second theme re-read the lake: {len(calls)} reads against {after_first}",
+        )
+
+    def test_the_cached_frame_is_not_mutated_by_a_restriction(self) -> None:
+        """A filter must not narrow what the next theme sees."""
+        self.assertEqual(list(self._with_lake(frozenset({"wanted"}))["id"]), ["wanted"])
+        self.assertEqual(sorted(self._with_lake(None)["id"]), ["junk", "wanted"])
 
 
 class TestTheResolverAsksOnlyForWhatItNeeds(unittest.TestCase):
@@ -122,6 +160,8 @@ class TestTheResolverAsksOnlyForWhatItNeeds(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.stores = _Stores(Path(tmp.name))
+        news_source.load_lake_window.cache_clear()
+        self.addCleanup(news_source.load_lake_window.cache_clear)
         # Two orphans, one per theme. Neither is in the view.
         self.stores.write_view([_news_row("in_view")])
         self.stores.write_lake_run(
@@ -133,14 +173,14 @@ class TestTheResolverAsksOnlyForWhatItNeeds(unittest.TestCase):
 
     def test_the_other_theme_s_news_row_is_never_read(self) -> None:
         seen: list[frozenset[str]] = []
-        real = news_source.load_lake_window
+        real = news_source.with_lake
 
-        def spy(lake_dir, asof, lookback_days, *, needed_ids=None):
+        def spy(view, lake_dir, asof, lookback_days, *, needed_ids=None):
             seen.append(frozenset(needed_ids) if needed_ids is not None else None)
-            return real(lake_dir, asof, lookback_days, needed_ids=needed_ids)
+            return real(view, lake_dir, asof, lookback_days, needed_ids=needed_ids)
 
         with mock.patch.object(news_source, "READ_NEWS_LAKE", True):
-            with mock.patch.object(news_source, "load_lake_window", spy):
+            with mock.patch.object(news_source, "with_lake", spy):
                 payload = catalyst_resolver.find_trigger_event(
                     theme=_THEME,
                     asof=_ASOF,
@@ -178,6 +218,8 @@ class TestTheBodyIsMeasuredAndDropped(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.stores = _Stores(Path(tmp.name))
+        news_source.load_lake_window.cache_clear()
+        self.addCleanup(news_source.load_lake_window.cache_clear)
 
     def test_the_lake_frame_carries_the_length_and_not_the_text(self) -> None:
         self.stores.write_lake_run("20261105T010000000Z", [_news_row("a")])

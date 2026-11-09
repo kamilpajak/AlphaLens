@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+from functools import lru_cache
 from pathlib import Path
 
 import pandas as pd
@@ -94,6 +95,13 @@ READ_NEWS_LAKE = False
 NEWS_SOURCE_VIEW = "view"
 NEWS_SOURCE_VIEW_PLUS_LAKE = "view+lake"
 
+#: ONE window. At about 1.46 GB per cached frame this cannot copy the view
+#: read's size of 8: four windows in flight would be 5.8 GB resident on a host
+#: with 19.5 GB. The access pattern is many themes against one
+#: (asof, lookback) per run, so one entry serves the run; a second asof evicts
+#: and pays the 7 s read again, which is a cost and not a failure.
+_LAKE_CACHE_SIZE = 1
+
 _LAKE_SESSION_PREFIX = "session_date="
 _LAKE_RUN_GLOB = "run=*.parquet"
 _NEWS_ID_COLUMN = "id"
@@ -120,27 +128,23 @@ def news_source_token() -> str | None:
     return NEWS_SOURCE_VIEW_PLUS_LAKE if READ_NEWS_LAKE else None
 
 
-def load_lake_window(
-    lake_dir: Path,
-    asof: dt.date,
-    lookback_days: int,
-    *,
-    needed_ids: frozenset[str] | None = None,
-) -> pd.DataFrame:
+@lru_cache(maxsize=_LAKE_CACHE_SIZE)
+def load_lake_window(lake_dir: Path, asof: dt.date, lookback_days: int) -> pd.DataFrame:
     """The runs of every ``session_date`` inside the window, concatenated.
 
-    ``needed_ids`` restricts the read to news ids some event actually points at,
-    pushed down to the parquet reader so the rows are never materialised.
-    Measured on the production lake, 30-day window, asof 2026-11-08: of the
-    12,754 ids the lake holds, 6,579 (51.6%) are referenced by no event at all,
-    and of the 7,440 ids only the lake has, just 861 (11.6%) have an event. The
-    lake stores the raw per-source union from BEFORE dedup, clustering, the
-    single-day filter and the cap, while events come only from VIEW rows, so most
-    of an unrestricted read cannot join by construction. That read reached
-    10.01 GB RSS on a 30-day window and was killed.
+    CACHED, because the cost is in opening the files and not in the rows kept.
+    Measured on the production lake, 30-day window, asof 2026-11-08: restricting
+    the read to the ids an event points at cut rows 36,255 -> 17,366 and the read
+    peak 6.29 -> 3.83 GB, but asking for a single theme's TWO ids still cost
+    5.65 s, because all 93 files are opened either way. Restricting rows shrinks
+    the result, not the read. So the window is read ONCE per
+    ``(lake_dir, asof, lookback_days)`` and :func:`with_lake` filters it in
+    memory, which turns one read per theme into one read per run at the same
+    peak.
 
-    ``None`` means no restriction, which is the pre-existing behaviour. An EMPTY
-    set means no event needs anything, and then no file is opened at all.
+    Each body is measured as its file is read and the column is dropped, which
+    is what makes caching affordable: ``body`` is 4,623 MB of the window's
+    4,658 MB uncompressed (99.2%) and has no consumer below the news join.
 
     The lake's layout is a directory per session date holding one parquet per
     ingest run, so this cannot reuse ``catalyst_resolver._load_window``, which
@@ -150,11 +154,6 @@ def load_lake_window(
     """
     if not lake_dir.exists():
         return pd.DataFrame()
-    if needed_ids is not None and not needed_ids:
-        return pd.DataFrame()
-    read_kwargs: dict[str, object] = {}
-    if needed_ids is not None:
-        read_kwargs["filters"] = [(_NEWS_ID_COLUMN, "in", sorted(needed_ids))]
     lo = asof - dt.timedelta(days=lookback_days)
     frames: list[pd.DataFrame] = []
     for session in sorted(lake_dir.glob(f"{_LAKE_SESSION_PREFIX}*")):
@@ -168,7 +167,7 @@ def load_lake_window(
             continue
         for path in sorted(session.glob(_LAKE_RUN_GLOB)):
             try:
-                frame = pd.read_parquet(path, **read_kwargs)
+                frame = pd.read_parquet(path)
             except Exception as exc:
                 logger.warning("failed to read %s: %s", path, exc)
                 continue
@@ -273,7 +272,12 @@ def with_lake(
     """
     if not READ_NEWS_LAKE:
         return view
-    lake = load_lake_window(lake_dir, asof, lookback_days, needed_ids=needed_ids)
+    if needed_ids is not None and not needed_ids:
+        # Nothing in hand can join, so the lake is not touched even on a cold
+        # cache. The pushdown this replaced got that for free; an in-memory
+        # filter has to ask for it.
+        return view
+    lake = load_lake_window(lake_dir, asof, lookback_days)
     if lake.empty:
         # The cohort key records the INTENT to read the lake. Without this line
         # an absent or unmounted lake makes the resolver fall back to the view
@@ -287,6 +291,10 @@ def with_lake(
             asof.isoformat(),
             NEWS_SOURCE_VIEW_PLUS_LAKE,
         )
+    if needed_ids is not None and not lake.empty:
+        # Never assign to the cached frame: a boolean mask returns a new object,
+        # and merge_news_sources concatenates rather than mutating its inputs.
+        lake = lake[lake[_NEWS_ID_COLUMN].astype(str).isin(needed_ids)]
     return merge_news_sources(view, lake)
 
 
