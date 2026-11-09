@@ -95,11 +95,18 @@ READ_NEWS_LAKE = False
 NEWS_SOURCE_VIEW = "view"
 NEWS_SOURCE_VIEW_PLUS_LAKE = "view+lake"
 
-#: ONE window. At about 1.46 GB per cached frame this cannot copy the view
-#: read's size of 8: four windows in flight would be 5.8 GB resident on a host
-#: with 19.5 GB. The access pattern is many themes against one
-#: (asof, lookback) per run, so one entry serves the run; a second asof evicts
-#: and pays the 7 s read again, which is a cost and not a failure.
+#: ONE window, because exactly one is ever in flight: every production caller
+#: resolves against the lake beside its own news dir at one ``asof`` and
+#: ``DEFAULT_LOOKBACK_DAYS``, so a second entry would never be hit.
+#:
+#: NOT because a window is expensive to retain. An earlier version of this
+#: comment said "about 1.46 GB per cached frame" and that four would be 5.8 GB.
+#: Both figures were wrong by about 31x: 1.46 GB is the READ PEAK, dominated by
+#: one parquet's body text being materialised and thrown away. Measured
+#: ``memory_usage(deep=True)`` of the real cached frame — 30-day window, asof
+#: 2026-11-08, 36,246 rows, 12,754 distinct ids — is **45.5 MB**, and four real
+#: windows held at once are 185.9 MB. Anyone who needs a second window in
+#: flight should raise this number; the old comment would have told them not to.
 _LAKE_CACHE_SIZE = 1
 
 _LAKE_SESSION_PREFIX = "session_date="
@@ -129,7 +136,9 @@ def news_source_token() -> str | None:
 
 
 @lru_cache(maxsize=_LAKE_CACHE_SIZE)
-def load_lake_window(lake_dir: Path, asof: dt.date, lookback_days: int) -> pd.DataFrame:
+def _read_lake_window(
+    lake_dir: Path, asof: dt.date, lookback_days: int, /
+) -> tuple[pd.DataFrame, bool]:
     """The runs of every ``session_date`` inside the window, concatenated.
 
     CACHED, because the cost is in opening the files and not in the rows kept.
@@ -153,7 +162,8 @@ def load_lake_window(lake_dir: Path, asof: dt.date, lookback_days: int) -> pd.Da
     run the ingest has no lake at all.
     """
     if not lake_dir.exists():
-        return pd.DataFrame()
+        return pd.DataFrame(), False
+    complete = True
     lo = asof - dt.timedelta(days=lookback_days)
     frames: list[pd.DataFrame] = []
     for session in sorted(lake_dir.glob(f"{_LAKE_SESSION_PREFIX}*")):
@@ -170,11 +180,40 @@ def load_lake_window(lake_dir: Path, asof: dt.date, lookback_days: int) -> pd.Da
                 frame = pd.read_parquet(path)
             except Exception as exc:
                 logger.warning("failed to read %s: %s", path, exc)
+                complete = False
                 continue
             frames.append(_measure_and_drop_body(frame))
     if not frames:
-        return pd.DataFrame()
-    return _within_window(pd.concat(frames, ignore_index=True), asof, lookback_days)
+        return pd.DataFrame(), complete
+    return _within_window(pd.concat(frames, ignore_index=True), asof, lookback_days), complete
+
+
+def load_lake_window(lake_dir: Path, asof: dt.date, lookback_days: int, /) -> pd.DataFrame:
+    """The cached window, but an INCOMPLETE read is never cached.
+
+    The cache turned a transient read failure from a one-theme problem into a
+    whole-run one. ``_read_lake_window`` treats two states as answers: a lake
+    directory that is not there yet, and a file that would not open. Before the
+    cache each theme re-read the lake, so a run file caught mid-write cost one
+    theme. Cached, the short window is frozen and served to every later theme,
+    and the only alarm this module has fires on an EMPTY window and never on a
+    short one — so the orphan rows this whole change exists to recover are
+    dropped for the rest of the run, in silence.
+
+    So a frame built from an incomplete read is returned once and then evicted.
+    The next caller pays the read again, which is the behaviour the cache
+    replaced and is correct when the previous answer was not an answer.
+
+    The key is POSITIONAL-ONLY. ``lru_cache`` keys by call shape, so
+    ``lookback_days=30`` and ``30`` are two entries; at ``maxsize=1`` two
+    spellings in one run evict each other on every call and the hit rate is
+    zero. Positional-only makes the second spelling a ``TypeError`` instead of a
+    silent cache miss.
+    """
+    frame, complete = _read_lake_window(lake_dir, asof, lookback_days)
+    if not complete:
+        _read_lake_window.cache_clear()
+    return frame
 
 
 def _within_window(frame: pd.DataFrame, asof: dt.date, lookback_days: int) -> pd.DataFrame:
@@ -209,8 +248,11 @@ def _measure_and_drop_body(frame: pd.DataFrame) -> pd.DataFrame:
     """
     if _NEWS_BODY_COLUMN not in frame.columns:
         return frame
-    frame[_BODY_LENGTH_COLUMN] = frame[_NEWS_BODY_COLUMN].fillna("").astype(str).str.len()
-    return frame.drop(columns=[_NEWS_BODY_COLUMN])
+    # `assign` returns a NEW frame. An in-place column assignment would mutate
+    # whatever was handed in, and both the view read and the lake read are
+    # `lru_cache`d — so the caller would be editing the cache.
+    lengths = frame[_NEWS_BODY_COLUMN].fillna("").astype(str).str.len()
+    return frame.assign(**{_BODY_LENGTH_COLUMN: lengths}).drop(columns=[_NEWS_BODY_COLUMN])
 
 
 def merge_news_sources(view: pd.DataFrame, lake: pd.DataFrame) -> pd.DataFrame:
@@ -295,7 +337,14 @@ def with_lake(
         # Never assign to the cached frame: a boolean mask returns a new object,
         # and merge_news_sources concatenates rather than mutating its inputs.
         lake = lake[lake[_NEWS_ID_COLUMN].astype(str).isin(needed_ids)]
-    return merge_news_sources(view, lake)
+    # The VIEW's body goes the same way as the lake's. Measured: it is 98.8% of
+    # the view's bytes, so keeping it re-materialised 575 MB the lake read had
+    # just avoided. And it removes a worse thing than the bytes: with only the
+    # lake's body dropped, a merged row the lake won carried a float NaN in
+    # `body`, and `bool(nan)` is True — a truthiness guard would read "this row
+    # has text" while any `.str` or `len()` path got NaN. With the column absent
+    # from the output, a future consumer gets a KeyError instead of a lie.
+    return merge_news_sources(_measure_and_drop_body(view), lake)
 
 
 __all__ = [

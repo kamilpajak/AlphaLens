@@ -32,7 +32,12 @@ _ASOF = dt.date(2026, 11, 5)
 _THEME = "quantum_computing"
 _OTHER_THEME = "steel"
 _TICKER = "IONQ"
-_BODY = "The press release text."
+#: Carries an em dash on purpose. A mutation recording the body length in BYTES
+#: instead of CHARACTERS passed every test, and in production it flips the
+#: longest-body tie for the 8.1% of real news rows whose two lengths differ.
+_BODY = "The press release text\u2014at last."
+_BODY_CHARS = len(_BODY)
+_BODY_BYTES = len(_BODY.encode("utf-8"))
 
 
 def _news_row(news_id: str, *, url: str | None = None) -> dict:
@@ -95,8 +100,8 @@ class TestTheLakeReadIsRestricted(unittest.TestCase):
         self.stores.write_lake_run("20261105T010000000Z", [_news_row("wanted"), _news_row("junk")])
         # The window read is cached, so every test starts from a cold cache or
         # it would read a frame another test wrote.
-        news_source.load_lake_window.cache_clear()
-        self.addCleanup(news_source.load_lake_window.cache_clear)
+        news_source._read_lake_window.cache_clear()
+        self.addCleanup(news_source._read_lake_window.cache_clear)
 
     def _with_lake(self, needed_ids) -> pd.DataFrame:
         with mock.patch.object(news_source, "READ_NEWS_LAKE", True):
@@ -147,6 +152,35 @@ class TestTheLakeReadIsRestricted(unittest.TestCase):
             f"the second theme re-read the lake: {len(calls)} reads against {after_first}",
         )
 
+    def test_the_cached_frame_is_not_REORDERED_by_a_merge(self) -> None:
+        """Narrowing is not the only way to damage a shared object.
+
+        The tie rule leans on the view being concatenated first under a stable
+        sort, so a later theme's winner changes if the cached frame's row order
+        moves. A mutation sorting both input frames in place left all 38 tests
+        green, because the suite pinned only that the frame is not narrowed.
+        """
+        # The ids must be written in an order a sort would CHANGE, or the
+        # mutation this pins is a no-op on the fixture and the test passes for
+        # the wrong reason — which is what the first version of it did.
+        self.stores.write_lake_run("20261105T020000000Z", [_news_row("aaa"), _news_row("zzz")])
+        news_source._read_lake_window.cache_clear()
+        with mock.patch.object(news_source, "READ_NEWS_LAKE", True):
+            cached = news_source.load_lake_window(self.stores.lake, _ASOF, 30)
+            before = list(cached["id"])
+            self.assertNotEqual(
+                before, sorted(before, reverse=True), "the fixture order must not be pre-sorted"
+            )
+            news_source.with_lake(
+                pd.DataFrame(), self.stores.lake, _ASOF, 30, needed_ids=frozenset({"wanted"})
+            )
+            news_source.with_lake(pd.DataFrame(), self.stores.lake, _ASOF, 30, needed_ids=None)
+        self.assertEqual(
+            list(news_source.load_lake_window(self.stores.lake, _ASOF, 30)["id"]),
+            before,
+            "a merge reordered the cached frame",
+        )
+
     def test_the_cached_frame_is_not_mutated_by_a_restriction(self) -> None:
         """A filter must not narrow what the next theme sees."""
         self.assertEqual(list(self._with_lake(frozenset({"wanted"}))["id"]), ["wanted"])
@@ -160,8 +194,8 @@ class TestTheResolverAsksOnlyForWhatItNeeds(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.stores = _Stores(Path(tmp.name))
-        news_source.load_lake_window.cache_clear()
-        self.addCleanup(news_source.load_lake_window.cache_clear)
+        news_source._read_lake_window.cache_clear()
+        self.addCleanup(news_source._read_lake_window.cache_clear)
         # Two orphans, one per theme. Neither is in the view.
         self.stores.write_view([_news_row("in_view")])
         self.stores.write_lake_run(
@@ -207,8 +241,59 @@ class TestTheResolverAsksOnlyForWhatItNeeds(unittest.TestCase):
         self.assertEqual(sorted(got["id"]), ["in_view", "mine"])
 
 
-if __name__ == "__main__":
-    unittest.main()
+class TestAnIncompleteReadIsNeverCached(unittest.TestCase):
+    """The cache turned a one-theme blip into a whole-run one.
+
+    `_read_lake_window` treats two transient states as answers: a lake that is
+    not there yet, and a file that would not open. Cached, the short window is
+    served to every later theme, and the module's only alarm fires on an EMPTY
+    window and never on a short one.
+    """
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.stores = _Stores(Path(tmp.name))
+        news_source._read_lake_window.cache_clear()
+        self.addCleanup(news_source._read_lake_window.cache_clear)
+
+    def test_a_file_that_failed_once_is_not_missing_for_the_whole_run(self) -> None:
+        self.stores.write_lake_run("20261105T010000000Z", [_news_row("a")])
+        self.stores.write_lake_run("20261105T020000000Z", [_news_row("b")])
+        real = news_source.pd.read_parquet
+        failed: list[str] = []
+
+        def flaky(path, *a, **kw):
+            if "run=20261105T020000000Z" in str(path) and not failed:
+                failed.append(str(path))
+                raise OSError("parquet magic bytes not found")
+            return real(path, *a, **kw)
+
+        with mock.patch.object(news_source.pd, "read_parquet", flaky):
+            first = news_source.load_lake_window(self.stores.lake, _ASOF, 30)
+            second = news_source.load_lake_window(self.stores.lake, _ASOF, 30)
+        self.assertEqual(list(first["id"]), ["a"], "the first read is short, which is expected")
+        self.assertEqual(
+            sorted(second["id"]),
+            ["a", "b"],
+            "the second read served the cached PARTIAL window",
+        )
+
+    def test_a_lake_that_appears_later_is_not_absent_for_the_whole_run(self) -> None:
+        absent = self.stores.lake.parent / "not_mounted_yet"
+        self.assertTrue(news_source.load_lake_window(absent, _ASOF, 30).empty)
+        (absent / f"session_date={_ASOF.isoformat()}").mkdir(parents=True)
+        pd.DataFrame([_news_row("late")]).to_parquet(
+            absent / f"session_date={_ASOF.isoformat()}" / "run=20261105T010000000Z.parquet",
+            index=False,
+        )
+        got = news_source.load_lake_window(absent, _ASOF, 30)
+        self.assertEqual(list(got["id"]), ["late"], "an absent lake was cached as the answer")
+
+    def test_a_keyword_lookback_is_refused_rather_than_silently_missing_the_cache(self) -> None:
+        """Two spellings of one key evict each other at maxsize=1."""
+        with self.assertRaises(TypeError):
+            news_source.load_lake_window(self.stores.lake, _ASOF, lookback_days=30)  # type: ignore[misc]
 
 
 class TestTheBodyIsMeasuredAndDropped(unittest.TestCase):
@@ -218,14 +303,31 @@ class TestTheBodyIsMeasuredAndDropped(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.stores = _Stores(Path(tmp.name))
-        news_source.load_lake_window.cache_clear()
-        self.addCleanup(news_source.load_lake_window.cache_clear)
+        news_source._read_lake_window.cache_clear()
+        self.addCleanup(news_source._read_lake_window.cache_clear)
 
     def test_the_lake_frame_carries_the_length_and_not_the_text(self) -> None:
         self.stores.write_lake_run("20261105T010000000Z", [_news_row("a")])
-        got = news_source.load_lake_window(self.stores.lake, _ASOF, lookback_days=30)
+        got = news_source.load_lake_window(self.stores.lake, _ASOF, 30)
         self.assertNotIn("body", got.columns)
-        self.assertEqual(list(got[news_source._BODY_LENGTH_COLUMN]), [len(_BODY)])
+        self.assertEqual(list(got[news_source._BODY_LENGTH_COLUMN]), [_BODY_CHARS])
+        self.assertNotEqual(
+            _BODY_CHARS, _BODY_BYTES, "the fixture must make chars and bytes differ"
+        )
+
+    def test_the_merged_frame_carries_no_body_from_either_source(self) -> None:
+        """A missing COLUMN fails loudly; a NaN in `body` would lie.
+
+        The view's body is 98.8% of the view's bytes, so keeping it
+        re-materialised 575 MB the lake read had just avoided — and a lake-won
+        row carried a float NaN, which is truthy.
+        """
+        self.stores.write_view([_news_row("v")])
+        self.stores.write_lake_run("20261105T010000000Z", [_news_row("l")])
+        with mock.patch.object(news_source, "READ_NEWS_LAKE", True):
+            got = catalyst_resolver._load_news_window(self.stores.view, _ASOF, lookback_days=30)
+        self.assertEqual(sorted(got["id"]), ["l", "v"])
+        self.assertNotIn("body", got.columns)
 
     def test_the_longest_body_rule_still_works_across_the_two_sources(self) -> None:
         """The rule reads the recorded number, so dropping the text cannot break it.
@@ -256,3 +358,7 @@ class TestTheBodyIsMeasuredAndDropped(unittest.TestCase):
         lake = news_source._measure_and_drop_body(lake_frame)
         got = news_source.merge_news_sources(view, lake)
         self.assertEqual(got.iloc[0]["url"], "https://view.test/shared")
+
+
+if __name__ == "__main__":
+    unittest.main()
