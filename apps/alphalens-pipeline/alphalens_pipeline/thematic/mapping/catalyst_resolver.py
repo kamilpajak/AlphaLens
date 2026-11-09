@@ -35,6 +35,7 @@ from alphalens_pipeline.thematic.extraction.templates.holdout import (
     HOLDOUT_SUPERSEDED_BY_TEMPLATE,
     TemplateMetrics,
 )
+from alphalens_pipeline.thematic.mapping import news_source
 from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayload
 
 logger = logging.getLogger(__name__)
@@ -233,6 +234,32 @@ def _load_window(parquet_dir: Path, asof: dt.date, lookback_days: int) -> pd.Dat
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, ignore_index=True)
+
+
+def _load_news_window(
+    news_dir: Path,
+    asof: dt.date,
+    lookback_days: int,
+    *,
+    lake_dir: Path | None = None,
+) -> pd.DataFrame:
+    """The news to join events against. See :mod:`news_source` for WHY.
+
+    ``lake_dir`` defaults to ``None`` and is resolved as a SIBLING of
+    ``news_dir``, never to an absolute path. An absolute default is early-bound
+    at ``def`` time, so a caller that isolated its news store to a temporary
+    directory - every golden fixture, both recorders and about sixty resolver
+    tests - would join the PRODUCTION lake the moment the flag flipped, and
+    could not opt out by patching a module constant. Deriving it means isolating
+    the news store isolates the lake with it, which is the convention
+    ``news_ingest.ingest_daily`` already documents for the write side.
+    """
+    return news_source.with_lake(
+        _load_window(news_dir, asof, lookback_days),
+        lake_dir if lake_dir is not None else news_source.lake_dir_for(news_dir),
+        asof,
+        lookback_days,
+    )
 
 
 def _apply_noise_and_blocklist_filters(joined: pd.DataFrame) -> pd.DataFrame:
@@ -631,7 +658,7 @@ def _load_catalyst_window(
     if matches.empty:
         return None
 
-    news = _load_window(news_dir, asof, lookback_days)
+    news = _load_news_window(news_dir, asof, lookback_days)
     if news.empty:
         return None
 
@@ -817,7 +844,7 @@ def build_template_entity_index(
     if events.empty:
         return {}
 
-    news = _load_window(news_dir, asof, lookback_days)
+    news = _load_news_window(news_dir, asof, lookback_days)
     if news.empty:
         return {}
 

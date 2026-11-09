@@ -17,6 +17,7 @@ from unittest.mock import patch
 
 import pandas as pd
 from alphalens_pipeline.thematic.mapping import channel_assessor, orchestrator, theme_mapper
+from alphalens_pipeline.thematic.mapping import news_source as news_source_module
 from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayload
 
 from tests.thematic.mapping_stubs import stub_assessor, theme_proposal
@@ -57,6 +58,14 @@ def _cfg(**over) -> str:
         channel_config_version=over.pop(
             "channel_config_version", channel_assessor.channel_config_version(model=model)
         ),
+        # Read from the live flag rather than written out, so this helper
+        # composes the token the way `orchestrator` does. Hard-coding it meant
+        # that turning the news-lake flag on made three tests in this file fail
+        # with `np.False_ is not true` — a message naming nothing about the news
+        # source, whose cheapest repair is to edit this helper and ship a cohort
+        # break with no amendment. A later test that passes a literal
+        # `news_source=` here would diverge from production the same way.
+        news_source=over.pop("news_source", news_source_module.news_source_token()),
     )
 
 

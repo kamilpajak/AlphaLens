@@ -534,7 +534,16 @@ BASELINE: dict[str, int] = {
     # Counted with `wc -l` on the merged file, not from the diff.
     "apps/alphalens-pipeline/alphalens_pipeline/feedback/selection_label.py": 1394,
     "apps/alphalens-pipeline/alphalens_pipeline/thematic/mapping/channel_assessor.py": 1267,
-    "apps/alphalens-pipeline/alphalens_pipeline/thematic/mapping/orchestrator.py": 1626,
+    # Raised by 3 in the news-lake change: one import of
+    # `mapping.news_source` in the existing import block, and one
+    # `news_source=news_source.news_source_token()` line at each of the two
+    # `mapper_config_version` call sites. The token must record which news store
+    # the catalyst was resolved against, and passing it UNCONDITIONALLY at both
+    # sites is what makes the cohort key move on its own when the flag flips —
+    # a conditional would be a convention to remember. The lake reader, the
+    # union rule and the flag went to their own module instead of growing this
+    # one; these three lines are the whole footprint here.
+    "apps/alphalens-pipeline/alphalens_pipeline/thematic/mapping/orchestrator.py": 1629,
     "apps/alphalens-research/alphalens_research/eval/faithfulness.py": 1034,
     # Was EXACTLY at the 1000 ceiling, so publishing the walked sub-window
     # needed the room: the walk is the only side that knows which bars the
