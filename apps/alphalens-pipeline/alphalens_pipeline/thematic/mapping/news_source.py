@@ -58,9 +58,34 @@ def lake_dir_for(news_dir: Path) -> Path:
 #: when the rendered prompt changes.
 #:
 #: So this ships FALSE: the capability lands, the cohort key stays byte-identical
-#: and nothing in production moves. Turning it on is a one-line commit that must
-#: carry the pre-registration amendment. Nothing else has to be edited with it —
-#: see :func:`news_source_token`.
+#: and nothing in production moves. Flipping it needs no second EDIT — see
+#: :func:`news_source_token` — but it is NOT a one-line change, and an earlier
+#: version of this comment claimed it was. Measured on the production host
+#: 2026-11-09, 30-day window (``DEFAULT_LOOKBACK_DAYS``), asof 2026-11-08:
+#:
+#:   stage                     time      rows     peak RSS
+#:   _load_window (view)       1.31 s    5,321    0.90 GB
+#:   load_lake_window          7.25 s   36,255    6.29 GB   (93 files)
+#:   pd.concat                 0.05 s   36,255    6.28 GB
+#:   _within_window              —         —      killed at 10.01 GB
+#:
+#: A 7-day window completed at 6.69 GB peak against 0.46 GB for the view alone:
+#: 33x the time, 14x the memory. Of the window's 4,658 MB uncompressed, ``body``
+#: is 4,623 MB (99.2%) — and ``body`` has NO consumer below the news join, proven
+#: by dropping the column right after this module's union and getting a
+#: byte-identical resolver result on six real themes. Reading only
+#: ``[id, source, timestamp, title, url, extra]`` costs 0.53 s and 0.172 GB.
+#:
+#: There is also no cache on this path while ``_load_window`` has an
+#: ``lru_cache``, so a real run re-read the lake four times for six themes.
+#: And the ceiling does not bind: ``alphalens-thematic-build.service`` sets
+#: ``MemoryMax=4G`` but launches ``docker run``, and the container cgroup reports
+#: ``memory.max = max`` with ``HostConfig.Memory=0``. So >10 GB comes out of the
+#: host's 19.5 GB, beside Postgres and both broker daemons.
+#:
+#: THEREFORE, before this is flipped: prune the read, cache it, and bound it.
+#: Pruning interacts with the longest-body rule below, so it is a decision about
+#: that rule and not a mechanical change.
 READ_NEWS_LAKE = False
 
 #: Values recorded in ``mapper_config_version(news_source=...)``. The ABSENCE of

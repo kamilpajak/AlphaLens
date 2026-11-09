@@ -41,6 +41,12 @@ _TICKER = "IONQ"
 _SHORT_BODY = "A short feed snippet."
 _LONG_BODY = "The full press release text. " * 40
 _MCAP = (500_000_000, 10_000_000_000)
+#: Enough ids, with enough tied rows each, that an unstable sort picks a
+#: different winner. Measured on the production shape — 1 view row and 17 lake
+#: rows per id, all tied on body length — a stable sort keeps the view row for
+#: 50 of 50 ids and an unstable one for 13 of 50.
+_TIE_IDS = 50
+_TIE_LAKE_ROWS_PER_ID = 17
 
 
 def _news_row(news_id: str, body: str, *, url: str | None = None) -> dict:
@@ -182,6 +188,86 @@ class TestTheUnionRule(unittest.TestCase):
         got = news_source.merge_news_sources(pd.DataFrame(), lake)
         self.assertEqual(list(got["id"]), ["orphan"])
 
+    def test_a_view_only_id_survives_a_NON_EMPTY_lake(self) -> None:
+        """The path production takes. The empty-lake case above is not it.
+
+        A mutation that kept only ids the lake contributed left every test
+        green, and it would have silently discarded the 3,638 ids that predate
+        the lake.
+        """
+        view = pd.DataFrame([_news_row("pre_lake", _SHORT_BODY), _news_row("shared", _SHORT_BODY)])
+        lake = pd.DataFrame([_news_row("shared", _LONG_BODY), _news_row("only_lake", _LONG_BODY)])
+        got = news_source.merge_news_sources(view, lake)
+        self.assertEqual(sorted(got["id"]), ["only_lake", "pre_lake", "shared"])
+
+    def test_a_lake_only_window_returns_one_row_per_id_not_per_run(self) -> None:
+        """Six ingest runs of one id are one row, or the inner join fans out."""
+        lake = pd.DataFrame([_news_row("x", _SHORT_BODY) for _ in range(6)])
+        got = news_source.merge_news_sources(pd.DataFrame(), lake)
+        self.assertEqual(len(got), 1)
+
+    def test_no_transient_column_reaches_the_caller(self) -> None:
+        """A leaked sort column flows into the resolver's merge."""
+        for view, lake in (
+            (pd.DataFrame([_news_row("a", _SHORT_BODY)]), pd.DataFrame()),
+            (pd.DataFrame(), pd.DataFrame([_news_row("a", _SHORT_BODY)])),
+            (
+                pd.DataFrame([_news_row("a", _SHORT_BODY)]),
+                pd.DataFrame([_news_row("b", _LONG_BODY)]),
+            ),
+        ):
+            got = news_source.merge_news_sources(view, lake)
+            leaked = [c for c in got.columns if c.startswith("_news_")]
+            self.assertEqual(leaked, [], f"leaked {leaked}")
+
+    def test_the_tie_rule_holds_AT_THE_PRODUCTION_SHAPE(self) -> None:
+        """The two-row tie case above cannot see this, and it is the whole risk.
+
+        At n = 2 an unstable sort and a stable one pick the same head. The
+        difference appears once ties are GROUPED PER ID and the dedup chooses
+        inside each group. Measured on the real 30-day window: 11,907 of 12,126
+        multi-row ids are tied on body length, and dropping ``kind="stable"``
+        changes the winning row for 8,366 of 12,754 ids — ``extra`` for 3,936,
+        which feeds the state-media gate, and ``timestamp`` for 30, which decides
+        ``published_at`` and the trigger choice.
+        """
+        ids = [f"id{i:02d}" for i in range(_TIE_IDS)]
+        view = pd.DataFrame([_news_row(i, _SHORT_BODY, url=f"https://view.test/{i}") for i in ids])
+        lake = pd.DataFrame(
+            [
+                _news_row(i, _SHORT_BODY, url=f"https://lake.test/{i}/{run}")
+                for i in ids
+                for run in range(_TIE_LAKE_ROWS_PER_ID)
+            ]
+        )
+        got = news_source.merge_news_sources(view, lake)
+        self.assertEqual(len(got), len(ids))
+        winners = got.set_index("id")["url"].to_dict()
+        from_lake = sorted(k for k, v in winners.items() if not v.startswith("https://view.test/"))
+        self.assertEqual(from_lake, [], f"the lake won a tie for {len(from_lake)} ids")
+
+    def test_one_unrelated_extra_row_moves_no_winner(self) -> None:
+        """Input-order sensitivity is what an unstable sort really costs.
+
+        Measured: under an unstable sort one added row moved the winner for
+        8,130 of 12,754 ids; under a stable sort, for none. So a single new
+        ingest run file would reshuffle the resolver's input for thousands of
+        unrelated ids.
+        """
+        ids = [f"id{i:02d}" for i in range(_TIE_IDS)]
+        view = pd.DataFrame([_news_row(i, _SHORT_BODY, url=f"https://view.test/{i}") for i in ids])
+        lake_rows = [
+            _news_row(i, _SHORT_BODY, url=f"https://lake.test/{i}/{run}")
+            for i in ids
+            for run in range(_TIE_LAKE_ROWS_PER_ID)
+        ]
+        before = news_source.merge_news_sources(view, pd.DataFrame(lake_rows)).set_index("id")
+        after = news_source.merge_news_sources(
+            view, pd.DataFrame([*lake_rows, _news_row("unrelated", _SHORT_BODY)])
+        ).set_index("id")
+        moved = [i for i in ids if before["url"][i] != after["url"][i]]
+        self.assertEqual(moved, [], f"one unrelated row moved {len(moved)} winners")
+
 
 class TestWhatTheResolverSees(unittest.TestCase):
     def setUp(self) -> None:
@@ -234,6 +320,27 @@ class TestWhatTheResolverSees(unittest.TestCase):
                 )
         self.assertIn("contributed no rows", "\n".join(caught.output))
 
+    def test_the_view_wins_a_tie_THROUGH_THE_REAL_PATH(self) -> None:
+        """Pins the ARGUMENT ORDER, which the direct union tests cannot see.
+
+        ``merge_news_sources`` resolves a tie to whichever frame was
+        concatenated first, so the rule lives at the ``with_lake`` call site.
+        Tests that call the union directly pass their own order and a mutation
+        swapping the real one stayed green through the whole suite.
+        """
+        tied = _news_row("tied", _SHORT_BODY, url="https://view.test/tied")
+        self.stores.write_view(_ASOF, [tied])
+        self.stores.write_lake_run(
+            _ASOF,
+            "20261105T030000000Z",
+            [_news_row("tied", _SHORT_BODY, url="https://lake.test/tied")],
+        )
+        with mock.patch.object(news_source, "READ_NEWS_LAKE", True):
+            got = self._news()
+        row = got[got["id"] == "tied"]
+        self.assertEqual(len(row), 1)
+        self.assertEqual(row.iloc[0]["url"], "https://view.test/tied")
+
     def test_with_the_flag_off_it_sees_the_view_alone(self) -> None:
         """Behaviour under the off-state, forced rather than assumed.
 
@@ -258,7 +365,6 @@ class TestWhatTheResolverSees(unittest.TestCase):
             "asof": _ASOF,
             "events_dir": self.stores.events,
             "news_dir": self.stores.view,
-            "lake_dir": self.stores.lake,
         }
         self.stores.write_events(_ASOF, [_events_row("evicted")])
         with mock.patch.object(news_source, "READ_NEWS_LAKE", False):

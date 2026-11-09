@@ -633,7 +633,6 @@ def _load_catalyst_window(
     news_dir: Path,
     lookback_days: int,
     metrics: TemplateMetrics | None,
-    lake_dir: Path | None = None,
 ) -> tuple[pd.DataFrame, str] | None:
     """Load + filter the theme's rolling event/news window into a clean frame.
 
@@ -659,7 +658,7 @@ def _load_catalyst_window(
     if matches.empty:
         return None
 
-    news = _load_news_window(news_dir, asof, lookback_days, lake_dir=lake_dir)
+    news = _load_news_window(news_dir, asof, lookback_days)
     if news.empty:
         return None
 
@@ -718,7 +717,6 @@ def find_trigger_event(
     news_dir: Path = DEFAULT_NEWS_DIR,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     metrics: TemplateMetrics | None = None,
-    lake_dir: Path | None = None,
 ) -> CatalystPayload | None:
     """Return the catalyst payload for a theme.
 
@@ -736,7 +734,6 @@ def find_trigger_event(
         events_dir=events_dir,
         news_dir=news_dir,
         lookback_days=lookback_days,
-        lake_dir=lake_dir,
         metrics=metrics,
     )
     if window is None:
@@ -810,7 +807,6 @@ def build_template_entity_index(
     news_dir: Path = DEFAULT_NEWS_DIR,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     metrics: TemplateMetrics | None = None,
-    lake_dir: Path | None = None,
 ) -> dict[str, list[CatalystPayload]]:
     """Index template-extracted events by EACH primary-entity ticker (#395).
 
@@ -848,7 +844,7 @@ def build_template_entity_index(
     if events.empty:
         return {}
 
-    news = _load_news_window(news_dir, asof, lookback_days, lake_dir=lake_dir)
+    news = _load_news_window(news_dir, asof, lookback_days)
     if news.empty:
         return {}
 
@@ -898,7 +894,6 @@ def find_template_catalyst_for_ticker(
     news_dir: Path = DEFAULT_NEWS_DIR,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     metrics: TemplateMetrics | None = None,
-    lake_dir: Path | None = None,
     entity_index: dict[str, list[CatalystPayload]] | None = None,
 ) -> CatalystPayload | None:
     """Best subject-match template catalyst for ``ticker`` (option b, #395).
@@ -921,7 +916,6 @@ def find_template_catalyst_for_ticker(
             news_dir=news_dir,
             lookback_days=lookback_days,
             metrics=metrics,
-            lake_dir=lake_dir,
         )
     payloads = entity_index.get(_normalize_symbol(ticker))
     if not payloads:
