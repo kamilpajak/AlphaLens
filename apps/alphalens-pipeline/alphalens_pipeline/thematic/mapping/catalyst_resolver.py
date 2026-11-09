@@ -241,16 +241,24 @@ def _load_news_window(
     asof: dt.date,
     lookback_days: int,
     *,
-    lake_dir: Path = news_source.DEFAULT_NEWS_LAKE_DIR,
+    lake_dir: Path | None = None,
 ) -> pd.DataFrame:
     """The news to join events against. See :mod:`news_source` for WHY.
 
-    Kept here as one line of delegation so both read sites stay symmetric with
-    the events read beside them, while the lake reader, the union rule and the
-    cohort key live in their own module.
+    ``lake_dir`` defaults to ``None`` and is resolved as a SIBLING of
+    ``news_dir``, never to an absolute path. An absolute default is early-bound
+    at ``def`` time, so a caller that isolated its news store to a temporary
+    directory - every golden fixture, both recorders and about sixty resolver
+    tests - would join the PRODUCTION lake the moment the flag flipped, and
+    could not opt out by patching a module constant. Deriving it means isolating
+    the news store isolates the lake with it, which is the convention
+    ``news_ingest.ingest_daily`` already documents for the write side.
     """
     return news_source.with_lake(
-        _load_window(news_dir, asof, lookback_days), lake_dir, asof, lookback_days
+        _load_window(news_dir, asof, lookback_days),
+        lake_dir if lake_dir is not None else news_source.lake_dir_for(news_dir),
+        asof,
+        lookback_days,
     )
 
 
@@ -625,7 +633,7 @@ def _load_catalyst_window(
     news_dir: Path,
     lookback_days: int,
     metrics: TemplateMetrics | None,
-    lake_dir: Path = news_source.DEFAULT_NEWS_LAKE_DIR,
+    lake_dir: Path | None = None,
 ) -> tuple[pd.DataFrame, str] | None:
     """Load + filter the theme's rolling event/news window into a clean frame.
 
@@ -710,7 +718,7 @@ def find_trigger_event(
     news_dir: Path = DEFAULT_NEWS_DIR,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     metrics: TemplateMetrics | None = None,
-    lake_dir: Path = news_source.DEFAULT_NEWS_LAKE_DIR,
+    lake_dir: Path | None = None,
 ) -> CatalystPayload | None:
     """Return the catalyst payload for a theme.
 
@@ -802,7 +810,7 @@ def build_template_entity_index(
     news_dir: Path = DEFAULT_NEWS_DIR,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     metrics: TemplateMetrics | None = None,
-    lake_dir: Path = news_source.DEFAULT_NEWS_LAKE_DIR,
+    lake_dir: Path | None = None,
 ) -> dict[str, list[CatalystPayload]]:
     """Index template-extracted events by EACH primary-entity ticker (#395).
 
@@ -890,6 +898,7 @@ def find_template_catalyst_for_ticker(
     news_dir: Path = DEFAULT_NEWS_DIR,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     metrics: TemplateMetrics | None = None,
+    lake_dir: Path | None = None,
     entity_index: dict[str, list[CatalystPayload]] | None = None,
 ) -> CatalystPayload | None:
     """Best subject-match template catalyst for ``ticker`` (option b, #395).
@@ -912,6 +921,7 @@ def find_template_catalyst_for_ticker(
             news_dir=news_dir,
             lookback_days=lookback_days,
             metrics=metrics,
+            lake_dir=lake_dir,
         )
     payloads = entity_index.get(_normalize_symbol(ticker))
     if not payloads:

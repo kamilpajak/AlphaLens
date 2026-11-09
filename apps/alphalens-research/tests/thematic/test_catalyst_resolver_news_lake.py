@@ -17,7 +17,7 @@ anything changing what the model reads be fingerprinted. The accrual window in
 ``docs/research/channel_feature_forward_prereg_2026_08_19.md`` (LOCKED) ends on
 such a change. So :data:`news_source.READ_NEWS_LAKE` ships FALSE, the
 token stays byte-identical, and
-:meth:`test_the_token_must_record_the_lake_once_the_flag_is_on` is the tripwire
+:meth:`test_the_flag_alone_decides_whether_the_boundary_is_recorded` is the tripwire
 that goes red if the flag is flipped without recording the cohort boundary.
 """
 
@@ -116,6 +116,33 @@ class TestTheLakeWindowReader(unittest.TestCase):
         got = news_source.load_lake_window(self.stores.lake, _ASOF, lookback_days=30)
         self.assertEqual(list(got["id"]), ["in"])
 
+    def test_a_session_date_after_asof_is_excluded(self) -> None:
+        """The lake is append-only and holds every LATER day.
+
+        The upper bound is the one that matters for any historical asof - a
+        replay, a backfill, a retro study. A mutation that dropped it left every
+        test green.
+        """
+        later = _ASOF + dt.timedelta(days=5)
+        self.stores.write_lake_run(_ASOF, "20261105T010000000Z", [_news_row("now", _SHORT_BODY)])
+        self.stores.write_lake_run(later, "20261110T010000000Z", [_news_row("future", _SHORT_BODY)])
+        got = news_source.load_lake_window(self.stores.lake, _ASOF, lookback_days=30)
+        self.assertEqual(list(got["id"]), ["now"])
+
+    def test_a_row_outside_the_window_is_dropped_even_inside_a_listed_partition(self) -> None:
+        """The lake stores the raw union from BEFORE the ingest's day filter.
+
+        Filtering on the partition name alone re-admits rows the ingest
+        deliberately excluded, which the view never held.
+        """
+        stale = dict(_news_row("stale", _SHORT_BODY))
+        stale["timestamp"] = pd.Timestamp("2026-01-01T12:00:00Z")
+        self.stores.write_lake_run(
+            _ASOF, "20261105T010000000Z", [_news_row("fresh", _SHORT_BODY), stale]
+        )
+        got = news_source.load_lake_window(self.stores.lake, _ASOF, lookback_days=30)
+        self.assertEqual(list(got["id"]), ["fresh"])
+
     def test_an_absent_lake_directory_is_empty_and_does_not_raise(self) -> None:
         got = news_source.load_lake_window(
             self.stores.lake.parent / "never_created", _ASOF, lookback_days=30
@@ -175,6 +202,37 @@ class TestWhatTheResolverSees(unittest.TestCase):
         return catalyst_resolver._load_news_window(
             self.stores.view, _ASOF, lookback_days=30, lake_dir=self.stores.lake
         )
+
+    def test_the_lake_is_derived_from_news_dir_when_not_given(self) -> None:
+        """The blocker this change shipped with, pinned.
+
+        An absolute default meant a caller that isolated its news store joined
+        the PRODUCTION lake, and could not opt out by patching a constant,
+        because a default is early-bound at def time. Every golden fixture, both
+        recorders and about sixty resolver tests pass news_dir and no lake_dir.
+        """
+        self.assertEqual(
+            news_source.lake_dir_for(self.stores.view),
+            self.stores.lake,
+            "the lake must be a sibling of the news dir it was asked about",
+        )
+        with mock.patch.object(news_source, "READ_NEWS_LAKE", True):
+            derived = catalyst_resolver._load_news_window(self.stores.view, _ASOF, lookback_days=30)
+        self.assertEqual(sorted(derived["id"]), ["evicted", "kept"])
+
+    def test_an_enabled_but_empty_lake_warns_rather_than_falling_back_silently(self) -> None:
+        """The token records the INTENT to read the lake, not the observation.
+
+        With the flag on and the lake absent the resolver reads the view alone
+        while every parquet of that day is stamped `view+lake`.
+        """
+        empty = self.stores.lake.parent / "no_lake_here"
+        with mock.patch.object(news_source, "READ_NEWS_LAKE", True):
+            with self.assertLogs(news_source.logger, level="WARNING") as caught:
+                catalyst_resolver._load_news_window(
+                    self.stores.view, _ASOF, lookback_days=30, lake_dir=empty
+                )
+        self.assertIn("contributed no rows", "\n".join(caught.output))
 
     def test_with_the_flag_off_it_sees_the_view_alone(self) -> None:
         """Behaviour under the off-state, forced rather than assumed.

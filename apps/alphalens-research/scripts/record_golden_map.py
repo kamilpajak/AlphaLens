@@ -76,7 +76,7 @@ from unittest import mock
 import pandas as pd
 from alphalens_pipeline.data.alt_data.openrouter_client import OpenRouterClient
 from alphalens_pipeline.data.alt_data.polygon_client import PolygonClient
-from alphalens_pipeline.thematic.mapping import catalyst_resolver, orchestrator
+from alphalens_pipeline.thematic.mapping import catalyst_resolver, news_source, orchestrator
 from alphalens_pipeline.thematic.mapping.channel_assessor import channel_config_version
 from alphalens_pipeline.thematic.mapping.theme_mapper import mapper_config_version
 from alphalens_pipeline.thematic.sources.form4_store import classification_years
@@ -232,6 +232,11 @@ def _write_provenance(fixture: MapFixture, *, mode: str) -> None:
         mapper_config_version=mapper_config_version(
             market_cap_range=orchestrator.DEFAULT_MCAP_RANGE,
             channel_config_version=channel_config_version(),
+            # Third call site. Without this the first recording made after the
+            # news-lake flag flips writes a document whose token contradicts the
+            # parquet it describes, and `audit_recording` reports it as a token
+            # mismatch rather than as a news-source change.
+            news_source=news_source.news_source_token(),
         ),
         recorded_by=f"scripts/record_golden_map.py --fixture {fixture.name}{mode}",
         recorded_date=dt.date.today(),
