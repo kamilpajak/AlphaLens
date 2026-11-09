@@ -428,6 +428,7 @@ def mapper_config_version(
     market_cap_range: tuple[int, int],
     channel_config_version: str,
     model: str | None = None,
+    news_source: str | None = None,
 ) -> str:
     """Canonical JSON token of the config that determines the proposed set.
 
@@ -481,6 +482,20 @@ def mapper_config_version(
         # clean byte copy of this module's v2 surface.
         "channel": channel_config_version,
     }
+    if news_source is not None:
+        # WHICH NEWS STORE the catalyst was resolved against. Added only when
+        # stated, because the ABSENCE of this key IS the historical cohort: every
+        # candidate parquet frozen before 2026-11 was produced against the
+        # current view alone, and inserting a key with a default value would
+        # invalidate all of them for no change in what the model read.
+        #
+        # Present, it marks the boundary. Reading the append-only lake as well
+        # recovers events the view's overwrite had evicted, which changes which
+        # catalyst is rendered - exactly the class of change the field_constants
+        # block above exists to fingerprint. The accrual window in
+        # docs/research/channel_feature_forward_prereg_2026_08_19.md (LOCKED)
+        # ends on it, so the amendment is committed before it deploys.
+        payload["news_source"] = news_source
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 

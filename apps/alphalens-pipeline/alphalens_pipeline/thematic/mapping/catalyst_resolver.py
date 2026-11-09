@@ -41,7 +41,45 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_NEWS_DIR = Path.home() / ".alphalens" / "thematic_news"
 DEFAULT_EVENTS_DIR = Path.home() / ".alphalens" / "thematic_events"
+#: The append-only lake the ingest writes beside the current view. Every run of
+#: a day lands here as ``session_date=<D>/run=<stamp>.parquet`` and is never
+#: replaced, while ``thematic_news/<D>.parquet`` is OVERWRITTEN by each run.
+DEFAULT_NEWS_LAKE_DIR = Path.home() / ".alphalens" / "thematic_news_lake"
 DEFAULT_LOOKBACK_DAYS = 30
+
+#: Measured on the production stores 2026-11-09: the ingest runs several times a
+#: day with ``--force``, so each run overwrites the day's view, while extraction
+#: is cumulative. 11,288 of 42,037 event rows (26.85%) therefore reference a
+#: ``news_id`` the view no longer holds, and 10,887 of those 11,088 distinct ids
+#: (98.2%) are still in the lake. The inner join below drops those events, so a
+#: theme can lose its catalyst to a retention artefact rather than to the news.
+#:
+#: Reading the lake fixes that AND changes which catalyst is rendered into the
+#: proposal prompt. ``theme_mapper.mapper_config_version`` exists to fingerprint
+#: exactly that kind of change, and the accrual window in
+#: ``docs/research/channel_feature_forward_prereg_2026_08_19.md`` (LOCKED) ends
+#: when the rendered prompt changes. So this ships FALSE: the capability lands,
+#: the token stays byte-identical, and nothing in production moves. Turning it on
+#: is a one-line commit that must ALSO pass :func:`news_source_token` into
+#: ``mapper_config_version`` and carry the pre-registration amendment. The test
+#: ``test_the_token_must_record_the_lake_once_the_flag_is_on`` is the tripwire.
+READ_NEWS_LAKE = False
+
+#: Values for ``mapper_config_version(news_source=...)``. The ABSENCE of the key
+#: is the historical cohort, so ``view`` is never passed in practice - it exists
+#: so the vocabulary is closed and readable rather than implied by a bool.
+NEWS_SOURCE_VIEW = "view"
+NEWS_SOURCE_VIEW_PLUS_LAKE = "view+lake"
+
+_LAKE_SESSION_PREFIX = "session_date="
+_LAKE_RUN_GLOB = "run=*.parquet"
+#: Sorts before any real run stamp, so a view row wins a body-length tie and the
+#: union is deterministic regardless of filesystem iteration order.
+_VIEW_RUN_SENTINEL = ""
+_NEWS_ID_COLUMN = "id"
+_NEWS_BODY_COLUMN = "body"
+_RUN_ORDER_COLUMN = "_news_run"
+_BODY_LENGTH_COLUMN = "_news_body_chars"
 _TITLE_MAX_LEN = 200
 _NOISE_FILTERS_PATH = Path(__file__).parent.parent / "config" / "catalyst_noise_filters.yaml"
 
@@ -233,6 +271,108 @@ def _load_window(parquet_dir: Path, asof: dt.date, lookback_days: int) -> pd.Dat
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, ignore_index=True)
+
+
+def news_source_token() -> str | None:
+    """What ``mapper_config_version`` records about which news store was read.
+
+    ``None`` while the view alone is read, which keeps the key ABSENT and the
+    cohort key byte-identical to every candidate parquet frozen before this
+    existed. Not-``None`` the moment the lake is read as well.
+
+    The caller passes this UNCONDITIONALLY. That is the point: a guard asking
+    "did someone remember to record the boundary" would be a test of a
+    convention, and the first version of this change shipped exactly such a
+    guard - it passed under a mutation that flipped the flag, because it fed the
+    token in by hand instead of reading what production computes. One function
+    decides what is read and what is recorded, so the two cannot drift.
+    """
+    return NEWS_SOURCE_VIEW_PLUS_LAKE if READ_NEWS_LAKE else None
+
+
+def _load_lake_window(lake_dir: Path, asof: dt.date, lookback_days: int) -> pd.DataFrame:
+    """Every run of every ``session_date`` inside the window, concatenated.
+
+    The lake's layout is a directory per session date holding one parquet per
+    ingest run, so this cannot reuse :func:`_load_window`, which globs a flat
+    directory of ``<date>.parquet``. A missing lake is empty, never an error:
+    the lake write is best-effort by design and a host that has never run the
+    ingest has no lake at all.
+    """
+    if not lake_dir.exists():
+        return pd.DataFrame()
+    lo = asof - dt.timedelta(days=lookback_days)
+    frames: list[pd.DataFrame] = []
+    for session in sorted(lake_dir.glob(f"{_LAKE_SESSION_PREFIX}*")):
+        if not session.is_dir():
+            continue
+        try:
+            date = dt.date.fromisoformat(session.name[len(_LAKE_SESSION_PREFIX) :])
+        except ValueError:
+            continue
+        if date < lo or date > asof:
+            continue
+        for path in sorted(session.glob(_LAKE_RUN_GLOB)):
+            try:
+                frame = pd.read_parquet(path)
+            except Exception as exc:
+                logger.warning("failed to read %s: %s", path, exc)
+                continue
+            frame[_RUN_ORDER_COLUMN] = path.stem
+            frames.append(frame)
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
+
+
+def _merge_news_sources(view: pd.DataFrame, lake: pd.DataFrame) -> pd.DataFrame:
+    """One row per news id, keeping the LONGEST body seen for it.
+
+    Longest rather than newest because the point is to recover TEXT, not merely
+    rows: measured 2026-11-09, the 7,330 ``edgar_press_release`` ids the view had
+    dropped carry a median body of 153,648 characters against 22,889 for the
+    6,765 it kept. A newest-wins rule would hand back the row the cap already
+    chose and recover nothing.
+
+    Ties resolve to the view, then to the earliest run stamp, so the result does
+    not depend on filesystem iteration order.
+    """
+    frames = [f for f in (view, lake) if not f.empty]
+    if not frames:
+        return pd.DataFrame()
+    if len(frames) == 1:
+        only = frames[0].copy()
+        return only.drop(columns=[_RUN_ORDER_COLUMN], errors="ignore")
+    merged = pd.concat(frames, ignore_index=True)
+    if _RUN_ORDER_COLUMN not in merged.columns:
+        merged[_RUN_ORDER_COLUMN] = _VIEW_RUN_SENTINEL
+    merged[_RUN_ORDER_COLUMN] = merged[_RUN_ORDER_COLUMN].fillna(_VIEW_RUN_SENTINEL)
+    body = merged.get(_NEWS_BODY_COLUMN)
+    merged[_BODY_LENGTH_COLUMN] = body.fillna("").astype(str).str.len() if body is not None else 0
+    merged = merged.sort_values(
+        [_BODY_LENGTH_COLUMN, _RUN_ORDER_COLUMN], ascending=[False, True], kind="stable"
+    )
+    merged = merged.drop_duplicates(subset=[_NEWS_ID_COLUMN], keep="first")
+    return merged.drop(columns=[_BODY_LENGTH_COLUMN, _RUN_ORDER_COLUMN]).reset_index(drop=True)
+
+
+def _load_news_window(
+    news_dir: Path,
+    asof: dt.date,
+    lookback_days: int,
+    *,
+    lake_dir: Path = DEFAULT_NEWS_LAKE_DIR,
+) -> pd.DataFrame:
+    """The news the resolver joins against: the view, plus the lake when enabled.
+
+    A UNION, never a replacement. Measured 2026-11-09, 3,638 view ids have no
+    lake row at all because the view starts 2026-05-18 and the lake starts
+    2026-06-04; reading the lake alone would silently drop that history.
+    """
+    view = _load_window(news_dir, asof, lookback_days)
+    if not READ_NEWS_LAKE:
+        return view
+    return _merge_news_sources(view, _load_lake_window(lake_dir, asof, lookback_days))
 
 
 def _apply_noise_and_blocklist_filters(joined: pd.DataFrame) -> pd.DataFrame:
@@ -606,6 +746,7 @@ def _load_catalyst_window(
     news_dir: Path,
     lookback_days: int,
     metrics: TemplateMetrics | None,
+    lake_dir: Path = DEFAULT_NEWS_LAKE_DIR,
 ) -> tuple[pd.DataFrame, str] | None:
     """Load + filter the theme's rolling event/news window into a clean frame.
 
@@ -631,7 +772,7 @@ def _load_catalyst_window(
     if matches.empty:
         return None
 
-    news = _load_window(news_dir, asof, lookback_days)
+    news = _load_news_window(news_dir, asof, lookback_days, lake_dir=lake_dir)
     if news.empty:
         return None
 
@@ -690,6 +831,7 @@ def find_trigger_event(
     news_dir: Path = DEFAULT_NEWS_DIR,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     metrics: TemplateMetrics | None = None,
+    lake_dir: Path = DEFAULT_NEWS_LAKE_DIR,
 ) -> CatalystPayload | None:
     """Return the catalyst payload for a theme.
 
@@ -707,6 +849,7 @@ def find_trigger_event(
         events_dir=events_dir,
         news_dir=news_dir,
         lookback_days=lookback_days,
+        lake_dir=lake_dir,
         metrics=metrics,
     )
     if window is None:
@@ -780,6 +923,7 @@ def build_template_entity_index(
     news_dir: Path = DEFAULT_NEWS_DIR,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     metrics: TemplateMetrics | None = None,
+    lake_dir: Path = DEFAULT_NEWS_LAKE_DIR,
 ) -> dict[str, list[CatalystPayload]]:
     """Index template-extracted events by EACH primary-entity ticker (#395).
 
@@ -817,7 +961,7 @@ def build_template_entity_index(
     if events.empty:
         return {}
 
-    news = _load_window(news_dir, asof, lookback_days)
+    news = _load_news_window(news_dir, asof, lookback_days, lake_dir=lake_dir)
     if news.empty:
         return {}
 
@@ -899,7 +1043,12 @@ def find_template_catalyst_for_ticker(
 __all__ = [
     "DEFAULT_EVENTS_DIR",
     "DEFAULT_NEWS_DIR",
+    "DEFAULT_NEWS_LAKE_DIR",
+    "NEWS_SOURCE_VIEW",
+    "NEWS_SOURCE_VIEW_PLUS_LAKE",
+    "READ_NEWS_LAKE",
     "build_template_entity_index",
     "find_template_catalyst_for_ticker",
     "find_trigger_event",
+    "news_source_token",
 ]

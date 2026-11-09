@@ -1433,6 +1433,7 @@ def map_themes(
     # keyed on. Reuse the frozen parquet when its config token still matches.
     channel_version = channel_assessor.channel_config_version(model=model)
     config_version = theme_mapper.mapper_config_version(
+        news_source=catalyst_resolver.news_source_token(),
         market_cap_range=market_cap_range,
         model=model,
         channel_config_version=channel_version,
@@ -1600,6 +1601,7 @@ def write_empty_candidates(
     out_path = output_dir / f"{asof.isoformat()}.parquet"
     channel_version = channel_assessor.channel_config_version(model=model)
     config_version = theme_mapper.mapper_config_version(
+        news_source=catalyst_resolver.news_source_token(),
         market_cap_range=market_cap_range,
         model=model,
         channel_config_version=channel_version,
