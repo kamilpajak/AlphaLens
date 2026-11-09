@@ -15,7 +15,7 @@ GOVERNANCE. Reading the lake changes which catalyst is rendered into the
 proposal prompt, and ``mapper_config_version``'s own docstring requires that
 anything changing what the model reads be fingerprinted. The accrual window in
 ``docs/research/channel_feature_forward_prereg_2026_08_19.md`` (LOCKED) ends on
-such a change. So :data:`catalyst_resolver.READ_NEWS_LAKE` ships FALSE, the
+such a change. So :data:`news_source.READ_NEWS_LAKE` ships FALSE, the
 token stays byte-identical, and
 :meth:`test_the_token_must_record_the_lake_once_the_flag_is_on` is the tripwire
 that goes red if the flag is flipped without recording the cohort boundary.
@@ -31,7 +31,7 @@ from pathlib import Path
 from unittest import mock
 
 import pandas as pd
-from alphalens_pipeline.thematic.mapping import catalyst_resolver, theme_mapper
+from alphalens_pipeline.thematic.mapping import catalyst_resolver, news_source, theme_mapper
 
 _ASOF = dt.date(2026, 11, 5)
 _THEME = "quantum_computing"
@@ -106,18 +106,18 @@ class TestTheLakeWindowReader(unittest.TestCase):
     def test_it_reads_every_run_of_a_day_inside_the_window(self) -> None:
         self.stores.write_lake_run(_ASOF, "20261105T010000000Z", [_news_row("a", _SHORT_BODY)])
         self.stores.write_lake_run(_ASOF, "20261105T020000000Z", [_news_row("b", _SHORT_BODY)])
-        got = catalyst_resolver._load_lake_window(self.stores.lake, _ASOF, lookback_days=30)
+        got = news_source.load_lake_window(self.stores.lake, _ASOF, lookback_days=30)
         self.assertEqual(sorted(got["id"]), ["a", "b"])
 
     def test_it_ignores_session_dates_outside_the_window(self) -> None:
         inside, outside = _ASOF, _ASOF - dt.timedelta(days=40)
         self.stores.write_lake_run(inside, "20261105T010000000Z", [_news_row("in", _SHORT_BODY)])
         self.stores.write_lake_run(outside, "20260926T010000000Z", [_news_row("out", _SHORT_BODY)])
-        got = catalyst_resolver._load_lake_window(self.stores.lake, _ASOF, lookback_days=30)
+        got = news_source.load_lake_window(self.stores.lake, _ASOF, lookback_days=30)
         self.assertEqual(list(got["id"]), ["in"])
 
     def test_an_absent_lake_directory_is_empty_and_does_not_raise(self) -> None:
-        got = catalyst_resolver._load_lake_window(
+        got = news_source.load_lake_window(
             self.stores.lake.parent / "never_created", _ASOF, lookback_days=30
         )
         self.assertTrue(got.empty)
@@ -134,25 +134,25 @@ class TestTheUnionRule(unittest.TestCase):
     def test_the_longest_body_wins_even_when_it_is_the_lake_row(self) -> None:
         view = pd.DataFrame([_news_row("x", _SHORT_BODY)])
         lake = pd.DataFrame([_news_row("x", _LONG_BODY)])
-        got = catalyst_resolver._merge_news_sources(view, lake)
+        got = news_source.merge_news_sources(view, lake)
         self.assertEqual(len(got), 1)
         self.assertEqual(got.iloc[0]["body"], _LONG_BODY)
 
     def test_the_view_wins_a_tie_so_the_result_is_deterministic(self) -> None:
         view = pd.DataFrame([_news_row("x", _SHORT_BODY, url="https://view.test/x")])
         lake = pd.DataFrame([_news_row("x", _SHORT_BODY, url="https://lake.test/x")])
-        got = catalyst_resolver._merge_news_sources(view, lake)
+        got = news_source.merge_news_sources(view, lake)
         self.assertEqual(got.iloc[0]["url"], "https://view.test/x")
 
     def test_an_id_only_in_the_view_survives(self) -> None:
         """Guards the 3,638 view ids that predate the lake."""
         view = pd.DataFrame([_news_row("pre_lake", _SHORT_BODY)])
-        got = catalyst_resolver._merge_news_sources(view, pd.DataFrame())
+        got = news_source.merge_news_sources(view, pd.DataFrame())
         self.assertEqual(list(got["id"]), ["pre_lake"])
 
     def test_an_id_only_in_the_lake_is_added(self) -> None:
         lake = pd.DataFrame([_news_row("orphan", _LONG_BODY)])
-        got = catalyst_resolver._merge_news_sources(pd.DataFrame(), lake)
+        got = news_source.merge_news_sources(pd.DataFrame(), lake)
         self.assertEqual(list(got["id"]), ["orphan"])
 
 
@@ -183,11 +183,11 @@ class TestWhatTheResolverSees(unittest.TestCase):
         a constant, not a behaviour: it goes red on a legitimate flip and green
         on a broken union.
         """
-        with mock.patch.object(catalyst_resolver, "READ_NEWS_LAKE", False):
+        with mock.patch.object(news_source, "READ_NEWS_LAKE", False):
             self.assertEqual(sorted(self._news()["id"]), ["kept"])
 
     def test_with_the_flag_on_the_evicted_row_comes_back(self) -> None:
-        with mock.patch.object(catalyst_resolver, "READ_NEWS_LAKE", True):
+        with mock.patch.object(news_source, "READ_NEWS_LAKE", True):
             got = self._news()
         self.assertEqual(sorted(got["id"]), ["evicted", "kept"])
         row = got[got["id"] == "evicted"].iloc[0]
@@ -203,9 +203,9 @@ class TestWhatTheResolverSees(unittest.TestCase):
             "lake_dir": self.stores.lake,
         }
         self.stores.write_events(_ASOF, [_events_row("evicted")])
-        with mock.patch.object(catalyst_resolver, "READ_NEWS_LAKE", False):
+        with mock.patch.object(news_source, "READ_NEWS_LAKE", False):
             self.assertIsNone(catalyst_resolver.find_trigger_event(**kwargs))
-        with mock.patch.object(catalyst_resolver, "READ_NEWS_LAKE", True):
+        with mock.patch.object(news_source, "READ_NEWS_LAKE", True):
             payload = catalyst_resolver.find_trigger_event(**kwargs)
         self.assertIsNotNone(payload)
         self.assertEqual(payload.url, "https://example.test/evicted")
@@ -238,21 +238,21 @@ class TestTheCohortBoundaryIsRecorded(unittest.TestCase):
         hand, so it passed under a mutation that flipped ``READ_NEWS_LAKE``
         without the orchestrator recording anything. What is asserted here is
         the exact expression at ``orchestrator.py:1436`` and ``:1604``,
-        ``mapper_config_version(news_source=catalyst_resolver.news_source_token())``,
+        ``mapper_config_version(news_source=news_source.news_source_token())``,
         so turning the flag on cannot leave the cohort key unchanged.
         """
-        with mock.patch.object(catalyst_resolver, "READ_NEWS_LAKE", False):
-            off = self._token(catalyst_resolver.news_source_token())
-        with mock.patch.object(catalyst_resolver, "READ_NEWS_LAKE", True):
-            on = self._token(catalyst_resolver.news_source_token())
+        with mock.patch.object(news_source, "READ_NEWS_LAKE", False):
+            off = self._token(news_source.news_source_token())
+        with mock.patch.object(news_source, "READ_NEWS_LAKE", True):
+            on = self._token(news_source.news_source_token())
         self.assertNotIn("news_source", off)
-        self.assertEqual(on["news_source"], catalyst_resolver.NEWS_SOURCE_VIEW_PLUS_LAKE)
+        self.assertEqual(on["news_source"], news_source.NEWS_SOURCE_VIEW_PLUS_LAKE)
         self.assertNotEqual(off, on)
 
     def test_the_shipped_default_records_nothing(self) -> None:
         """Whatever the flag currently is, the shipped token must match it."""
-        token = self._token(catalyst_resolver.news_source_token())
-        if catalyst_resolver.READ_NEWS_LAKE:
+        token = self._token(news_source.news_source_token())
+        if news_source.READ_NEWS_LAKE:
             self.assertIn("news_source", token)
         else:
             self.assertNotIn("news_source", token)
