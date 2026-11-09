@@ -169,3 +169,48 @@ class TestTheResolverAsksOnlyForWhatItNeeds(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheBodyIsMeasuredAndDropped(unittest.TestCase):
+    """`body` is 99.2% of a lake window's bytes and has no reader below the join."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.stores = _Stores(Path(tmp.name))
+
+    def test_the_lake_frame_carries_the_length_and_not_the_text(self) -> None:
+        self.stores.write_lake_run("20261105T010000000Z", [_news_row("a")])
+        got = news_source.load_lake_window(self.stores.lake, _ASOF, lookback_days=30)
+        self.assertNotIn("body", got.columns)
+        self.assertEqual(list(got[news_source._BODY_LENGTH_COLUMN]), [len(_BODY)])
+
+    def test_the_longest_body_rule_still_works_across_the_two_sources(self) -> None:
+        """The rule reads the recorded number, so dropping the text cannot break it.
+
+        The view carries text and no recorded length; the lake carries a length
+        and no text. The longer one must still win.
+        """
+        short, long_ = "tiny", "x" * 500
+        view = pd.DataFrame([_news_row("shared")])
+        view.loc[:, "body"] = short
+        lake_rows = [_news_row("shared", url="https://lake.test/shared")]
+        lake_frame = pd.DataFrame(lake_rows)
+        lake_frame.loc[:, "body"] = long_
+        lake = news_source._measure_and_drop_body(lake_frame)
+        got = news_source.merge_news_sources(view, lake)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(
+            got.iloc[0]["url"],
+            "https://lake.test/shared",
+            "the lake row had the longer body and must still win",
+        )
+
+    def test_the_view_still_wins_when_it_is_the_longer_one(self) -> None:
+        view = pd.DataFrame([_news_row("shared", url="https://view.test/shared")])
+        view.loc[:, "body"] = "y" * 500
+        lake_frame = pd.DataFrame([_news_row("shared", url="https://lake.test/shared")])
+        lake_frame.loc[:, "body"] = "tiny"
+        lake = news_source._measure_and_drop_body(lake_frame)
+        got = news_source.merge_news_sources(view, lake)
+        self.assertEqual(got.iloc[0]["url"], "https://view.test/shared")

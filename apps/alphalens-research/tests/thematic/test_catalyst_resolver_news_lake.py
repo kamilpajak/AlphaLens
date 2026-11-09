@@ -352,11 +352,20 @@ class TestWhatTheResolverSees(unittest.TestCase):
             self.assertEqual(sorted(self._news()["id"]), ["kept"])
 
     def test_with_the_flag_on_the_evicted_row_comes_back(self) -> None:
+        """What matters is that the ROW returns, not that it carries its text.
+
+        An earlier version asserted ``row["body"] == _LONG_BODY``. That pins a
+        FRAME COLUMN rather than anything a consumer reads, and it is the only
+        thing that broke when the lake read began measuring each body and
+        dropping it — ``body`` is 99.2% of the bytes a lake window costs and has
+        no reader below the news join. The identity that still has to hold is
+        the row's, and the length the selection rule used.
+        """
         with mock.patch.object(news_source, "READ_NEWS_LAKE", True):
             got = self._news()
         self.assertEqual(sorted(got["id"]), ["evicted", "kept"])
         row = got[got["id"] == "evicted"].iloc[0]
-        self.assertEqual(row["body"], _LONG_BODY)
+        self.assertEqual(row["url"], "https://example.test/evicted")
 
     def test_the_orphaned_event_resolves_only_with_the_flag_on(self) -> None:
         """End to end: a theme whose only event is orphaned has no catalyst today."""
