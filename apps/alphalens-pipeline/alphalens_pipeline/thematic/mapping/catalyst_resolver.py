@@ -236,12 +236,26 @@ def _load_window(parquet_dir: Path, asof: dt.date, lookback_days: int) -> pd.Dat
     return pd.concat(frames, ignore_index=True)
 
 
+def _needed_news_ids(events: pd.DataFrame) -> frozenset[str]:
+    """The news ids this read could possibly join against.
+
+    Both read sites hold the events frame BEFORE they read the news, and the
+    theme site holds it already narrowed to the theme, so the restriction is per
+    theme rather than per window. Nulls are dropped: a `news_id` of None cannot
+    join to anything, and leaving it in would widen the filter for no gain.
+    """
+    if events.empty or "news_id" not in events.columns:
+        return frozenset()
+    return frozenset(events["news_id"].dropna().astype(str))
+
+
 def _load_news_window(
     news_dir: Path,
     asof: dt.date,
     lookback_days: int,
     *,
     lake_dir: Path | None = None,
+    needed_ids: frozenset[str] | None = None,
 ) -> pd.DataFrame:
     """The news to join events against. See :mod:`news_source` for WHY.
 
@@ -259,6 +273,7 @@ def _load_news_window(
         lake_dir if lake_dir is not None else news_source.lake_dir_for(news_dir),
         asof,
         lookback_days,
+        needed_ids=needed_ids,
     )
 
 
@@ -658,7 +673,7 @@ def _load_catalyst_window(
     if matches.empty:
         return None
 
-    news = _load_news_window(news_dir, asof, lookback_days)
+    news = _load_news_window(news_dir, asof, lookback_days, needed_ids=_needed_news_ids(matches))
     if news.empty:
         return None
 
@@ -844,7 +859,7 @@ def build_template_entity_index(
     if events.empty:
         return {}
 
-    news = _load_news_window(news_dir, asof, lookback_days)
+    news = _load_news_window(news_dir, asof, lookback_days, needed_ids=_needed_news_ids(events))
     if news.empty:
         return {}
 

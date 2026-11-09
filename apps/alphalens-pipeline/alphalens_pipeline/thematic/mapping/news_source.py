@@ -120,8 +120,27 @@ def news_source_token() -> str | None:
     return NEWS_SOURCE_VIEW_PLUS_LAKE if READ_NEWS_LAKE else None
 
 
-def load_lake_window(lake_dir: Path, asof: dt.date, lookback_days: int) -> pd.DataFrame:
-    """Every run of every ``session_date`` inside the window, concatenated.
+def load_lake_window(
+    lake_dir: Path,
+    asof: dt.date,
+    lookback_days: int,
+    *,
+    needed_ids: frozenset[str] | None = None,
+) -> pd.DataFrame:
+    """The runs of every ``session_date`` inside the window, concatenated.
+
+    ``needed_ids`` restricts the read to news ids some event actually points at,
+    pushed down to the parquet reader so the rows are never materialised.
+    Measured on the production lake, 30-day window, asof 2026-11-08: of the
+    12,754 ids the lake holds, 6,579 (51.6%) are referenced by no event at all,
+    and of the 7,440 ids only the lake has, just 861 (11.6%) have an event. The
+    lake stores the raw per-source union from BEFORE dedup, clustering, the
+    single-day filter and the cap, while events come only from VIEW rows, so most
+    of an unrestricted read cannot join by construction. That read reached
+    10.01 GB RSS on a 30-day window and was killed.
+
+    ``None`` means no restriction, which is the pre-existing behaviour. An EMPTY
+    set means no event needs anything, and then no file is opened at all.
 
     The lake's layout is a directory per session date holding one parquet per
     ingest run, so this cannot reuse ``catalyst_resolver._load_window``, which
@@ -131,6 +150,11 @@ def load_lake_window(lake_dir: Path, asof: dt.date, lookback_days: int) -> pd.Da
     """
     if not lake_dir.exists():
         return pd.DataFrame()
+    if needed_ids is not None and not needed_ids:
+        return pd.DataFrame()
+    read_kwargs: dict[str, object] = {}
+    if needed_ids is not None:
+        read_kwargs["filters"] = [(_NEWS_ID_COLUMN, "in", sorted(needed_ids))]
     lo = asof - dt.timedelta(days=lookback_days)
     frames: list[pd.DataFrame] = []
     for session in sorted(lake_dir.glob(f"{_LAKE_SESSION_PREFIX}*")):
@@ -144,7 +168,7 @@ def load_lake_window(lake_dir: Path, asof: dt.date, lookback_days: int) -> pd.Da
             continue
         for path in sorted(session.glob(_LAKE_RUN_GLOB)):
             try:
-                frame = pd.read_parquet(path)
+                frame = pd.read_parquet(path, **read_kwargs)
             except Exception as exc:
                 logger.warning("failed to read %s: %s", path, exc)
                 continue
@@ -204,7 +228,12 @@ def merge_news_sources(view: pd.DataFrame, lake: pd.DataFrame) -> pd.DataFrame:
 
 
 def with_lake(
-    view: pd.DataFrame, lake_dir: Path, asof: dt.date, lookback_days: int
+    view: pd.DataFrame,
+    lake_dir: Path,
+    asof: dt.date,
+    lookback_days: int,
+    *,
+    needed_ids: frozenset[str] | None = None,
 ) -> pd.DataFrame:
     """The news the resolver joins against: ``view``, plus the lake when enabled.
 
@@ -220,7 +249,7 @@ def with_lake(
     """
     if not READ_NEWS_LAKE:
         return view
-    lake = load_lake_window(lake_dir, asof, lookback_days)
+    lake = load_lake_window(lake_dir, asof, lookback_days, needed_ids=needed_ids)
     if lake.empty:
         # The cohort key records the INTENT to read the lake. Without this line
         # an absent or unmounted lake makes the resolver fall back to the view
