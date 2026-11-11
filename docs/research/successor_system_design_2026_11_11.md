@@ -342,9 +342,28 @@ only thing that forced completion. The replacement is a **parity gate**: the suc
 reproduce the current system's outputs on frozen data, to the number, before anything on the old
 side is switched off.
 
-Demonstrated at the smallest possible scale on 2026-11-11: the Rust lake reader returned 1,649 raw
-rows and 287 distinct items for 2026-07-01, matching an independent pandas count. That is the shape
-every stage needs — characterisation tests at the command-line boundary, not ported unit tests.
+Demonstrated on 2026-11-11 over the **whole archive**, not a sample. Two implementations written
+independently from the same stated rules — one in Rust, one in pandas — were run over all 156 lake
+partitions and compared on five fields per day, including a sha256 digest of the sorted item-id set:
+
+| | |
+|---|---|
+| days | 156 (2026-06-04 … 2026-11-10) |
+| raw rows | 243,226 |
+| distinct items after the first-sighting rule | 62,507 |
+| unusable rows | 0 |
+| valid-time conflicts | 301 |
+| **days agreeing on every field, digest included** | **156 / 156** |
+
+Zero disagreements, so the rules of §2.1 are unambiguous rather than merely written down. That is
+the shape every stage needs — characterisation tests at the command-line boundary, not ported unit
+tests.
+
+One caution from doing it: the first comparison reported a mismatch on all 156 days because the
+digest was computed once through the shell (`sort` collates by locale, `shasum` counts a trailing
+newline) and once in Python (code-point order, no trailing newline). The counts agreed throughout.
+An instrument that introduces its own difference will report a defect that does not exist, so the
+two sides must share one digest function, not two implementations of one.
 
 **The frozen outputs must be captured while the old system still runs.** After it is switched off
 there is nothing to compare against and the gate stops existing.
