@@ -1,6 +1,6 @@
 # Design Memo: Successor System for the Proposal Pipeline
 
-**Status:** DRAFT — not lockable until §6 (news vendor) is decided. Decisions D-2 (storage licence), D-4 (repo topology) and D-7 (private item stream) were closed by the owner on 2026-11-11. Amended the same day with §2.1b, five requirements that came out of measurement after the first draft. No compute over one hour is launched from this memo.
+**Status:** DRAFT — not lockable until §6 (news vendor) is decided. Decisions D-2 (storage licence), D-4 (repo topology) and D-7 (private item stream) were closed by the owner on 2026-11-11. Amended the same day with §2.1b, five requirements that came out of measurement after the first draft. Sections 1.9 and 1.10 were added the same evening and they move the headline numbers: the treated count is 6,529 rather than 4,715, and measured power at the registered floor is 10.9% rather than 27.4%. No compute over one hour is launched from this memo.
 **Author:** quant research (solo)
 **Type:** system requirements + high-level architecture + transition plan
 **Origin:** two days of measurement (2026-11-10, 2026-11-11) on the production stores turned up seven defects in the current pipeline whose common cause is architectural, not local. Each is individually fixable; the shape that allowed all seven is not.
@@ -138,6 +138,82 @@ permutation procedure (24,000 reference draws, no fixed points, seed 20261111):
 The exchangeable unit is the **session** — 47 of them — not the row. Cross-sectional width does not
 help: reaching 80% power at that floor needs 246 sessions.
 
+### 1.9 Both of those figures were themselves computed on the truncated view
+
+Found the same day, after §1.8 was written. The counting script read
+`~/.alphalens/thematic_news/<date>.parquet` — the **capped 200-item view** — not the append-only
+lake. So the measurement that diagnosed the cap as an architectural defect was itself taken through
+the cap. Recounted over the complete lake with three corrections, each attributed separately:
+
+| configuration | treated company-sessions | vs original |
+|---|---|---|
+| original: capped view, HTML tags left in, 4,000-char truncation | 4,715 | — |
+| complete lake, tags stripped, truncation kept | 5,857 | +24.2% |
+| complete lake, tags stripped, **no truncation** | 6,662 | +41.3% |
+| complete lake, tags stripped, no truncation, **18 cores sieved** | **6,529** | **+38.4%** |
+
+Attribution: reading the lake instead of the view **+24.2%**, lifting the 4,000-character cap
+**+13.7%**, sieving the cores **−2.0%**. The largest cause was the one not being looked for. The cap
+alone discarded 50.5% of all core occurrences, against a median EDGAR press-release body of 50,622
+characters.
+
+**And the corrected panel has *less* power, not more.** Re-measured by the same registered
+procedure (24,000 draws, no fixed points, seed 20261111):
+
+| quantity | panel of §1.8 (4,715 rows) | corrected panel (6,529 rows) |
+|---|---|---|
+| se of the statistic | 16.39 bps | **24.74 bps** |
+| inflation over the iid formula | 2.61× | **4.50×** |
+| power at the 0.05 sd floor, α = 0.05 | 27.4% | **10.9%** |
+| power at the 0.10 sd floor | 64.3% | 39.1% |
+
+The mechanism is concentration, measured rather than inferred:
+
+| treated rows per session | §1.8 panel | corrected |
+|---|---|---|
+| median | 91 | 125 |
+| minimum | 49 | **24** |
+| maximum | 179 | **356** |
+| maximum / median | 1.97 | **2.85** |
+
+The six largest sessions are 2026-07-30, 07-31, 08-04, 08-05, 08-06 and 08-07 — one contiguous
+earnings-season block, where EDGAR releases are long and numerous. So lifting the cap did not add
+rows evenly; it added them banked into a fortnight whose sessions share one market environment.
+Nominally there are still 47 exchangeable units; effectively there are fewer.
+
+**The 4,000-character cap had been acting as an accidental variance stabiliser.** It bounded what any
+one long document could contribute and so flattened that spike. Removing it is correct — half the
+signal was being discarded — but it exposes a concentration the cap was hiding, which is exactly
+the §4.4 guard the first adversarial review called the only live one and found absent from the
+power section. It is now not merely live but binding.
+
+### 1.10 Entity precision of the matcher, on our own corpus
+
+Sixty occurrences, seeded uniform sample (seed 20261111), hand-labelled:
+
+| label | | share | Wilson 95% |
+|---|---|---|---|
+| entity-correct | 36/60 | **60.0%** | [47.4; 71.4] |
+| wrong entity | 17/60 | 28.3% | [18.5; 40.8] |
+| residual boilerplate | 7/60 | 11.7% | [5.8; 22.2] |
+
+Against 50.0% ± 6.5 pp measured on general news pages, the difference is +10.0 pp with a standard
+error of 9.1 pp — **1.10 SE, indistinguishable**. Our corpus is not measurably cleaner.
+
+But the diagnosis differs, and it is the actionable part: **16 of the 17 wrong-entity errors come
+from the CORE being wrong, not from an ambiguous match.** Generic name components (`Therapeutics`
+matching "Relay Therapeutics"), financial terms (`Enterprise` matching "Enterprise Value"), table
+words (`Institutions`), government programmes (`Medicare`, `Medicaid`) and one bankruptcy term
+(`Actions`). Exactly one error was a genuine matching ambiguity: `Target` inside "Talos Target
+Coulomb Interest". Removing the bad cores would put precision at 36/44 = 81.8%, and 36/37 = 97.3%
+among non-boilerplate occurrences.
+
+One failure of my own belongs in the record. The sieve initially removed `Premier`, which is
+**Premier Inc. (PINC)**, a real company and a real counterparty of ANIP. It was restored. `Popular`
+stays removed because the same company also reports "Banco Popular", which is multi-token and
+survives. This is the irreducible class — a single-token name of a real company that is also an
+ordinary word — and no word list resolves it; only corroboration in context does.
+
 ---
 
 ## 2. Requirements
@@ -175,6 +251,7 @@ probing Common Crawl's CC-NEWS against our own archive.
 | R15 | **A disputed publication timestamp is marked, never corrected.** Where two sources carry the same story with dates far apart, the newer one's date is flagged as unknown and the earlier one carried alongside; neither is moved. | Aggregators re-stamp old articles, and 79.6% of CC-NEWS records yield a publication date only by scraping page metadata of varying quality (measured 2026-11-11 on 4,000 records). A disputed date is an **unknown** age, never an old one: silently re-dating it would hide a genuinely new item behind an old twin. |
 | R16 | **The coverage ledger records poll events, not only content changes.** Content-hash deduplication is correct for storage and wrong for the ledger. | Deduplicating observations by content hash — which R1 wants, to avoid re-stamping unchanged data as current — destroys the ability to reconstruct when we asked and received the same answer. That reconstruction is exactly what R4 exists for, so the two must be recorded separately. |
 | R17 | **Entity matching must survive a broad corpus.** A core list that works on a pre-filtered feed is not evidence that it works on general news. Matching runs over the extracted article body, never over full page HTML. | Measured 2026-11-11 on one CC-NEWS file: single-token cores produced 5,017 hits against 299 from multi-token ones, and 60.4% of the top-60 hits were social-platform and big-tech names appearing in page boilerplate rather than in article text. Separately, our own map carries geographic names as cores — `Los Angeles`, `South Korea`, `Saudi Arabia`, `Australia`, `Qatar` are 5 of the 588 ever-salient cores and account for 43 of 2,258 core-session salience events, or **1.9%**; adding `Premier`, `Popular` and `Industrial` takes it to roughly 3%. Note that `Target`, `Block`, `Circle` and `Reddit` are real companies in the map that are also ordinary words, so a stoplist cannot fix this. |
+| R18 | **`derive` must be able to produce two panels under two rule versions over one snapshot and diff them.** A rule change that cannot be diffed cannot be reviewed. | §1.9 is the argument. A single net figure of +38.4% would have hidden that **+24.2%** of it came from reading the capped view — the cause nobody was looking for and the largest of the three. Separating the effects was not a nicety; it was the only way that defect surfaced. The gazetteers make the same point from the other side: three sets hand-written inside a throwaway script, and when one entry was wrong there was no version, no test and no record. Rules belong in a hashed file with a `rule_version` stamped into every output, so a wrong entry is a diff and `Premier` becomes a test case. |
 
 ### 2.2 Non-functional — stated here because they are currently UNSET
 
@@ -351,6 +428,32 @@ difference is not in the price list; it is in how broadly we query — and the q
 narrowed by a bracket condition, for the same reason a market-cap constraint never goes into a
 prompt. Query broadly, filter locally.
 
+### 6b. Common Crawl's CC-NEWS, probed and rejected
+
+Measured 2026-11-11 against our own archive rather than against its specification.
+
+| measure | value |
+|---|---|
+| our 2026-07-01 items found in CC-NEWS | 7 of 287 = **2.4%** |
+| plausible ceiling for the full day | ~19 of 287 = 6.6% |
+| our 17 hosts that CC-NEWS crawls at all | **2** |
+| tier-1 US financial outlets in 72,000 records across 12 crawl windows | **0** of 16 |
+| volume, 2026-01..10 as published | **4.19 TB** |
+
+All 7 hits are GlobeNewswire releases the pipeline already receives from EDGAR and Polygon. The
+cause is structural rather than qualitative: our own corpus is 36% `sec.gov`, 7% wire services, and
+the rest largely `fool.com`, `wired.com`, `techcrunch.com`, `investing.com`, `ft.com`,
+`marketwatch.com` and `seekingalpha.com` — publishers CC-NEWS does not crawl. Three earlier
+objections of mine were wrong and are recorded as such: the 02:24 UTC sampling hour was **not** the
+cause (the same hosts are absent at 12:17, 17:59 and 22:02), publication dates **are** recoverable
+for 79.6% of records, and streaming needs no disk (6.5 MB peak while reading 5.57 GB).
+
+What it alone offers, verified: free and anonymous access, raw HTML rather than vendor-extracted
+text, and a structurally point-in-time archive — the crawl window is in the filename and the twelve
+files of a day tile it contiguously, so a historical read cannot leak later content. What kills it
+is that **there is no index**: the CDX server lists 129 collections and none is CC-NEWS, so a URL
+cannot be looked up and a range request cannot be aimed, and every byte must be read.
+
 **An index timestamp is not an immutable archive.** A filter on first-seen time cannot reconstruct
 an earlier article *body* if only the latest body survives upstream. This is why the archive is a
 snapshot we hold, not a query we re-run, and why R4 includes a result hash.
@@ -384,6 +487,7 @@ must not influence the service that produces proposals, or selection happens und
 | D-5 | **Brief handover criterion.** "Then the old pipeline can stop" is not testable as written. | Without a number, the transition has no end. |
 | D-6 | **Does the pipeline ever need to propose on the session it observes?** | If yes, `vault` needs a run before 16:00 ET and the partial-day problem of §4 rule 4 becomes load-bearing. If no, today's cadence suffices and §4 buys only honesty, not tradability. |
 | D-7 | ~~**A published item stream?**~~ **CLOSED 2026-11-11 by the owner: build the WebSocket, keep it private for now.** It is a **derived surface** on `vault`, never a window onto the outbox: it publishes versioned *items*, not internal events, so a change to `newsvault`'s row shape cannot break a consumer. Each message carries both timestamps and a monotonic sequence number, so a consumer decides its own point-in-time cut and can order by our sequence instead of trusting clocks. A heartbeat is mandatory, because silence must be distinguishable from a dead stream — 2026-07-11 held 59 items against a median of 181 and nothing said which it was. No delivery guarantee and no latency promise: the archive remains the source of truth (§4 rule 2) and reconciliation is an HTTP read, while a latency promise would need N2, which has no number. | **"Private" is a property of who holds credentials, not of whether a contract exists.** The payload shape and the heartbeat go in from the start even while nobody else connects, because retrofitting them after a consumer depends on the stream is a breaking change in someone else's system. The tripwire: the schema freezes at the **first external connection**, not at a later decision. Note also that this is the **third** consumer of one store — briefs want 200 items, the study wants completeness, a stream wants latency — and §1.1 is the record of what happened the last time one store served two consumers with different needs. |
+| D-8 | **Does salience count occurrences or documents?** Today `n(c, x)` counts **occurrences** of a core, so one 650,000-character EDGAR exhibit naming Honeywell forty times counts the same as forty separate articles about Honeywell. The candidate rule counts **items** mentioning the core instead: "how many news items named this counterparty today", not "how many times was it written". | Unmeasured, and it is the last hypothesis that could reverse §1.9's power collapse, because long-document inflation is the plausible source of the earnings-season concentration. It is a `matcher` rule change, so R18 governs it: the two panels must be produced and diffed rather than swapped. Not a free choice either way — occurrence counting is defensible and document counting is defensible, so whichever is chosen must be chosen before its power is known. |
 
 Open decisions N1–N5 of §2.2 are the owner's too, but they are numbers to set rather than branches
 to pick.
@@ -423,7 +527,7 @@ to pick.
 
 - **No service contracts.** API surfaces, error codes and the outbox event payload are unspecified.
   "High-level architecture" one level down is missing.
-- **No numbers for N1–N5**, including the backup for an archive the design calls irreplaceable. N4 (retention) is now partly answered by D-2: the archive holds full text, so the question is how long and on what medium, not whether.
+- **No numbers for N1–N5**, including the backup for an archive the design calls irreplaceable. N5 has one rough datum: a full panel rebuild over 87 lake partitions completed in minutes rather than hours, timed by wall clock only, so the order is measured and the number is not. N4 (retention) is now partly answered by D-2: the archive holds full text, so the question is how long and on what medium, not whether.
 - **No architecture gates.** 22 tests currently enforce repo-wide rules (layer imports, per-vendor
   clients, language) from one place; a successor repo starts with none, and a gate nobody replaced
   is a rule that quietly stopped applying. They must be written at the start, not later.
