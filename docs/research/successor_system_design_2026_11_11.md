@@ -1,6 +1,6 @@
 # Design Memo: Successor System for the Proposal Pipeline
 
-**Status:** DRAFT — not lockable until §6 (news vendor) is decided. Decision D-2 (storage licence) was closed by the owner on 2026-11-11. Amended the same day with §2.1b, five requirements that came out of measurement after the first draft. No compute over one hour is launched from this memo.
+**Status:** DRAFT — not lockable until §6 (news vendor) is decided. Decisions D-2 (storage licence) and D-4 (repo topology) were closed by the owner on 2026-11-11. Amended the same day with §2.1b, five requirements that came out of measurement after the first draft. No compute over one hour is launched from this memo.
 **Author:** quant research (solo)
 **Type:** system requirements + high-level architecture + transition plan
 **Origin:** two days of measurement (2026-11-10, 2026-11-11) on the production stores turned up seven defects in the current pipeline whose common cause is architectural, not local. Each is individually fixable; the shape that allowed all seven is not.
@@ -205,7 +205,11 @@ separate; a context without such a reason stays inside one.
 | `ledger` | ledger | Sees outcomes and prices, which nothing upstream may see early. The reverse edge is forbidden one-way. | Writes to any service above it. |
 
 Statistics stay in Python. The boundary is an Arrow file plus a manifest, not a network call;
-rewriting `numpy`/`scipy` would be cost without benefit.
+rewriting `numpy`/`scipy` would be cost without benefit. Under D-4 this tier is **written fresh and
+kept small** — permutation inference over our own panel is a few hundred lines — rather than ported
+from the 9,602 lines that analysed closed paradigms. It lives in the same repository as `derive`
+on purpose: the panel-to-statistics handover is where §1.8's error happened, and a test can only
+span it from inside one tree.
 
 **Splitting finer is rejected for now.** Eleven contexts are drawn so the seams exist later. For a
 one-person system each extra deployable is another deploy, another log, another contract version
@@ -298,9 +302,21 @@ be false.
 append-only lake; the one-door money path with hand-written picks; the methodology gates; the
 `__status__` / `__closed_reason__` lifecycle discipline; the drift check that detects and never
 applies; per-vendor canonical clients with an AST gate; the CLI-as-versioned-API conventions;
-`paradigm_failures_postmortem.md` (650 lines, eleven closed paradigms, with its own reusable-
-infrastructure section); and 103,084 lines of research memos across 354 files, which move as a
-read-only directory from day one.
+and `paradigm_failures_postmortem.md` (650 lines, eleven closed paradigms, with its own
+reusable-infrastructure section).
+
+**What does NOT carry over, decided 2026-11-11 (D-4):** the research memos. Of 354 files in
+`docs/research`, 125 carry a `Status:` line at all — 77 `LOCKED`, 31 `DRAFT`, 17
+`CLOSED`/`REJECTED`/`SUPERSEDED` — and the remaining two hundred-odd are one-off reports and audit
+verdicts. They stay here as an archive. Exactly **two** files move, 813 lines in total:
+`methodology-gates.md` (163) because its data-vendor point-in-time gate fires on the very next
+decision this project takes, and `paradigm_failures_postmortem.md` (650) because without it the
+successor is free to repeat eleven failures that are already paid for. The 18 ADRs (1,931 lines)
+are optional and mostly describe code that is being left behind.
+
+One consequence to state plainly: **this memo is itself in the archive.** The document founding the
+successor would otherwise live in the repository being walked away from. So it moves too, as the new
+repository's first file, while this copy stays here as the record of the decision.
 
 ---
 
@@ -364,7 +380,7 @@ must not influence the service that produces proposals, or selection happens und
 | D-1 | **Which news vendor**, and whether one or two (live vs archive). | §6. Blocked on the probe below. |
 | D-2 | ~~**Storage licence.**~~ **CLOSED 2026-11-11 by the owner:** not treated as a constraint for a private, single-user research archive. The archive holds full article text. Recorded because the alternative it displaced — storing hashes, spans and quotations instead — would have made re-matching after a rule change impossible, so the decision bought that capability. | — |
 | D-3 | **The parity-gate date.** | Named in §5.1 as the cure for "parallel forever" and deliberately left unset here, which is the same defect one level up. |
-| D-4 | **Repo topology.** Statistics stay in Python, so the successor is either polyglot in one repo or split across two. | Also decides where the 103k lines of memos live. |
+| D-4 | ~~**Repo topology.**~~ **CLOSED 2026-11-11 by the owner: three repositories.** This repository keeps the front-end, the thin API, the five data-collection units and — as an **archive** — the dead lab and its memos. A second holds the broker rail and the backtester, never rewritten. The successor is a third, polyglot, but its Python is a **fresh** statistics tier of roughly one to two thousand lines rather than the 9,602 lines of `diagnostics` / `eval` / `preaudit` / `retrospective_audit` / `gates`, which served closed paradigms and stay behind. | Buys the one gate that today's worst error needed: the panel artefact and the power routine live in one repository, so a test can require that the panel declares its number of exchangeable units and that the power routine refuses to run without it. Across a repository boundary that gate cannot be written, and the 88.2%-versus-27.4% error of §1.8 is precisely what it catches. Inherits one known hazard: a polyglot CI needs path filters, and in this project the `.github/` filters must be mirrored into the post-deploy check under a different pathspec syntax — a coupling that has already caused a failure once, so it belongs in the gate list rather than being discovered later. |
 | D-5 | **Brief handover criterion.** "Then the old pipeline can stop" is not testable as written. | Without a number, the transition has no end. |
 | D-6 | **Does the pipeline ever need to propose on the session it observes?** | If yes, `vault` needs a run before 16:00 ET and the partial-day problem of §4 rule 4 becomes load-bearing. If no, today's cadence suffices and §4 buys only honesty, not tradability. |
 
