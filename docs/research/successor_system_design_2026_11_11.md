@@ -1,6 +1,6 @@
 # Design Memo: Successor System for the Proposal Pipeline
 
-**Status:** DRAFT — not lockable until §6 (news vendor) and open decision D-2 (storage licence) have answers. No compute over one hour is launched from this memo.
+**Status:** DRAFT — not lockable until §6 (news vendor) is decided. Decision D-2 (storage licence) was closed by the owner on 2026-11-11. Amended the same day with §2.1b, five requirements that came out of measurement after the first draft. No compute over one hour is launched from this memo.
 **Author:** quant research (solo)
 **Type:** system requirements + high-level architecture + transition plan
 **Origin:** two days of measurement (2026-11-10, 2026-11-11) on the production stores turned up seven defects in the current pipeline whose common cause is architectural, not local. Each is individually fixable; the shape that allowed all seven is not.
@@ -161,6 +161,20 @@ help: reaching 80% power at that floor needs 246 sessions.
 
 R1, R2, R3, R5, R6, R7 and R11 are implemented and under test in `apps/newsvault` as of PR #1881;
 R2's "cannot be compared" is pinned by a `compile_fail` doc test.
+
+### 2.1b Added after the first draft, 2026-11-11
+
+Five more, each from something measured after section 2.1 was written. R13 and R14 come from
+reading a private repository that consumes this project's own brief API; R15 to R17 come from
+probing Common Crawl's CC-NEWS against our own archive.
+
+| # | Requirement | What forces it |
+|---|---|---|
+| R13 | **Five time columns per observation**, not two: when we asked, when the answer arrived, when the source itself observed it, the latest fact the payload covers, and when we committed it. A database-assigned sequence number is the **only** ordering authority; wall clocks are evidence, never order. | R2 and R3 carry two instants, which is not enough. A fetch issued at 10:00 that commits at 10:01:10 carries data through 10:00, while a fetch issued at 10:01 has already committed data through 10:01 — so ordering by commit time hands back the older data and calls it current. Verified in `src/profiles/catalog.py:67-79` of that repository. |
+| R14 | **An attempt is recorded even when it yields nothing.** `EMPTY`, `FAILED` and `COLLAPSED` are distinct outcomes, filed separately from values, so absence-of-fact never reads as failure-to-ask. A payload that shrinks to a fraction of what the store holds is a degraded fetch, not a quieter world. | 2026-07-11 holds 59 items against a median of 181 and a maximum of 321, with nothing recording whether that was a Saturday or an outage. This sharpens R4 from "a ledger exists" to "the ledger distinguishes the four outcomes". |
+| R15 | **A disputed publication timestamp is marked, never corrected.** Where two sources carry the same story with dates far apart, the newer one's date is flagged as unknown and the earlier one carried alongside; neither is moved. | Aggregators re-stamp old articles, and 79.6% of CC-NEWS records yield a publication date only by scraping page metadata of varying quality (measured 2026-11-11 on 4,000 records). A disputed date is an **unknown** age, never an old one: silently re-dating it would hide a genuinely new item behind an old twin. |
+| R16 | **The coverage ledger records poll events, not only content changes.** Content-hash deduplication is correct for storage and wrong for the ledger. | Deduplicating observations by content hash — which R1 wants, to avoid re-stamping unchanged data as current — destroys the ability to reconstruct when we asked and received the same answer. That reconstruction is exactly what R4 exists for, so the two must be recorded separately. |
+| R17 | **Entity matching must survive a broad corpus.** A core list that works on a pre-filtered feed is not evidence that it works on general news. Matching runs over the extracted article body, never over full page HTML. | Measured 2026-11-11 on one CC-NEWS file: single-token cores produced 5,017 hits against 299 from multi-token ones, and 60.4% of the top-60 hits were social-platform and big-tech names appearing in page boilerplate rather than in article text. Separately, our own map carries geographic names as cores — `Los Angeles`, `South Korea`, `Saudi Arabia`, `Australia`, `Qatar` are 5 of the 588 ever-salient cores and account for 43 of 2,258 core-session salience events, or **1.9%**; adding `Premier`, `Popular` and `Industrial` takes it to roughly 3%. Note that `Target`, `Block`, `Circle` and `Reddit` are real companies in the map that are also ordinary words, so a stoplist cannot fix this. |
 
 ### 2.2 Non-functional — stated here because they are currently UNSET
 
@@ -348,7 +362,7 @@ must not influence the service that produces proposals, or selection happens und
 | # | Decision | What hangs on it |
 |---|---|---|
 | D-1 | **Which news vendor**, and whether one or two (live vs archive). | §6. Blocked on the probe below. |
-| D-2 | **Storage licence.** No vendor reviewed grants the right to hold publisher text indefinitely; NewsCatcher states it grants no rights in publisher content, Webz licenses for the subscription term, Tiingo requires deletion after cancellation. | If holding bodies is not permissible, the archive stores hashes, spans and quotations instead — and re-matching after a rule change stops being possible. This is a storage-design input, not a legal footnote. |
+| D-2 | ~~**Storage licence.**~~ **CLOSED 2026-11-11 by the owner:** not treated as a constraint for a private, single-user research archive. The archive holds full article text. Recorded because the alternative it displaced — storing hashes, spans and quotations instead — would have made re-matching after a rule change impossible, so the decision bought that capability. | — |
 | D-3 | **The parity-gate date.** | Named in §5.1 as the cure for "parallel forever" and deliberately left unset here, which is the same defect one level up. |
 | D-4 | **Repo topology.** Statistics stay in Python, so the successor is either polyglot in one repo or split across two. | Also decides where the 103k lines of memos live. |
 | D-5 | **Brief handover criterion.** "Then the old pipeline can stop" is not testable as written. | Without a number, the transition has no end. |
@@ -391,7 +405,7 @@ to pick.
 
 - **No service contracts.** API surfaces, error codes and the outbox event payload are unspecified.
   "High-level architecture" one level down is missing.
-- **No numbers for N1–N5**, including the backup for an archive the design calls irreplaceable.
+- **No numbers for N1–N5**, including the backup for an archive the design calls irreplaceable. N4 (retention) is now partly answered by D-2: the archive holds full text, so the question is how long and on what medium, not whether.
 - **No architecture gates.** 22 tests currently enforce repo-wide rules (layer imports, per-vendor
   clients, language) from one place; a successor repo starts with none, and a gate nobody replaced
   is a rule that quietly stopped applying. They must be written at the start, not later.
