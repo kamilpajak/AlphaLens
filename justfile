@@ -123,8 +123,15 @@ test-golden:
         -t apps/alphalens-research -v
     cd apps/alphalens-django && uv run pytest briefs/tests/test_golden_api.py -q
 
+# newsvault (Rust): unit tests, doc tests, clippy and rustfmt. The real-lake check
+# is opt-in — point NEWSVAULT_TEST_LAKE at a copy of thematic_news_lake to run it.
+test-rust:
+    cd apps/newsvault && cargo fmt --check
+    cd apps/newsvault && cargo clippy --all-targets -- -D warnings
+    cd apps/newsvault && cargo test
+
 # Everything in series — same order as CI
-test: test-python test-django test-web
+test: test-python test-django test-web test-rust
 
 # -------------------------------------------------------------------------
 # Live probes (L4) + deploy shape (test-strategy Phase 5)
