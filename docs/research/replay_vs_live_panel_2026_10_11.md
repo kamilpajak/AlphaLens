@@ -371,7 +371,8 @@ for.
 
 ## 10. Refresh, 2026-11-03: the panel on thirteen comparable closed picks
 
-Status: **MEASURED**, 2026-11-03. Section 9 measured one pick against the LIVE record; this section
+Status: **MEASURED**, 2026-11-03; section 10.6 and 10.9 amended by section 11 (2026-11-12).
+Section 9 measured one pick against the LIVE record; this section
 measures thirteen, every closed pick the report calls comparable. It SUPERSEDES IN PART section 3
 (the exit-timing range and the non-flipping bound) and extends section 9.2 with the panel it was
 missing. Sections 1, 2, 4, 5, 6, 7, 8, 9.1 and 9.3 to 9.8 do not move, and 10.9 says which claims
@@ -495,7 +496,7 @@ positive on 7 and negative on 6, median **+0.0017 USD**; the exit price delta is
 negative on 6 and exactly zero on 1 (RLAY), median **0.0000 USD**.
 
 Section 3's money claim therefore stands on a panel of 13: **no single-signed correction may be
-applied to an R figure.** The largest `|ΔR|` is 0.5648 (VCYT) and, excluding it, **0.1740** (TNGX).
+applied to an R figure.** The largest `|ΔR|` is 0.5648 (VCYT) and, excluding it, **0.1740** (TNGX). Section 11 measured a 14th pick at **0.7901**; both figures stand over their own panels.
 
 Section 9.2 reported `max |ΔR| = 0.0322` on BE among the picks that did not flip. TNGX exceeds that
 5.4×, and it is NOT a contradiction: section 9.2's panel was "8 broker-backed, exclusion-free,
@@ -571,3 +572,137 @@ of thing that otherwise disappears.
 - **Nothing here measures the arming-time channel**, which #1848 documented and measured at zero
   effect on the picks then available. VCYT's `ΔT entry` of +1101.8 minutes is that channel showing
   up on the one pick where it bites.
+
+  **SUPERSEDED by section 11 (2026-11-12): `MSFT:2026-10-30` measures it. The replay filled 248.6
+  minutes before the plan was armed, and on that pick the channel costs 0.79 R and changes which
+  exit leg fires. Read section 11 before repeating that the channel is unmeasured.**
+
+## 11. Measurement, 2026-11-12: the arming-time channel is not a bias, it reroutes the trade
+
+Status: **MEASURED**, 2026-11-12. `MSFT:2026-10-30` closed on 2026-11-04 and became replayable today,
+the first day the vendor serves the session its entry ladder needed. It is the 14th comparable closed
+pick and it produces the **largest divergence on record**, larger than VCYT's.
+
+This section SUPERSEDES IN PART section 10.9's bullet "Nothing here measures the arming-time
+channel", and section 10.6's `max |ΔR|`. Sections 1 to 9 do not move, and 10.1 to 10.5, 10.7 and 10.8
+do not move: 10.2's thirteen rows were measured on a panel this pick was not in.
+
+### 11.1 What was run
+
+```bash
+# VPS, read-only; report generated 2026-11-12T08:38:00.679Z, 53 records
+alphalens broker trades --env live --format json --all
+scp jacoren@vault:'~/.alphalens/broker_orders/live/entry_trails.jsonl' .   # 194 lines
+# apps/alphalens-research, repo venv, POLYGON_API_KEY exported from the main checkout's .env
+python -m scripts.replay_from_pick <report> MSFT:2026-10-30 --out <dir> \
+    --bar-cache ~/.alphalens/replay_bars --entry-trails entry_trails.jsonl --format json
+python -m intent_replay run <dir>/MSFT_2026-10-30.document.json \
+    --config <dir>/MSFT_2026-10-30.config.json --bars <dir>/MSFT_2026-10-30.bars.json
+```
+
+One vendor request, no cache hit: 6950 bars fetched, **3510 kept** on the XNAS half-open grid over 9
+sessions, 9 dropped at a close and 3431 off grid. `entry_trail_bps` **50**, read from the tier's own
+`watch_open` line. The document declares `disaster_stop` 496.1, TP1 540.74 at 100%, and a
+`trailing_stop` reaction with `arm_trigger_r` 0.4 and `trail_frac` 0.6.
+
+The replay reports three divergences by name: `daemon_trail_guards`,
+`native_entry_trail_is_a_broker_model`, `take_profit_observation_time`. One bar needed the intrabar
+tie rule (`snu_bars` 1, `entries_then_stop_then_ladder`).
+
+### 11.2 The two sides
+
+| | LIVE | replay | replay − LIVE |
+|---|---:|---:|---:|
+| entry instant | 2026-10-30T19:11:38.029Z | 2026-10-30T13:39:00Z | **−332.6 min** |
+| entry price | 520.92 | 516.9421 | **−3.9779** |
+| exit instant | 2026-11-04T14:30:31.104Z | 2026-11-02T14:33:00Z | **−4317.5 min** |
+| exit price | 546.63 | 522.06484 | **−24.5652** |
+| exit mechanism | `take_profit` (`u261-tp1-sell`) | **`closed_stop`** (trailed) | **disagrees** |
+| R | +1.0359 | +0.2458 | **−0.7901** |
+| R denominator | 24.8200 | 20.8421 | **−16.03%** |
+| P&L of spent | 4.9355% | 0.9910% | **−3.9445 pp** |
+
+`|ΔR| = 0.7901` exceeds VCYT's 0.5648 by 1.4×, so section 10.6's "largest is 0.5648 (VCYT)" holds
+over its own thirteen picks and no longer over the comparable closed set.
+
+### 11.3 The entry gap is the arming head start, and almost nothing else
+
+The plan was armed at 17:47:35Z. The live watch cannot begin before that instant; the replay's
+`walk_start` is the day-1 session open, 13:30Z. The replay filled at **13:39:00Z — 248.6 minutes
+before the plan existed**.
+
+Session 1 holds 390 bars. Split at the arming instant:
+
+| window | bars | lowest low |
+|---|---:|---:|
+| 13:30:00Z to 17:47:35Z (before arming) | 258 | **514.3500** |
+| 17:47:35Z to 20:00Z (after arming) | 132 | **518.3300** |
+
+The daemon journaled its bid trough at **518.32**. The replay's trough, recovered from its fill
+(`516.9421 / 1.005`, the native trail's trigger arithmetic at `d_bps` 50), is **514.3702** — the
+pre-arming minimum.
+
+So the two series agree to **one cent** on the window the live watch could actually see, and the
+whole 3.98 USD entry gap comes from 258 bars the replay was allowed to watch and the daemon was not.
+
+### 11.4 The bid-versus-tape reference gap, measured at last, is about one bar
+
+This is the first pick that carries both a journaled bid touch and a comparable replay, because
+#1816 landed on 2026-10-29 and this pick was armed the next day — every earlier pick lost its
+`touched` line to boot compaction (10.6 counts them).
+
+Measured on the window the live watch could see: the first bar after arming whose LOW reaches the
+declared limit 518.42 is stamped **18:53:00Z** with a low of 518.33. The bid touched 518.32 at
+**18:54:23.891Z**. The tape therefore reaches the rung **1.4 minutes** before the bid, which is one
+1-minute bar plus 23 seconds, with the bar stamped at its start.
+
+**One observation is not a bias.** The direction here is the one a trade-through makes likely, and
+`apps/intent-replay/CLAUDE.md` already states why it is not structural: a trade can print below the
+displayed bid. What this adds is a magnitude on one pick — a penny of price and about a bar of time —
+against which the 3.98 USD entry gap of 11.3 is two orders of magnitude larger. **On this pick the
+reference gap is not what moved the number.**
+
+### 11.5 Why a better entry produced a worse trade
+
+The replay entered 3.98 lower, which shrank its R denominator from 24.82 to 20.84, which lowered its
+trail arm threshold:
+
+| | entry | denominator | trail arms at `entry + 0.4R` | first bar with a high that reaches it |
+|---|---:|---:|---:|---|
+| replay | 516.9421 | 20.8421 | **525.2789** | 2026-10-30T13:30:00Z |
+| LIVE | 520.9200 | 24.8200 | **530.8480** | **2026-11-04T14:30:00Z** |
+
+The LIVE arm threshold was first reached in the same minute as the take-profit fill. **The real
+position's trail never armed.** The replay's did, and `trail_frac` 0.6 then parked its stop at
+`516.9421 + 0.6 × (525.50 − 516.9421)` = **522.077**, against the 522.06484 its trace records, a
+1.2-cent agreement. A retracement on 2026-11-02 took it out.
+
+So the four hours the replay should not have had did not make it luckier. They moved its entry down,
+which moved its R scale down, which armed a trail the real trade never armed, which ended the trade
+**2 days 23 h 57 min early** at 24.57 USD below the real exit. The arming channel is **not a
+signed bias on an entry price**; on this pick it changed which exit leg fired.
+
+That answers the question #1848 left open — whether `walk_start` should be the later of the day-1
+session open and the arming instant — with a measurement rather than a preference: the choice is not
+cosmetic. It does not decide it. Changing `walk_start` makes the replay agree with the daemon's
+HORIZON, and the spec's §2.1 rule still holds that a knob cannot supply a missing fact. What is now
+measured is the price of leaving it alone, on one pick: 0.79 R and a different exit leg.
+
+### 11.6 What this does NOT settle
+
+- **One pick.** Every figure here is one observation with its construction attached. The arming
+  channel's effect was measured at exactly zero on the 2026-11-03 panel because no pick there
+  exhibited the gap; it is measured large here. Two measurements, two populations, no distribution.
+- **The R comparison carries 10.3's warning.** The denominators differ by 16.03%, and that difference
+  is not noise here — it is the mechanism. Quoting `ΔR = −0.7901` without the denominators is
+  quoting the effect while hiding its cause.
+- **Nothing is re-measured on the other thirteen.** Section 10's panel stands as published. This pick
+  takes the comparable closed set to 14; the table in 10.2 was not re-run.
+- **The exit-timing direction now has a counterexample in magnitude, not in sign.** The replay still
+  exited earlier, as on 13 of 13 before it, but by 4317.5 minutes and for a different reason: not an
+  early fire of the same leg, a different leg.
+- **`mfe_lower_bound` is null on the LIVE side** for this pick. The exit was TP1 and no `trailed`
+  line was ever written, so the LIVE record holds no high-water mark to compare against the replay's
+  `mfe` of 0.4106 R.
+- **The tape-versus-bid magnitude rests on 1-minute bars.** A bar stamped at its start cannot resolve
+  a 23-second difference, so "1.4 minutes" is the resolution floor, not a measurement of the lead.
