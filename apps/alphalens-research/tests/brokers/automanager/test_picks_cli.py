@@ -557,14 +557,34 @@ class PicksCommandNowTrancheRecordTest(unittest.TestCase):
         # The 2026-10-30 incident, reduced, plus the half the one-line swap
         # would have cost. Red before the two-fold view on the state; red on
         # `window_end` if the window is keyed on the existence fold instead.
+        #
+        # The clock is HELD, the way the sibling above holds it. This test says
+        # "a window that has not ended is not reported overdue", and against a
+        # REAL clock that sentence has an expiry date: the fixture's window ends
+        # 2026-11-10T21:00:00Z, so the assertion was true for eleven days and
+        # false for good afterwards. It began failing on main on 2026-11-10 and
+        # blocked every pull request until this commit.
+        from unittest import mock
+
+        from alphalens_cli.commands import broker as broker_cli
+
         _arm(self.home, "NVDA", "2026-10-30")
         _submit_now(self.home, "NVDA", "2026-10-30")
-        result = _run(self.runner, "--format", "json")
+        with mock.patch.object(
+            broker_cli,
+            "_reading_now",
+            return_value=dt.datetime(2026, 10, 31, 20, 0, tzinfo=dt.UTC),
+        ):
+            result = _run(self.runner, "--format", "json")
         self.assertEqual(result.exit_code, 0, result.output)
         row = _rows(result)["NVDA"]
         self.assertEqual(row["state"], "PLACED")
-        self.assertIsNotNone(
+        # Pinned rather than merely non-null: the window is what the assertion
+        # below is about, so a view that published a DIFFERENT window would
+        # otherwise satisfy both lines.
+        self.assertEqual(
             row["window_end"],
+            "2026-11-10T21:00:00+00:00",
             "the drain has not retired it, so its window still stands",
         )
         self.assertIn("overdue", row, "the row must still publish the field")
