@@ -838,10 +838,12 @@ Four things this is not.
   no rate and no threshold is estimable**, and nothing in this section may be read as one.
 - **A decision about the anchor.** The judged design round of 2026-11-13 concluded: publish the
   measurement, leave `walk_start` where it is, and re-ask the question with a corpus. The corpus
-  will come from the `arming` block added to the replay join on 2026-11-13 and NOT merged at the
-  time of writing — `plan_armed_at`, `walk_start`,
-  `head_start_minutes`, `pre_arming_bars`, `pre_arming_lowest_low`, and per declared rung
-  `pre_arming_reaching_bars` with its verdict. The discriminator that separates #1848's nine zeros
+  comes from the `arming` block the replay join publishes as of PR #1890 (merged 2026-11-13,
+  `88cb25f9`) — `plan_armed_at`, `walk_start`, `head_start_minutes`, `pre_arming_bars`,
+  `pre_arming_lowest_low`, and per declared rung `pre_arming_reaching_bars` with its verdict. Its
+  `head_start_minutes` is a LOWER bound, for the reason 11.3 states: the daemon opens the watch
+  after the door appends the line, by 40 s to 2 min 11 s on one measured burst, and `watch_open`
+  carries no timestamp (#1891). The discriminator that separates #1848's nine zeros
   from this pick is whether a replay entry filled before `plan_armed_at`, and that block is what
   will let a reader count it per pick instead of inferring it from an outcome word.
 
