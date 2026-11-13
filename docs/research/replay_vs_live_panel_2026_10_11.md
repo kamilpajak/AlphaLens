@@ -421,7 +421,11 @@ came from the cache; four were fetched (ASTS, SMMT, TNGX, VST). The corporate-ac
 
 ### 10.2 The thirteen rows
 
-`ΔR` and `Δ price` are REPLAY MINUS LIVE, so a positive number means the replay said more. `ΔT` is
+`ΔR` and `Δ price` are REPLAY MINUS LIVE, so a positive number means the replay said more. 10.9
+says no PLN figure is published and that the ΔP&L column is deliberately absent from 10.2; this
+section does publish one, and it is allowed here because BOTH sides of it are gross USD price
+returns — the replay's `pnl_pct_of_spent` against the record's own — and not the account-currency
+figures 10.9 forbade differencing. `ΔT` is
 in minutes. The LIVE side is `outcome.*` and `exits[].venue_time` from the report (source
 `venue.audit`); the replay side is its own `summary`.
 
@@ -610,7 +614,8 @@ python -m intent_replay run <dir>/MSFT_2026-10-30.document.json \
     --config <dir>/MSFT_2026-10-30.config.json --bars <dir>/MSFT_2026-10-30.bars.json
 ```
 
-One vendor request, no cache hit: 6950 bars fetched, **3510 kept** on the XNAS half-open grid over 9
+One bars request, no cache hit, plus the splits and dividends lookups the corporate-action check
+makes: 6950 bars fetched, **3510 kept** on the XNAS half-open grid over 9
 sessions, 9 dropped at a close and 3431 off grid. `entry_trail_bps` **50**, read from the tier's own
 `watch_open` line. The document declares `disaster_stop` 496.1, TP1 540.74 at 100%, and a
 `trailing_stop` reaction with `arm_trigger_r` 0.4 and `trail_frac` 0.6.
@@ -629,7 +634,7 @@ tie rule (`snu_bars` 1, `entries_then_stop_then_ladder`).
 | exit price | 546.63 | 522.06484 | **−24.5652** |
 | exit mechanism | `take_profit` (`u261-tp1-sell`) | **`closed_stop`** (trailed) | **disagrees** |
 | R | +1.0359 | +0.2458 | **−0.7901** |
-| R denominator | 24.8200 | 20.8421 | **−16.03%** |
+| R denominator | 24.8200 | 20.8421 | **−3.9779 USD**, i.e. −16.03% |
 | P&L of spent | 4.9355% | 0.9910% | **−3.9445 pp** |
 
 `|ΔR| = 0.7901` exceeds VCYT's 0.5648 by 1.4×, so section 10.6's "largest is 0.5648 (VCYT)" holds
@@ -641,13 +646,30 @@ The plan was armed at 17:47:35Z. The live watch cannot begin before that instant
 `walk_start` is the day-1 session open, 13:30Z. The replay filled at **13:39:00Z — 248.6 minutes
 before the plan existed**.
 
-**Two numbers describe that head start, and they are different measurements.** 248.6 minutes is
-`plan_armed_at − the replay's own fill instant` (17:47:35Z − 13:39:00Z): what this pick's entry
-decision got for free. **257.583** minutes is `plan_armed_at − walk_start` (17:47:35Z − 13:30:00Z):
-the width of the window the replay could watch and the daemon could not. The second is the one the
-replay join's `arming` block publishes as `head_start_minutes`, because the join prints before the
-walk runs and does not yet know any fill instant. Quote whichever answers the question being asked,
-with its construction. They are not interchangeable.
+**THREE numbers describe that head start and they are three different measurements.** All three are
+already published somewhere in this repository, which is reason enough to list them together:
+
+| minutes | construction | what it answers |
+|---:|---|---|
+| **248.6** | `plan_armed_at − the replay's own fill instant` (17:47:35Z − 13:39:00Z) | what this pick's entry decision got for free |
+| **251.6** | `plan_armed_at − the first bar whose low reaches the declared rung` (17:47:35Z − 13:36:00Z) | the figure the #1848 row in `apps/intent-replay/README.md` carries |
+| **257.583** | `plan_armed_at − walk_start` (17:47:35Z − 13:30:00Z) | the width of the window the replay could watch and the daemon could not |
+
+The third is what the replay join's `arming` block publishes as `head_start_minutes`, because the
+join prints before the walk runs and knows neither a fill instant nor a reach. Quote whichever
+answers the question being asked, with its construction. They are not interchangeable, and the
+254-minute spread between the smallest and the largest is wider than the whole measured effect of
+most of this file.
+
+A FOURTH instant exists and no JSON journal carries it: the daemon did not open the watch at
+`plan_armed_at`. It routed this pick into the entry-trail watch at **17:49:46Z**, 2 min 11 s later —
+`place_pick MSFT: routed into entry-trail watch`, read from the LIVE unit's systemd journal on
+2026-11-13. `GOOGL:2026-10-30`, armed 4 seconds earlier in the same five-pick burst, was routed at
+17:48:11Z, 40 s after its own arming. So the drain latency is real, variable (40 s against 131 s on
+one tick batch) and absent from `entry_trails.jsonl`, whose `watch_open` line carries eighteen
+fields and no timestamp at all. `head_start_minutes` is therefore a LOWER BOUND on the window the
+live side never saw. The systemd journal holds about two weeks, so this is the only pick for which
+the figure can still be recovered.
 
 Session 1 holds 390 bars. Split at the arming instant:
 
@@ -680,19 +702,42 @@ the 3.9779 USD entry gap survives the head start** and 3.9758 USD of it is the h
 
 ### 11.4 The bid-versus-tape reference gap, measured at last, is about one bar
 
-This is the first pick that carries both a journaled bid touch and a comparable replay, because
-#1816 landed on 2026-10-29 and this pick was armed the next day — every earlier pick lost its
-`touched` line to boot compaction (10.6 counts them).
+An earlier draft of this section called MSFT the FIRST pick carrying both a journaled bid touch and
+a comparable replay. That was wrong, and it contradicted 10.6 in the same file: **nine of the
+fourteen** comparable closed picks carry a non-null `touched_at` and `touch_price`, eight of them
+rows of the 10.2 panel. The claim is withdrawn and replaced by the sample it should have been.
 
-Measured on the window the live watch could see: the first bar after arming whose LOW reaches the
-declared limit 518.42 is stamped **18:53:00Z** with a low of 518.33. The bid touched 518.32 at
-**18:54:23.891Z**. The tape therefore reaches the rung **1.4 minutes** before the bid, which is one
-1-minute bar plus 23 seconds, with the bar stamped at its start.
+Measured on all nine, offline and with zero vendor requests, from the bar cache and the
+2026-11-12 report. Per pick: the first bar AT OR AFTER `plan_armed_at` whose low reaches the
+declared tier limit, against the daemon's journaled `touched_at`. A positive lead means the tape
+reached the rung first.
 
-**One observation is not a bias.** The direction here is the one a trade-through makes likely, and
-`apps/intent-replay/CLAUDE.md` already states why it is not structural: a trade can print below the
-displayed bid. What this adds is a magnitude on one pick — a penny of price and about a bar of time —
-against which the 3.98 USD entry gap of 11.3 is two orders of magnitude larger. **On this pick the
+| pick | tier limit | journalled bid touch | first post-arming bar low <= limit | tape lead |
+|---|---:|---:|---|---:|
+| `RLAY:2026-10-05` | 18.05 | 18.01 | 2026-10-07T16:23:00Z | **+0.41 min** |
+| `ALAB:2026-10-05` | 328.39 | 327.06 | 2026-10-09T13:51:00Z | **+0.66 min** |
+| `HUT:2026-10-06` | 82.39 | 82.15 | 2026-10-08T15:09:00Z | **+0.86 min** |
+| `CRDO:2026-10-05` | 204.38 | 203.69 | 2026-10-12T13:32:00Z | **+1.08 min** |
+| `FLY:2026-10-06` | 21.02 | 20.90 | 2026-10-08T13:39:00Z | **+1.33 min** |
+| `MSFT:2026-10-30` | 518.42 | 518.32 | 2026-10-30T18:53:00Z | **+1.40 min** |
+| `BE:2026-09-30` | 269.93 | 268.00 | 2026-10-08T16:52:00Z | **+1.75 min** |
+| `NESR:2026-09-30` | 24.54 | 24.50 | 2026-10-01T13:49:00Z | **+71.60 min** |
+| `VCYT:2026-09-29` | 44.01 | 44.00 | 2026-10-07T13:25:00Z | **−1099.09 min** |
+
+**Seven of nine sit between +0.41 and +1.75 minutes**, which on a 1-minute grid stamped at the bar
+start is one to two bars — the resolution floor, not a measured lead. The median is +1.08 min.
+
+**The inequality is NOT structural, and this panel now contains the counterexample.** On
+`VCYT:2026-09-29` the bid leads the tape by **1099 minutes**: the daemon journalled a bid touch of
+44.00 against a 44.01 rung on 2026-10-06T19:05:54Z, while no post-arming bar low reached 44.01 until
+2026-10-07T13:25:00Z. The displayed bid went where no trade printed. That is exactly the mechanism
+`apps/intent-replay/CLAUDE.md` names — a trade can print below the displayed bid, so the two series
+have no fixed order — and it lands on the pick with the largest replay divergence in sections 9
+and 10. `NESR:2026-09-30` is the other outlier, +71.6 min, in the opposite direction.
+
+So the reference gap has a **sign on 8 of 9 and a counterexample on the ninth**, and on seven of the
+nine its magnitude is below what this tape can resolve. Against it, the 3.98 USD entry gap of 11.3
+is two orders of magnitude larger. **On this pick the
 reference gap is not what moved the number.**
 
 ### 11.5 Why a better entry produced a worse trade
@@ -740,7 +785,8 @@ the same bars from the other anchor and measures what the change would and would
 Measured today with **zero vendor requests**. The bars file, the document and the fee card are the
 ones 11.1 produced on 2026-11-12; the only change is **one key** of the run configuration —
 `walk_start` moved from `day1_session_open` (13:30:00Z) to `max_day1_open_and_arming` (17:47:35Z) —
-and the engine re-walked the same 3510 bars. A `diff` of the two configuration files reports that one
+and the engine re-walked the same 3510 bars. A `diff` of the two configuration files reports changes
+to the four fields of one key — `kind`, `value`, `source`, `formula` — and that one
 key and nothing else.
 
 | | shipped anchor | arming anchor | LIVE |
@@ -756,13 +802,19 @@ key and nothing else.
 | ΔR against LIVE | **−0.7901** | **−0.2375** | — |
 | ΔP&L of spent against LIVE | **−3.9445 pp** | **−1.1311 pp** | — |
 
-The arming-anchored entry misses the LIVE fill by **0.0021 USD**, and both halves of that residual
-are visible in the two journals. The replay troughs on the tape low **518.33** and freezes its
-distance on `min(bar.open, limit)` = 518.42, so `518.42 × 50 bps` = **2.5921** and the trigger is
-520.9221. The daemon troughed on the bid **518.32** and journaled a distance of **2.5916**, anchored
-on that touch price, for a trigger of 520.9116 that filled at 520.92. The one cent is 11.4's
-reference gap; the 0.0005 is the distance anchor. Both are the
-`native_entry_trail_is_a_broker_model` divergence 11.1 already names.
+Two different residuals live here and an earlier draft added the halves of one to the other. Kept
+apart:
+
+- **Trigger against trigger, 0.0105 USD, and this is the one that decomposes.** The replay troughs
+  on the tape low **518.33** and freezes its distance on `min(bar.open, limit)` = 518.42, so
+  `518.42 × 50 bps` = **2.5921** and its trigger is **520.9221**. The daemon troughed on the bid
+  **518.32** and journalled a distance of **2.5916**, anchored on that touch price, for a trigger of
+  **520.9116**. The difference is `0.0100 + 0.0005 = 0.0105 USD`: one cent of 11.4's reference gap
+  plus five hundredths of a cent of distance anchor.
+- **Fill against fill, 0.0021 USD.** The replay books its own trigger, 520.9221; the venue filled at
+  **520.92**. That 0.0021 is not the sum above and is not decomposed here — a fill is not a trigger,
+  and what the venue did between the two is the `native_entry_trail_is_a_broker_model` divergence
+  11.1 already names.
 
 Four things this is not.
 
@@ -786,7 +838,8 @@ Four things this is not.
   no rate and no threshold is estimable**, and nothing in this section may be read as one.
 - **A decision about the anchor.** The judged design round of 2026-11-13 concluded: publish the
   measurement, leave `walk_start` where it is, and re-ask the question with a corpus. The corpus
-  comes from the `arming` block the replay join now publishes — `plan_armed_at`, `walk_start`,
+  will come from the `arming` block added to the replay join on 2026-11-13 and NOT merged at the
+  time of writing — `plan_armed_at`, `walk_start`,
   `head_start_minutes`, `pre_arming_bars`, `pre_arming_lowest_low`, and per declared rung
   `pre_arming_reaching_bars` with its verdict. The discriminator that separates #1848's nine zeros
   from this pick is whether a replay entry filled before `plan_armed_at`, and that block is what
