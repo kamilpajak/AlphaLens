@@ -579,13 +579,23 @@ of thing that otherwise disappears.
 
 ## 11. Measurement, 2026-11-12: the arming-time channel is not a bias, it reroutes the trade
 
-Status: **MEASURED**, 2026-11-12. `MSFT:2026-10-30` closed on 2026-11-04 and became replayable today,
-the first day the vendor serves the session its entry ladder needed. It is the 14th comparable closed
-pick and it produces the **largest divergence on record**, larger than VCYT's.
+Status: **MEASURED**, 2026-11-12; three figures re-derived and corrected and one subsection added
+2026-11-13. `MSFT:2026-10-30` closed on 2026-11-04 and became replayable on 2026-11-12, the first day
+the vendor serves the session its entry ladder needed. It is the 14th comparable closed pick —
+counted as the closed records of the 2026-11-12 report that carry no `replay_exclusions`, 14 of 29
+closed and 14 of 53 in all — and it produces the **largest divergence on record**, larger than
+VCYT's.
 
 This section SUPERSEDES IN PART section 10.9's bullet "Nothing here measures the arming-time
 channel", and section 10.6's `max |ΔR|`. Sections 1 to 9 do not move, and 10.1 to 10.5, 10.7 and 10.8
 do not move: 10.2's thirteen rows were measured on a panel this pick was not in.
+
+What changed on 2026-11-13, each re-run against the same staged report and bars file: the
+replay-minus-LIVE exit interval (**−2877.5 min**, not −4317.5 — the old figure landed on Sunday
+2026-11-01, which carries no bars); the trough inversion in 11.3, which used a division the engine
+does not perform and presented the result as independent agreement; and the trail-arm column and
+trail-level arithmetic in 11.5, which scanned bars before the replay's own fill and used a peak set
+after the stop had already moved. 11.6 is new.
 
 ### 11.1 What was run
 
@@ -615,7 +625,7 @@ tie rule (`snu_bars` 1, `entries_then_stop_then_ladder`).
 |---|---:|---:|---:|
 | entry instant | 2026-10-30T19:11:38.029Z | 2026-10-30T13:39:00Z | **−332.6 min** |
 | entry price | 520.92 | 516.9421 | **−3.9779** |
-| exit instant | 2026-11-04T14:30:31.104Z | 2026-11-02T14:33:00Z | **−4317.5 min** |
+| exit instant | 2026-11-04T14:30:31.104Z | 2026-11-02T14:33:00Z | **−2877.5 min** |
 | exit price | 546.63 | 522.06484 | **−24.5652** |
 | exit mechanism | `take_profit` (`u261-tp1-sell`) | **`closed_stop`** (trailed) | **disagrees** |
 | R | +1.0359 | +0.2458 | **−0.7901** |
@@ -631,6 +641,14 @@ The plan was armed at 17:47:35Z. The live watch cannot begin before that instant
 `walk_start` is the day-1 session open, 13:30Z. The replay filled at **13:39:00Z — 248.6 minutes
 before the plan existed**.
 
+**Two numbers describe that head start, and they are different measurements.** 248.6 minutes is
+`plan_armed_at − the replay's own fill instant` (17:47:35Z − 13:39:00Z): what this pick's entry
+decision got for free. **257.583** minutes is `plan_armed_at − walk_start` (17:47:35Z − 13:30:00Z):
+the width of the window the replay could watch and the daemon could not. The second is the one the
+replay join's `arming` block publishes as `head_start_minutes`, because the join prints before the
+walk runs and does not yet know any fill instant. Quote whichever answers the question being asked,
+with its construction. They are not interchangeable.
+
 Session 1 holds 390 bars. Split at the arming instant:
 
 | window | bars | lowest low |
@@ -638,12 +656,27 @@ Session 1 holds 390 bars. Split at the arming instant:
 | 13:30:00Z to 17:47:35Z (before arming) | 258 | **514.3500** |
 | 17:47:35Z to 20:00Z (after arming) | 132 | **518.3300** |
 
-The daemon journaled its bid trough at **518.32**. The replay's trough, recovered from its fill
-(`516.9421 / 1.005`, the native trail's trigger arithmetic at `d_bps` 50), is **514.3702** — the
-pre-arming minimum.
+The replay's trail troughed on the pre-arming minimum, and the engine's own formula says so exactly.
+`_prospect` (`walk.py:324-325`) freezes the trail distance once, on the bar that arms the rung, at
+`reference × bps / 10000` with `reference = min(bar.open, rung.limit_price)`. That bar is 13:36:00Z;
+it opened at 518.73, so `reference` is the rung's own limit **518.42** and the distance is **2.5921**
+for the rest of the walk. Inverting the fill gives `516.9421 − 2.5921` = **514.350000** against a
+pre-arming lowest low of **514.35** — a difference of **0.000000**. The engine does not divide: a
+`516.9421 / 1.005` inversion answers 514.3702 and is the wrong formula by 0.02.
 
-So the two series agree to **one cent** on the window the live watch could actually see, and the
-whole 3.98 USD entry gap comes from 258 bars the replay was allowed to watch and the daemon was not.
+**That exactness is an identity, not a corroboration.** The engine computed the fill as
+`trough + distance`, so running its own formula backwards on its own output must return the trough it
+used. It establishes which minimum the fill came from. It says nothing about any second series.
+
+**The independent agreement in this section is the other one.** The daemon journaled its bid trough
+at **518.32** (`entry_trails.jsonl`, `kind: trough`). The tape's lowest low over the same window the
+live watch could see, 17:47:35Z to the session close, is **518.33**. Two different series, one cent
+apart, and neither is derived from the other. That is the pair this section leans on.
+
+So the whole 3.98 USD entry gap comes from 258 bars the replay was allowed to watch and the daemon
+was not. 11.6 measures that rather than inferring it: with `walk_start` moved to the arming instant
+and nothing else changed, the replay fills at 520.9221 against the LIVE 520.92, so **0.0021 USD of
+the 3.9779 USD entry gap survives the head start** and 3.9758 USD of it is the head start.
 
 ### 11.4 The bid-versus-tape reference gap, measured at last, is about one bar
 
@@ -667,39 +700,112 @@ reference gap is not what moved the number.**
 The replay entered 3.98 lower, which shrank its R denominator from 24.82 to 20.84, which lowered its
 trail arm threshold:
 
-| | entry | denominator | trail arms at `entry + 0.4R` | first bar with a high that reaches it |
+| | entry | denominator | trail arms at `entry + 0.4R` | first bar AFTER ITS OWN FILL whose high reaches it |
 |---|---:|---:|---:|---|
-| replay | 516.9421 | 20.8421 | **525.2789** | 2026-10-30T13:30:00Z |
+| replay | 516.9421 | 20.8421 | **525.2789** | **2026-11-02T14:30:00Z** |
 | LIVE | 520.9200 | 24.8200 | **530.8480** | **2026-11-04T14:30:00Z** |
 
+The last column is a scan from each side's own fill forward, and it has to be: the high-water mark
+the trail arms on does not exist before the fill. `_track_extremes` (`walk.py:479-486`) returns
+immediately while `state.units <= 0.0`. Scanned over the whole bar file instead, the replay's
+threshold is first reached at 2026-10-30T13:30:00Z — nine minutes before the replay's own fill — and
+that bar is not a quantity the engine could ever have used.
+
 The LIVE arm threshold was first reached in the same minute as the take-profit fill. **The real
-position's trail never armed.** The replay's did, and `trail_frac` 0.6 then parked its stop at
-`516.9421 + 0.6 × (525.50 − 516.9421)` = **522.077**, against the 522.06484 its trace records, a
-1.2-cent agreement. A retracement on 2026-11-02 took it out.
+position's trail never armed.** The replay's armed on 2026-11-02T14:30:00Z, and `trail_frac` 0.6
+parked its stop at `516.9421 + 0.6 × (525.48 − 516.9421)` = **522.06484**, which is the level its
+trace records to the last digit — a difference of **0.000000**. 525.48 is the deciding bar's own
+high, which is the peak that decision saw; the run's reported `mfe` peak of 525.50 belongs to
+2026-11-02T14:32:00Z, two minutes AFTER the stop moved, and substituting it answers 522.077 instead.
+As with 11.3's trough, the exact match is an identity recovered from the engine's formula rather
+than two sources agreeing. The min-distance envelope did not bind here:
+`BreakevenTrailPolicy.min_stop_distance_frac` is 0.002, so the clamp's cap was `525.48 × 0.998` =
+524.42904, well above the level placed. A retracement three minutes later, at 14:33:00Z, took the
+stop out.
 
 So the four hours the replay should not have had did not make it luckier. They moved its entry down,
 which moved its R scale down, which armed a trail the real trade never armed, which ended the trade
-**2 days 23 h 57 min early** at 24.57 USD below the real exit. The arming channel is **not a
-signed bias on an entry price**; on this pick it changed which exit leg fired.
+**1 day 23 h 57 min early** — 2877.5 minutes — at 24.57 USD below the real exit. The arming channel
+is **not a signed bias on an entry price**; on this pick it changed which exit leg fired.
 
 That answers the question #1848 left open — whether `walk_start` should be the later of the day-1
 session open and the arming instant — with a measurement rather than a preference: the choice is not
 cosmetic. It does not decide it. Changing `walk_start` makes the replay agree with the daemon's
 HORIZON, and the spec's §2.1 rule still holds that a knob cannot supply a missing fact. What is now
-measured is the price of leaving it alone, on one pick: 0.79 R and a different exit leg.
+measured is the price of leaving it alone, on one pick: 0.79 R and a different exit leg. 11.6 walks
+the same bars from the other anchor and measures what the change would and would not buy.
 
-### 11.6 What this does NOT settle
+### 11.6 Dual-anchor diagnostic, 2026-11-13: the same bars walked from both anchors
+
+Measured today with **zero vendor requests**. The bars file, the document and the fee card are the
+ones 11.1 produced on 2026-11-12; the only change is **one key** of the run configuration —
+`walk_start` moved from `day1_session_open` (13:30:00Z) to `max_day1_open_and_arming` (17:47:35Z) —
+and the engine re-walked the same 3510 bars. A `diff` of the two configuration files reports that one
+key and nothing else.
+
+| | shipped anchor | arming anchor | LIVE |
+|---|---|---|---|
+| `walk_start` | 2026-10-30T13:30:00Z | 2026-10-30T17:47:35Z | — |
+| bars walked | 394 | 913 | — |
+| entry instant | 2026-10-30T13:39:00Z | 2026-10-30T19:11:00Z | 2026-10-30T19:11:38.029Z |
+| entry price | 516.9421 | 520.9221 | 520.92 |
+| outcome | `closed_stop` | `closed_tp` | `take_profit` |
+| exit instant | 2026-11-02T14:33:00Z | 2026-11-04T14:30:00Z | 2026-11-04T14:30:31.104Z |
+| exit price | 522.06484 | 540.74 | 546.63 |
+| R | 0.2458 | 0.7984 | 1.0359 |
+| ΔR against LIVE | **−0.7901** | **−0.2375** | — |
+| ΔP&L of spent against LIVE | **−3.9445 pp** | **−1.1311 pp** | — |
+
+The arming-anchored entry misses the LIVE fill by **0.0021 USD**, and both halves of that residual
+are visible in the two journals. The replay troughs on the tape low **518.33** and freezes its
+distance on `min(bar.open, limit)` = 518.42, so `518.42 × 50 bps` = **2.5921** and the trigger is
+520.9221. The daemon troughed on the bid **518.32** and journaled a distance of **2.5916**, anchored
+on that touch price, for a trigger of 520.9116 that filled at 520.92. The one cent is 11.4's
+reference gap; the 0.0005 is the distance anchor. Both are the
+`native_entry_trail_is_a_broker_model` divergence 11.1 already names.
+
+Four things this is not.
+
+- **A panel row.** The arming-anchored configuration was produced by editing one key of a generated
+  file BY HAND. `apps/intent-replay/CLAUDE.md` opens with "Never hand-assemble a run from an armed
+  pick", and the reason is itself a measurement: hand assembly got three values wrong over two days
+  (the FX rate, `costs.exit_edge_min_bps`, the calendar MIC). The rule was suspended for exactly one
+  key, knowingly, for one pick. Nothing here becomes a row of 10.2 until a command anyone can repeat
+  produces the anchor, and no such command exists.
+- **A reproduction of LIVE.** The arming anchor does not reproduce the LIVE record; it reproduces it
+  **closer**. The residual is **−0.2375 R**, and its cause is named rather than unexplained: the LIVE
+  take-profit filled at 546.63 against its declared 540.74, **5.89 USD above the level**, while the
+  replay fires a tranche at the declared price. That is the `take_profit_observation_time`
+  divergence 11.1 lists. Moving the anchor closes the entry channel on this pick and leaves the exit
+  channel exactly where it was.
+- **A distribution.** **One pick.** #1848 re-walked nine terminal picks under this same later anchor
+  and moved **0 of 9 outcome words and 0 of 9 R values**, max |ΔR| 0.000000, because every one of
+  those replay entries filled 5.6 to 193.2 hours AFTER its own arming instant, so no entry decision
+  sat inside the head start at all. Those nine figures are #1848's and were **not** re-derived here.
+  Nine zeros and one −0.7901 are two populations with no distribution between them: **no effect size,
+  no rate and no threshold is estimable**, and nothing in this section may be read as one.
+- **A decision about the anchor.** The judged design round of 2026-11-13 concluded: publish the
+  measurement, leave `walk_start` where it is, and re-ask the question with a corpus. The corpus
+  comes from the `arming` block the replay join now publishes — `plan_armed_at`, `walk_start`,
+  `head_start_minutes`, `pre_arming_bars`, `pre_arming_lowest_low`, and per declared rung
+  `pre_arming_reaching_bars` with its verdict. The discriminator that separates #1848's nine zeros
+  from this pick is whether a replay entry filled before `plan_armed_at`, and that block is what
+  will let a reader count it per pick instead of inferring it from an outcome word.
+
+### 11.7 What this does NOT settle
 
 - **One pick.** Every figure here is one observation with its construction attached. The arming
-  channel's effect was measured at exactly zero on the 2026-11-03 panel because no pick there
-  exhibited the gap; it is measured large here. Two measurements, two populations, no distribution.
+  channel's effect was measured at exactly zero on #1848's nine terminal picks — not on the
+  2026-11-03 panel, whose own 10.9 states that nothing in it measures this channel — and it is
+  measured large here. Two measurements, two populations, no distribution. 11.6 carries the
+  construction of both.
 - **The R comparison carries 10.3's warning.** The denominators differ by 16.03%, and that difference
   is not noise here — it is the mechanism. Quoting `ΔR = −0.7901` without the denominators is
   quoting the effect while hiding its cause.
 - **Nothing is re-measured on the other thirteen.** Section 10's panel stands as published. This pick
   takes the comparable closed set to 14; the table in 10.2 was not re-run.
 - **The exit-timing direction now has a counterexample in magnitude, not in sign.** The replay still
-  exited earlier, as on 13 of 13 before it, but by 4317.5 minutes and for a different reason: not an
+  exited earlier, as on 13 of 13 before it, but by 2877.5 minutes and for a different reason: not an
   early fire of the same leg, a different leg.
 - **`mfe_lower_bound` is null on the LIVE side** for this pick. The exit was TP1 and no `trailed`
   line was ever written, so the LIVE record holds no high-water mark to compare against the replay's
