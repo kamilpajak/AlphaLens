@@ -44,6 +44,7 @@ from scripts.replay_from_pick import (
     GRID_PREDICATE,
     SCHEMA,
     BarRefusal,
+    BuiltBars,
     EntryTrailUnknownError,
     ExitTimeUnknownError,
     _fail,
@@ -51,6 +52,7 @@ from scripts.replay_from_pick import (
     _served_short_message,
     _unservable_message,
     _window_provenance,
+    arming_audit,
     authored_document,
     bar_cache_root,
     bar_window,
@@ -4072,6 +4074,579 @@ class TheTouchAuditMeasuresTheReferenceGapPerRecordTest(_FetchingTestCase):
             )
 
 
+class TheArmingAuditMeasuresTheHeadStartTheReplayGetsTest(_FetchingTestCase):
+    """The walk starts at the day-1 session open. The LIVE watch cannot start
+    before the plan was armed, so every bar between those two instants is a bar
+    the replay may enter on and the daemon never saw.
+
+    TWO populations and no distribution, which is why this is a measurement and
+    not an anchor change. #1848 re-walked nine terminal picks under the later
+    anchor and moved 0 of 9 outcome words and 0 of 9 R values, max
+    abs(delta R) 0.000000 -- because every replay entry filled 5.6 to 193.2
+    hours AFTER its own arming instant, so the head-start window held no entry
+    decision at all. MSFT:2026-10-30 is the other population: its replay entry
+    landed INSIDE that window and delta R was -0.7901, the largest on record.
+
+    The discriminator between the two is therefore "did the replay's entry fill
+    before `plan_armed_at`", and this block publishes the per-pick facts a
+    reader needs to see it: the size of the window, how much of the tape it
+    holds, and whether a declared rung was reachable inside it.
+
+    It is an ANNOTATION. It never refuses a record, it never reaches the
+    engine's configuration, and `walk_start` is not moved by it.
+    """
+
+    # VST:2026-09-21's own instants. `plan_armed_at` on the fixture record is
+    # 2026-09-21T16:12:44Z and `config.walk_start` is the 13:30:00Z day-1 open,
+    # so the head start is 2 h 42 min 44 s.
+    _ARMED_AT = dt.datetime(2026, 9, 21, 16, 12, 44, tzinfo=dt.UTC)
+    _HEAD_START_MINUTES = 162.733
+    # The document's own tier, read from the fixture rather than restated:
+    # `spec.entry_tiers[0].limit_price` is 135.61.
+    _LIMIT = 135.61
+    # VST's entry deadline, the instant `run_configuration` derives from
+    # `spec.order_ttl_days`; stated here for the one test that builds a
+    # `BuiltBars` by hand instead of running the command.
+    _ENTRY_DEADLINE = dt.datetime(2026, 9, 30, 20, 0, tzinfo=dt.UTC)
+
+    def _report_with_arming(
+        self,
+        directory: pathlib.Path,
+        *,
+        armed: Any = ...,
+        limit_price: Any = ...,
+    ) -> pathlib.Path:
+        """The fixture report with this pick's `plan_armed_at` node restated.
+
+        The whole NODE is replaced rather than its value, because the cases
+        that matter are an absent value with the record's own reason, an absent
+        value with no reason at all, and a stamp that is not an instant.
+        """
+        trades = copy.deepcopy(list(self.trades.values()))
+        record = next(row for row in trades if row["pick_key"] == self._PICK)
+        if armed is not ...:
+            record["plan_armed_at"] = armed
+        if limit_price is not ...:
+            record["plan"]["spec"]["entry_tiers"][0]["limit_price"] = limit_price
+        path = directory / "with-arming.json"
+        path.write_text(json.dumps({"env": "live", "trades": trades}))
+        return path
+
+    def _arming(
+        self,
+        directory: pathlib.Path,
+        *,
+        payload: list[dict[str, Any]] | None = None,
+        armed: Any = ...,
+        limit_price: Any = ...,
+        fmt: str = "json",
+    ) -> tuple[int, str, str]:
+        """One run over a stated tape, with this pick's arming node stated."""
+        status, out, err = self._run(
+            str(self._report_with_arming(directory, armed=armed, limit_price=limit_price)),
+            self._PICK,
+            "--out",
+            str(directory),
+            "--entry-trail-bps",
+            "50",
+            "--bar-cache",
+            str(directory / "cache"),
+            "--format",
+            fmt,
+            **self._seams(self._tape() if payload is None else payload),
+        )
+        self.assertEqual(status, 0, err)
+        return status, out, err
+
+    def _block(self, out: str) -> dict[str, Any]:
+        return json.loads(out)["arming"]
+
+    def _armed_node(self, value: Any, null_reason: str | None = None) -> dict[str, Any]:
+        """A `plan_armed_at` node in the shape `broker trades` writes it."""
+        return {
+            "value": value,
+            "unit": None,
+            "source": "keeper.pick_queue",
+            "ref": "line:picks:armed",
+            "null_reason": null_reason,
+        }
+
+    # A tape whose day-1 bars all trade ABOVE the declared rung and which only
+    # reaches it after the deadline: the head-start window exists and holds no
+    # reachable rung, which is the shape nine of nine #1848 picks had.
+    def _unreachable_tape(self) -> list[dict[str, Any]]:
+        return _aggs(self.WALK_START, 3, price=200.0) + _aggs(self.AFTER_DEADLINE, 3, price=10.0)
+
+    def test_a_rung_the_tape_reached_before_the_arming_instant_is_named(self) -> None:
+        """MSFT's own shape: the declared rung was reachable on a bar the live
+        watch could not see. Every number the reader needs to judge it is
+        published beside the verdict."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+
+            _, out, _ = self._arming(directory)
+            block = self._block(out)
+            tier = block["entries"][0]
+
+            self.assertEqual(block["plan_armed_at"]["value"], format_time(self._ARMED_AT))
+            # The record's own source and row reference travel with the value.
+            self.assertEqual(block["plan_armed_at"]["source"], "keeper.pick_queue")
+            self.assertEqual(block["plan_armed_at"]["ref"], "line:picks:armed")
+            self.assertIsNone(block["plan_armed_at"]["null_reason"])
+            self.assertEqual(block["head_start_minutes"]["value"], self._HEAD_START_MINUTES)
+            self.assertEqual(block["head_start_minutes"]["unit"], "minutes")
+            # The three day-1 bars of the default tape all precede 16:12:44Z.
+            self.assertEqual(block["pre_arming_bars"]["value"], 3)
+            self.assertEqual(block["pre_arming_lowest_low"]["value"], 9.5)
+            self.assertEqual(block["pre_arming_lowest_low"]["at_utc"], format_time(self.WALK_START))
+            self.assertEqual(tier["tier_index"], 0)
+            self.assertEqual(tier["tag"], "T1")
+            self.assertEqual(tier["tier_limit"]["value"], self._LIMIT)
+            self.assertEqual(tier["pre_arming_reaching_bars"]["value"], 3)
+            self.assertEqual(
+                tier["first_pre_arming_reach_at"]["value"], format_time(self.WALK_START)
+            )
+            self.assertEqual(tier["verdict"], "rung_reached_before_arming")
+
+    def test_a_head_start_window_the_tape_never_reaches_is_window_unreachable(self) -> None:
+        """The nine-pick shape: the window exists and no bar inside it put the
+        rung in reach, so the channel cannot have moved this pick's entry."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+
+            _, out, _ = self._arming(directory, payload=self._unreachable_tape())
+            block = self._block(out)
+            tier = block["entries"][0]
+
+            self.assertEqual(block["pre_arming_bars"]["value"], 3)
+            self.assertEqual(block["pre_arming_lowest_low"]["value"], 199.5)
+            self.assertEqual(tier["pre_arming_reaching_bars"]["value"], 0)
+            self.assertIsNone(tier["first_pre_arming_reach_at"]["value"])
+            self.assertIn("no bar before the arming instant", tier["verdict_formula"])
+            self.assertEqual(tier["verdict"], "window_unreachable")
+
+    def test_a_plan_armed_before_its_own_day_1_open_gets_no_head_start(self) -> None:
+        """A pick armed before its day-1 open hands the replay nothing: the
+        signed head start is NEGATIVE and the window is empty, which has to be
+        visible as a different verdict from "the window held no reachable
+        rung"."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            early = self.WALK_START - dt.timedelta(minutes=1)
+
+            _, out, _ = self._arming(directory, armed=self._armed_node(format_time(early)))
+            block = self._block(out)
+            tier = block["entries"][0]
+
+            self.assertEqual(block["head_start_minutes"]["value"], -1.0)
+            self.assertEqual(block["pre_arming_bars"]["value"], 0)
+            self.assertIsNone(block["pre_arming_lowest_low"]["value"])
+            self.assertIn("at or before", block["pre_arming_lowest_low"]["null_reason"])
+            self.assertEqual(tier["pre_arming_reaching_bars"]["value"], 0)
+            self.assertEqual(tier["verdict"], "armed_before_open")
+
+    def test_a_record_with_no_arming_instant_is_unknown_with_its_own_reason(self) -> None:
+        """`plan_armed_at` is nullable. It was non-null on 53 of 53 records of
+        the 2026-11-12 LIVE report, which is exactly why a null must not be
+        discovered as a traceback: the reason is the RECORD's and it is
+        published, never refused."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            stated = "the pick queue holds no armed line for this pick"
+
+            status, out, _ = self._arming(
+                directory, armed=self._armed_node(None, null_reason=stated)
+            )
+            block = self._block(out)
+            tier = block["entries"][0]
+
+            self.assertEqual(status, 0)
+            self.assertEqual(block["plan_armed_at"]["null_reason"], stated)
+            self.assertIsNone(block["head_start_minutes"]["value"])
+            self.assertEqual(block["head_start_minutes"]["null_reason"], stated)
+            self.assertIsNone(block["pre_arming_bars"]["value"])
+            self.assertEqual(tier["verdict"], "unknown")
+            self.assertEqual(tier["verdict_formula"], stated)
+            # And the per-rung counts are ABSENT rather than zero: with no
+            # instant to bound the window, "0 bars reached the rung" would be a
+            # measurement over a window nobody could delimit.
+            self.assertIsNone(tier["pre_arming_reaching_bars"]["value"])
+            self.assertEqual(tier["pre_arming_reaching_bars"]["null_reason"], stated)
+            self.assertEqual(tier["first_pre_arming_reach_at"]["null_reason"], stated)
+
+    def test_an_absent_instant_the_record_gives_no_reason_for_gets_this_join_s(self) -> None:
+        """A bare `null` with no reason beside it reads as "measured, and zero".
+        The join supplies its own reason rather than publishing that."""
+        for armed in (self._armed_node(None), None, "16:12:44"):
+            with self.subTest(armed=armed), TemporaryDirectory() as tmp:
+                directory = pathlib.Path(tmp)
+
+                _, out, _ = self._arming(directory, armed=armed)
+                block = self._block(out)
+
+                self.assertIsNone(block["head_start_minutes"]["value"])
+                self.assertIsNotNone(block["plan_armed_at"]["null_reason"])
+                self.assertIsNotNone(block["head_start_minutes"]["null_reason"])
+                self.assertEqual(block["entries"][0]["verdict"], "unknown")
+
+    def test_an_arming_stamp_that_is_not_an_instant_names_the_stamp(self) -> None:
+        """A stamp nobody journalled and a stamp nobody can read send a reader
+        to different places, so the second one shows the stamp it could not
+        read."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+
+            _, out, _ = self._arming(directory, armed=self._armed_node("2026-09-21 16:12:44"))
+            block = self._block(out)
+
+            reason = block["head_start_minutes"]["null_reason"]
+            self.assertIn("not an instant", reason)
+            self.assertIn("2026-09-21 16:12:44", reason)
+            self.assertEqual(block["entries"][0]["verdict"], "unknown")
+
+    def test_the_bar_stamped_at_the_arming_instant_is_not_inside_the_window(self) -> None:
+        """Half-open on the right, like the session grid: the bar stamped at the
+        arming instant spans armed..armed+59s, so the live watch was running for
+        all but its first instant. Counting it would overstate the window by one
+        bar on every pick."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            # The default tape's three bars are 13:30, 13:31 and 13:32; arming
+            # lands exactly on the third.
+            armed = self.WALK_START + dt.timedelta(minutes=2)
+
+            _, out, _ = self._arming(directory, armed=self._armed_node(format_time(armed)))
+            block = self._block(out)
+
+            self.assertEqual(block["head_start_minutes"]["value"], 2.0)
+            self.assertEqual(block["pre_arming_bars"]["value"], 2)
+            self.assertEqual(block["entries"][0]["pre_arming_reaching_bars"]["value"], 2)
+
+    def test_a_plan_armed_exactly_at_the_open_gets_no_head_start_either(self) -> None:
+        """The boundary of the same rule on the LEFT: a plan armed in the
+        opening minute hands the replay nothing, so zero is `armed_before_open`
+        and not a one-bar window."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+
+            _, out, _ = self._arming(
+                directory, armed=self._armed_node(format_time(self.WALK_START))
+            )
+            block = self._block(out)
+
+            self.assertEqual(block["head_start_minutes"]["value"], 0.0)
+            self.assertEqual(block["pre_arming_bars"]["value"], 0)
+            self.assertEqual(block["entries"][0]["verdict"], "armed_before_open")
+
+    def test_a_pre_arming_bar_whose_low_equals_the_rung_reaches_it(self) -> None:
+        """The walk's own test is `bar.low <= tier_limit`, and the tape printing
+        the limit exactly is a fill in the walk. A strict comparison here would
+        publish `window_unreachable` over a rung the walk would have taken."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            # The default tape's low is 9.5; the rung is stated AT it.
+            _, out, _ = self._arming(directory, limit_price=9.5)
+            block = self._block(out)
+
+            self.assertEqual(block["pre_arming_lowest_low"]["value"], 9.5)
+            self.assertEqual(block["entries"][0]["tier_limit"]["value"], 9.5)
+            self.assertEqual(block["entries"][0]["pre_arming_reaching_bars"]["value"], 3)
+            self.assertEqual(block["entries"][0]["verdict"], "rung_reached_before_arming")
+
+    def test_only_some_pre_arming_bars_reach_the_rung(self) -> None:
+        """The count and the first-reach instant must be distinguishable from
+        "the whole window" and from "the window's first bar".
+
+        Every other fixture here has a head-start window where either EVERY bar
+        reaches the rung or none does, so a block that published
+        `pre_arming_bars` as the count, or `walk_start` as the first reach,
+        would satisfy all of them. This is also the normal production shape:
+        on the 2026-11-12 LIVE report the reaching counts are small fractions
+        of their windows, 5 of 258 on `MSFT:2026-10-30`.
+
+        The tape puts the reachable bar in the MIDDLE, so the first reach is
+        neither the window's first bar nor its last.
+        """
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            middle = self.WALK_START + dt.timedelta(minutes=1)
+            payload = (
+                _aggs(self.WALK_START, 1, price=200.0)
+                + _aggs(middle, 1, price=9.5)
+                + _aggs(self.WALK_START + dt.timedelta(minutes=2), 1, price=200.0)
+                + _aggs(self.AFTER_DEADLINE, 3, price=10.0)
+            )
+            _, out, _ = self._arming(directory, payload=payload, limit_price=9.5)
+            tier = self._block(out)["entries"][0]
+
+            self.assertEqual(self._block(out)["pre_arming_bars"]["value"], 3)
+            # STRICTLY between: not 0, and not the whole window.
+            self.assertEqual(tier["pre_arming_reaching_bars"]["value"], 1)
+            self.assertEqual(tier["pre_arming_reaching_bars"]["of_pre_arming_bars"], 3)
+            # The MIDDLE bar, so a block reporting the window's start fails.
+            self.assertEqual(tier["first_pre_arming_reach_at"]["value"], format_time(middle))
+            self.assertNotEqual(
+                tier["first_pre_arming_reach_at"]["value"], format_time(self.WALK_START)
+            )
+            self.assertEqual(tier["verdict"], "rung_reached_before_arming")
+
+    def test_a_tier_with_no_usable_limit_is_unknown_and_not_a_traceback(self) -> None:
+        """Nothing before this block validates `spec.entry_tiers`: the run
+        configuration never reads them and the engine refuses them later."""
+        for limit in (None, "135.61", float("nan")):
+            with self.subTest(limit=limit), TemporaryDirectory() as tmp:
+                directory = pathlib.Path(tmp)
+
+                _, out, _ = self._arming(directory, limit_price=limit)
+                tier = self._block(out)["entries"][0]
+
+                self.assertIsNone(tier["tier_limit"]["value"])
+                self.assertIsNotNone(tier["tier_limit"]["null_reason"])
+                self.assertIsNone(tier["pre_arming_reaching_bars"]["value"])
+                self.assertEqual(tier["verdict"], "unknown")
+                # The window itself was still measured: the pick-level facts do
+                # not depend on a tier being readable.
+                self.assertEqual(self._block(out)["pre_arming_bars"]["value"], 3)
+
+    def test_the_head_start_is_measured_off_the_record_not_the_document(self) -> None:
+        """`meta.armed_ts` is a DERIVED field and `authored_document` strips it,
+        so the arming instant can only come off the record. Stating one the
+        document's own stripped field disagrees with is what tells the two
+        sources apart."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            later = self._ARMED_AT + dt.timedelta(hours=1)
+
+            _, out, _ = self._arming(directory, armed=self._armed_node(format_time(later)))
+            block = self._block(out)
+
+            self.assertEqual(block["plan_armed_at"]["value"], format_time(later))
+            self.assertEqual(block["head_start_minutes"]["value"], 222.733)
+            document = json.loads(pathlib.Path(json.loads(out)["document_path"]).read_text())
+            self.assertNotIn("armed_ts", document["meta"])
+
+    def test_the_verdict_travels_with_the_tape_test_and_its_source(self) -> None:
+        """The count is the BAR half of `intent_replay.walk._reachable` and
+        nothing more: that function also skips a rung at or below the resting
+        stop. Citing the whole function would make this block claim a reach the
+        walk would not take, so the caveat travels with the verdict, in the same
+        two words the touch audit publishes."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+
+            _, out, _ = self._arming(directory)
+            answer = json.loads(out)
+            block = answer["arming"]
+
+            self.assertEqual(block["tape_test"], "bar.low <= tier_limit")
+            self.assertEqual(block["tape_test"], answer["touch_audit"]["tape_test"])
+            self.assertEqual(block["tape_test_source"], answer["touch_audit"]["tape_test_source"])
+            self.assertIn("intent_replay.walk._reachable", block["tape_test_source"])
+            self.assertIn("stop", block["tape_test_source"])
+
+    def test_the_block_says_a_reach_is_necessary_and_not_an_effect_size(self) -> None:
+        """The nine-pick null is the proof: every one of those picks had a
+        head-start window and not one of them moved an outcome word. So a rung
+        reached before arming is a NECESSARY condition with no magnitude, and
+        the block says that where the verdict is read rather than only in the
+        commit that added it."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+
+            _, out, _ = self._arming(directory)
+            block = self._block(out)
+
+            caveat = block["necessary_not_sufficient"]
+            self.assertIn("not sufficient", caveat)
+            self.assertIn("0.000000", caveat)
+            self.assertIn(caveat, block["entries"][0]["verdict_formula"])
+            # The three things this measurement cannot see, STATED rather than
+            # fixed: a trail armed inside the window, a rung barred by a
+            # pre-arming bar, and the absence of an effect size.
+            spots = block["blind_spots"]
+            self.assertEqual(len(spots), 3)
+            self.assertTrue(any("_hands_on_to_the_next_rung" in spot for spot in spots))
+            self.assertTrue(any("state.barred" in spot for spot in spots))
+            self.assertTrue(any("trail" in spot for spot in spots))
+            self.assertTrue(any("effect size" in spot for spot in spots))
+
+    def test_the_block_is_an_annotation_and_reaches_neither_engine_input(self) -> None:
+        """`configuration` is the engine's own eight-key object and
+        `RunConfig.from_jsonable` refuses a key it does not model, so this is a
+        TOP-LEVEL block of the answer and is in neither written input."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+
+            _, out, _ = self._arming(directory)
+            answer = json.loads(out)
+
+            self.assertEqual(answer["schema"], SCHEMA)
+            self.assertNotIn("arming", answer["configuration"])
+            document = json.loads(pathlib.Path(answer["document_path"]).read_text())
+            config = json.loads(pathlib.Path(answer["config_path"]).read_text())
+            RunConfig.from_jsonable(config, account_currency=document["spec"]["size"]["currency"])
+            self.assertNotIn("arming", config)
+            # Every verdict the block can publish, named once, so a caller can
+            # branch on the word without reading this module's source.
+            self.assertEqual(
+                answer["arming"]["verdicts"],
+                [
+                    "armed_before_open",
+                    "window_unreachable",
+                    "rung_reached_before_arming",
+                    "unknown",
+                ],
+            )
+
+    def test_a_window_no_bar_observed_is_unknown_rather_than_unreachable(self) -> None:
+        """`window_unreachable` is a measurement over the bars of that window,
+        and over zero bars it is not one. The command path
+        cannot produce this -- `_walk_start_uncovered` refuses a series that
+        begins after the anchor, so a positive head start always holds at least
+        the opening bar -- and the published function is reachable on its own,
+        so the branch is checked here rather than left to answer `false` over
+        nothing."""
+        trade = copy.deepcopy(self.trades[self._PICK])
+        trade["plan_armed_at"] = self._armed_node(
+            format_time(self.WALK_START + dt.timedelta(minutes=1))
+        )
+        window = bar_window(
+            walk_start=self.WALK_START,
+            entry_deadline=self._ENTRY_DEADLINE,
+            exit_instant=None,
+            mic="XNYS",
+            now=self.NOW,
+        )
+        # One bar, FIVE minutes after the open: the head start is one minute and
+        # no bar of the series falls inside it.
+        grid = filter_to_grid(
+            _published(self.WALK_START + dt.timedelta(minutes=5)),
+            session_grid(window.start, window.end, mic="XNYS"),
+            mic="XNYS",
+        )
+
+        block = arming_audit(
+            trade,
+            authored_document(trade["plan"]),
+            BuiltBars(
+                grid=grid,
+                window=window,
+                mic="XNYS",
+                cache_path=None,
+                cache_hit=False,
+                fetched_at=None,
+            ),
+            currency="USD",
+        )
+
+        self.assertEqual(block["head_start_minutes"]["value"], 1.0)
+        self.assertEqual(block["pre_arming_bars"]["value"], 0)
+        self.assertIn("nothing observed", block["pre_arming_lowest_low"]["null_reason"])
+        self.assertEqual(block["entries"][0]["verdict"], "unknown")
+        self.assertIn("nothing observed", block["entries"][0]["verdict_formula"])
+
+    def test_every_document_tier_gets_its_own_verdict(self) -> None:
+        """TWO tiers is the ordinary shape and not an edge case: all three
+        hand-written pick examples in `apps/alphalens-broker-contract/examples/
+        manual-pick/` declare two, while both fixtures here declare one. One
+        window, two rungs, two different answers is what shows the verdict is
+        per RUNG and not per pick -- the head start is the same window for both,
+        and whether it put a rung in reach is not."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            report = self._report_with_arming(directory)
+            body = json.loads(report.read_text())
+            record = next(row for row in body["trades"] if row["pick_key"] == self._PICK)
+            tiers = record["plan"]["spec"]["entry_tiers"]
+            tiers[0]["alloc_pct"] = 50.0
+            # The default tape's day-1 bars are priced at 10.0, so their lows
+            # are exactly 9.5: the first tier is reached inside the window and
+            # the second, a cent and a half lower, is not.
+            tiers.append(
+                {"alloc_pct": 50.0, "entry_mode": "pullback", "limit_price": 9.0, "tag": "T2"}
+            )
+            report.write_text(json.dumps(body))
+
+            status, out, err = self._run(
+                str(report),
+                self._PICK,
+                "--out",
+                str(directory),
+                "--entry-trail-bps",
+                "50",
+                "--bar-cache",
+                str(directory / "cache"),
+                "--format",
+                "json",
+                **self._seams(self._tape()),
+            )
+
+            self.assertEqual(status, 0, err)
+            block = json.loads(out)["arming"]
+            entries = block["entries"]
+            self.assertEqual([tier["tier_index"] for tier in entries], [0, 1])
+            self.assertEqual([tier["tag"] for tier in entries], ["T1", "T2"])
+            self.assertEqual(entries[0]["verdict"], "rung_reached_before_arming")
+            self.assertEqual(entries[1]["verdict"], "window_unreachable")
+            self.assertEqual(entries[0]["pre_arming_reaching_bars"]["value"], 3)
+            self.assertEqual(entries[1]["pre_arming_reaching_bars"]["value"], 0)
+            # One window, counted once: both rungs are judged over the same
+            # three bars.
+            self.assertEqual(
+                [tier["pre_arming_reaching_bars"]["of_pre_arming_bars"] for tier in entries],
+                [3, 3],
+            )
+            self.assertEqual(block["pre_arming_bars"]["value"], 3)
+
+    def test_the_human_rendering_carries_the_same_verdict_as_the_json(self) -> None:
+        """A CLI is one result object rendered two ways: the operator who runs
+        the join by hand is the reader who has to see the verdict before quoting
+        the R the replay then produces."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+
+            _, out, _ = self._arming(directory, fmt="human")
+
+            self.assertIn("arming tier 0: rung_reached_before_arming", out)
+            self.assertIn(str(self._HEAD_START_MINUTES), out)
+            self.assertIn("3 of 3", out)
+
+
+class TheSidecarSLeftEdgeIsTheAnchorItNamesTest(_FetchingTestCase):
+    """The provenance file states `from_formula` as "config.walk_start
+    (session_open_utc(...))". Nothing pinned that sentence to the anchor the
+    value actually came from -- `grep -rn from_formula apps/alphalens-research/
+    tests/` returned nothing -- so a moved anchor would leave the sidecar
+    describing a left edge the file no longer has, with every test still green.
+
+    The RELATION is what is pinned, not the literal string: the sidecar's left
+    edge is the configuration's own `walk_start`, by value AND by the
+    construction the configuration itself states for it.
+    """
+
+    def test_the_sidecar_s_left_edge_is_the_configuration_s_own_walk_start(self) -> None:
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+
+            _, out, _, _ = self._replay(directory)
+            answer = json.loads(out)
+            anchor = answer["configuration"]["walk_start"]
+            window = self._sidecar(out)["window"]
+
+            # The value: the sidecar's left edge IS the anchor the walk starts
+            # at, in the same unit.
+            self.assertEqual(window["from_t"], anchor["value"])
+            # The construction: the configuration states how it derived that
+            # instant, and the sidecar's prose quotes THAT derivation rather
+            # than a sentence of its own that could outlive it.
+            stated = anchor["formula"].split(";")[0].strip()
+            self.assertIn(stated, window["from_formula"])
+            self.assertIn("config.walk_start", window["from_formula"])
+            # And the anchor is the day-1 open, which is the fact the formula
+            # names: a moved anchor changes this kind and the prose with it.
+            self.assertEqual(anchor["kind"], "day1_session_open")
+
+
 class TheHelpTextIsThePublishedSurfaceTest(unittest.TestCase):
     """``usage=argparse.SUPPRESS`` with a raw-description formatter means
     argparse generates no option list, so a flag the hand-written help text
@@ -4100,7 +4675,17 @@ class TheHelpTextIsThePublishedSurfaceTest(unittest.TestCase):
         the operator the command does less than it does."""
         block = self._help().split("OUTPUT", 1)[1].split("EXIT CODES", 1)[0]
 
-        for key in ("document_path", "config_path", "bars_path", "bars"):
+        for key in (
+            "document_path",
+            "config_path",
+            "bars_path",
+            "bars",
+            # The two annotation blocks. Both are top-level keys of the answer
+            # and neither is in `configuration`, so a reader who only has the
+            # help text has to be told they exist.
+            "touch_audit",
+            "arming",
+        ):
             with self.subTest(key=key):
                 self.assertIn(key, block)
 
