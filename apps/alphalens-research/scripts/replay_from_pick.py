@@ -58,6 +58,11 @@ from intent_replay.bars import _BAR_KEYS as _PUBLISHED_BAR_KEYS
 from intent_replay.fx import Fx
 
 __all__ = [
+    "ARMING_BEFORE_OPEN",
+    "ARMING_RUNG_REACHED",
+    "ARMING_UNKNOWN",
+    "ARMING_VERDICTS",
+    "ARMING_WINDOW_UNREACHABLE",
     "GRID_PREDICATE",
     "OFF_GRID_AFTER_CLOSE",
     "OFF_GRID_BEFORE_OPEN",
@@ -81,6 +86,7 @@ __all__ = [
     "ReportUnreadableError",
     "SessionBounds",
     "StatedFacts",
+    "arming_audit",
     "authored_document",
     "bar_cache_root",
     "bar_window",
@@ -1860,7 +1866,6 @@ TOUCH_VERDICTS = (TOUCH_CORROBORATED, TOUCH_TAPE_LATE, TOUCH_TAPE_NEVER, TOUCH_U
 # this module's refusal vocabulary already exists to keep.
 _TOUCH_NOT_STATED = "the record states no touched_at for this tier"
 _TOUCH_NO_RECORD_ROW = "the record carries no entry row for this tier"
-_TOUCH_NOT_AN_INSTANT = "the record's touched_at is not an instant with a zone"
 _TOUCH_OUTSIDE_EVERY_SESSION = (
     "the journalled touch lies in no session of the bar window; the grid is half-open "
     f"({GRID_PREDICATE}), and a touch latched after a close is in none of them"
@@ -1870,8 +1875,22 @@ _TOUCH_SESSION_UNOBSERVED = (
     "or a trimmed --bars file all produce this"
 )
 _TOUCH_NO_REACH = f"no bar inside the entry window has `{_TOUCH_TAPE_TEST}`"
-_TOUCH_NO_LIMIT = "the document's tier states no limit price the tape could be compared against"
-_TOUCH_TIER_UNREADABLE = "the document's entry tier is not an object a limit can be read off"
+# The document's own two holes, named without the touch: both blocks read the
+# same ``spec.entry_tiers`` and a reader of either is sent to the document.
+_TIER_NO_LIMIT = "the document's tier states no limit price the tape could be compared against"
+_TIER_UNREADABLE = "the document's entry tier is not an object a limit can be read off"
+
+
+def _not_an_instant(field: str, value: Any) -> str:
+    """One record stamp that cannot be read as an instant, with the stamp.
+
+    A FORMULA rather than one constant per field: "the daemon journalled none"
+    and "the stamp it journalled is unparseable" send a reader to different
+    places, and so do ``touched_at`` and ``plan_armed_at`` -- one is the
+    keeper's entry watch, the other the pick queue.
+    """
+    return f"the record's {field} is not an instant with a zone ({value!r})"
+
 
 _MS_PER_MINUTE = 60_000
 # The unit of the lag. ``intent_replay.units`` publishes none, because no
@@ -1948,43 +1967,55 @@ def _record_fact(node: Any, *, unit: str | None, absent: str) -> dict[str, Any]:
             "ref": None,
             "null_reason": absent,
         }
-    return {key: mapping.get(key) for key in ("value", "unit", "source", "ref", "null_reason")}
+    fact = {key: mapping.get(key) for key in ("value", "unit", "source", "ref", "null_reason")}
+    # A record node can state an absence and no reason for it, and a bare
+    # ``null`` beside an empty reason reads as "measured, and zero". The
+    # caller's reason stands in, so an absent value is never published without
+    # one.
+    if fact["value"] is None and not fact["null_reason"]:
+        fact["null_reason"] = absent
+    return fact
 
 
-def _touch_instant(node: Any, *, absent: str) -> tuple[dt.datetime | None, str | None]:
-    """The journalled touch instant, or ``None`` with the reason there is none.
+def _record_instant(node: Any, *, field: str, absent: str) -> tuple[dt.datetime | None, str | None]:
+    """One stamp of the record as an instant, or the reason it is not one.
 
-    Never raises. This block is an ANNOTATION beside a result, and refusing the
-    whole run over an unreadable stamp would drop the one record the annotation
-    exists for. The reason is returned rather than folded into ``absent``: a
-    reader sent to look for a touch the daemon never journalled never finds the
-    one that is there and unparseable, and ``journaled_touch_at`` shows the
-    stamp in both cases.
+    Never raises. Both blocks that read a stamp are ANNOTATIONS beside a
+    result, and refusing the whole run over an unreadable stamp would drop the
+    one record the annotation exists for. The reason is returned rather than
+    folded into ``absent``: a reader sent to look for a stamp the daemon never
+    journalled never finds the one that is there and unparseable, and the
+    copied record node shows the stamp in both cases.
     """
     mapping = _mapping(node)
     value = None if mapping is None else mapping.get("value")
     if value is None:
-        return None, absent
+        # The RECORD's own reason first: "the daemon never journalled it" and
+        # "the pick queue holds no armed line" send a reader to different
+        # places, and ``absent`` is this join's fallback for a node that states
+        # an absence without saying why.
+        stated = None if mapping is None else mapping.get("null_reason")
+        return None, (stated if isinstance(stated, str) and stated else absent)
     if isinstance(value, str):
         with contextlib.suppress(ValueError):
             moment = dt.datetime.fromisoformat(value)
             if moment.tzinfo is not None:
                 return moment, None
-    return None, f"{_TOUCH_NOT_AN_INSTANT} ({value!r})"
+    return None, _not_an_instant(field, value)
 
 
-def _tape_low(bars: Sequence[Mapping[str, Any]], bounds: SessionBounds) -> tuple[float, int] | None:
-    """The lowest TRADE of one session, with the stamp of the bar that held it.
+def _lowest_low(bars: Sequence[Mapping[str, Any]]) -> tuple[float, int] | None:
+    """The lowest TRADE of ``bars``, with the stamp of the bar that held it.
 
-    ``min`` over the kept bars of that session, so the stamp is the FIRST bar
-    reaching that low when two of them tie -- a tie is a real shape and picking
-    either one silently would make the stamp depend on the sort.
+    ``min`` over the pairs, so the stamp is the FIRST bar reaching that low
+    when two of them tie -- a tie is a real shape and picking either one
+    silently would make the stamp depend on the sort.
+
+    The SELECTION of bars is the caller's: the touch audit asks about one
+    session, the arming audit about the head-start window, and folding either
+    rule in here would make the second caller re-implement the minimum.
     """
-    lows = [
-        (low, bar["t"])
-        for bar in bars
-        if bounds.member(bar["t"]) and (low := _price(bar, "low")) is not None
-    ]
+    lows = [(low, bar["t"]) for bar in bars if (low := _price(bar, "low")) is not None]
     return min(lows) if lows else None
 
 
@@ -2053,7 +2084,7 @@ def _touch_verdict(
     and answering it ``false`` would be a measurement over zero observations.
     """
     if limit is None:
-        return TOUCH_UNKNOWN, _TOUCH_NO_LIMIT
+        return TOUCH_UNKNOWN, _TIER_NO_LIMIT
     if touched is None:
         return TOUCH_UNKNOWN, touch_absent or _TOUCH_NOT_STATED
     if bounds is None:
@@ -2096,8 +2127,8 @@ def _tier_touch_audit(
     limit = _tier_limit(declared)
     absent = _TOUCH_NO_RECORD_ROW if row is None else _TOUCH_NOT_STATED
 
-    touched, touch_absent = _touch_instant(
-        None if row is None else row.get("touched_at"), absent=absent
+    touched, touch_absent = _record_instant(
+        None if row is None else row.get("touched_at"), field="touched_at", absent=absent
     )
     bounds = (
         None
@@ -2111,7 +2142,11 @@ def _tier_touch_audit(
             None,
         )
     )
-    low = None if bounds is None else _tape_low(built.series, bounds)
+    low = (
+        None
+        if bounds is None
+        else _lowest_low([bar for bar in built.series if bounds.member(bar["t"])])
+    )
     first_reach_t = (
         None
         if limit is None
@@ -2137,7 +2172,7 @@ def _tier_touch_audit(
     )
     # Every field that needs the limit shares one reason for not having it, so
     # a reader is not sent to a different explanation per field.
-    reach_absent = _TOUCH_NO_LIMIT if limit is None else _TOUCH_NO_REACH
+    reach_absent = _TIER_NO_LIMIT if limit is None else _TOUCH_NO_REACH
     return {
         "tier_index": index,
         "tag": None if declared is None else declared.get("tag"),
@@ -2150,7 +2185,7 @@ def _tier_touch_audit(
             null_reason=(
                 None
                 if limit is not None
-                else (_TOUCH_TIER_UNREADABLE if declared is None else _TOUCH_NO_LIMIT)
+                else (_TIER_UNREADABLE if declared is None else _TIER_NO_LIMIT)
             ),
         ),
         "journaled_touch": _record_fact(
@@ -2195,7 +2230,7 @@ def _tier_touch_audit(
             null_reason=(
                 None
                 if low is not None and limit is not None
-                else (_TOUCH_NO_LIMIT if limit is None else session_absent)
+                else (_TIER_NO_LIMIT if limit is None else session_absent)
             ),
         ),
         "first_tape_reach_at": _stated(
@@ -2271,6 +2306,374 @@ def touch_audit(
         "verdicts": list(TOUCH_VERDICTS),
         "entries": [
             _tier_touch_audit(index, tier, rows.get(index), built, currency=currency)
+            for index, tier in enumerate(tiers)
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# The arming-time channel, MEASURED and not fixed.
+#
+# The walk starts at ``config.walk_start``, the day-1 session open
+# (``walk.py`` skips every bar before it). The LIVE watch cannot start before
+# the plan was armed, and on a manual pick those two instants are the same
+# calendar day and not the same minute. Every bar between them is a bar the
+# replay may enter on and the daemon never saw -- a HEAD START the replay gets
+# for free.
+#
+# Two populations, no distribution, which is why this block measures rather
+# than moves the anchor:
+#
+# * #1848 re-walked nine terminal picks under the later anchor and moved 0 of
+#   9 outcome words and 0 of 9 R values, max abs(delta R) 0.000000. The reason
+#   was measured: every replay entry filled 5.6 to 193.2 hours AFTER its own
+#   arming instant, so the head-start window held no entry decision;
+# * MSFT:2026-10-30 is the other shape. Its replay entry landed INSIDE the
+#   window and delta R was -0.7901, the largest on record.
+#
+# The discriminator is therefore "did the replay's entry fill before
+# ``plan_armed_at``", and that question is answered by the WALK, which has not
+# run when this join prints. What the join can publish is the window itself:
+# its signed size, how much tape it holds, and whether a declared rung was
+# reachable inside it. The owner then decides the anchor from a corpus.
+#
+# ``plan_armed_at`` is the key because it is the fact the record always holds:
+# non-null on 53 of 53 records of the 2026-11-12 LIVE report, where
+# ``touched_at`` is present on 12 of 53 entry rows. It is still NULLABLE, and a
+# null publishes the record's own reason the way every other field of these
+# blocks does.
+# ---------------------------------------------------------------------------
+
+# What the head-start window can say about one declared rung. A closed
+# vocabulary, published in the block so a reader sees the whole set.
+ARMING_BEFORE_OPEN = "armed_before_open"
+ARMING_WINDOW_UNREACHABLE = "window_unreachable"
+ARMING_RUNG_REACHED = "rung_reached_before_arming"
+# The same word the touch audit publishes, for the same meaning -- "the
+# question has no subject" -- and its own constant, because the two
+# vocabularies are closed separately and a shared name would couple them.
+ARMING_UNKNOWN = "unknown"
+ARMING_VERDICTS = (
+    ARMING_BEFORE_OPEN,
+    ARMING_WINDOW_UNREACHABLE,
+    ARMING_RUNG_REACHED,
+    ARMING_UNKNOWN,
+)
+
+# Why the audit has no window to measure. Each is the record's own answer and
+# none of them is a defect of this run, so they are published as a
+# ``null_reason`` and never as a refusal.
+_ARMING_NOT_STATED = "the record states no plan_armed_at for this pick"
+_ARMING_NO_HEAD_START = (
+    "the plan was armed at or before the day-1 session open, so the walked series holds no "
+    "bar the live watch could not also have seen"
+)
+_ARMING_WINDOW_UNOBSERVED = (
+    "the written series carries no bar before the arming instant, so nothing observed the "
+    "head-start window; the command path cannot produce this, because a series beginning "
+    "after the anchor is refused as walk_start_uncovered"
+)
+_ARMING_NO_REACH = f"no bar before the arming instant has `{_TOUCH_TAPE_TEST}`"
+
+# The caveat that has to travel WITH the verdict, because the verdict is a
+# necessary condition and carries no magnitude. Published once in the block and
+# quoted in the verdict's own formula, so neither a reader of the field nor a
+# reader of the word can miss it.
+_ARMING_NOT_AN_EFFECT_SIZE = (
+    "a rung reached before the arming instant is NECESSARY for this channel to have moved "
+    "the trade and is not sufficient: the walk need not have entered on that bar, and where "
+    "it did the outcome can still be identical -- measured at 0 of 9 outcome words and max "
+    "abs(delta R) 0.000000 across the nine terminal picks of #1848, against delta R -0.7901 "
+    "on MSFT:2026-10-30. This block publishes the condition, never the size of the effect"
+)
+
+# What this measurement cannot see, STATED rather than fixed. Each one would
+# need the walk's own trace to measure, and the walk has not run when this
+# prints.
+_ARMING_BLIND_SPOTS = (
+    "an entry trail armed INSIDE the head-start window: its trigger was set off a bar the "
+    "live watch could not see, and the fire it produces can land after the arming instant, "
+    "where this block counts nothing",
+    "a rung barred for the rest of the walk by a pre-arming bar whose OPEN was already below "
+    "the next listed rung (intent_replay.walk._hands_on_to_the_next_rung -> state.barred): "
+    "that changes WHICH tier fills, emits no trace event, and no count here shows it",
+    "the magnitude: a verdict is not an effect size, as necessary_not_sufficient says",
+)
+
+_BARS = "bars"
+
+
+@dataclass(frozen=True, slots=True)
+class _HeadStart:
+    """One pick's head-start window: what closes it, its size, its bars.
+
+    ONE object computes every reason a field of this block can be empty, so
+    two fields of the same answer cannot explain the same hole differently --
+    which is the failure the touch audit's single ``session_absent`` avoids.
+    """
+
+    # The instant the live watch could start at, and why there is none.
+    armed: dt.datetime | None
+    absent: str | None
+    # Signed, in milliseconds: NEGATIVE when the plan was armed before the
+    # anchor, where the replay gets no head start at all.
+    size_ms: int | None
+    # The walked bars stamped strictly BEFORE the arming instant. Half-open on
+    # the right, like the session grid: the bar stamped at the arming instant
+    # spans armed..armed+59s, so the live watch was running for all but its
+    # first instant, and counting it as a bar the daemon could not see would
+    # overstate the window by one bar on every pick.
+    bars: tuple[Mapping[str, Any], ...]
+
+    @classmethod
+    def of(cls, trade: Mapping[str, Any], built: BuiltBars) -> _HeadStart:
+        """This record's window against the series that was just written.
+
+        The anchor is the bar window's own left edge rather than a second
+        derivation from the calendar: that edge IS ``config.walk_start`` by
+        construction, and a derivation of its own here could disagree with the
+        value the replay will walk from.
+        """
+        armed, absent = _record_instant(
+            trade.get("plan_armed_at"), field="plan_armed_at", absent=_ARMING_NOT_STATED
+        )
+        if armed is None:
+            return cls(armed=None, absent=absent, size_ms=None, bars=())
+        armed_t = _epoch_ms(armed)
+        return cls(
+            armed=armed,
+            absent=None,
+            size_ms=armed_t - _epoch_ms(built.window.start),
+            bars=tuple(bar for bar in built.series if bar["t"] < armed_t),
+        )
+
+    @property
+    def why_no_instant(self) -> str | None:
+        """Why the window has no right edge, or ``None`` when it has one."""
+        return None if self.size_ms is not None else (self.absent or _ARMING_NOT_STATED)
+
+    @property
+    def why_no_count(self) -> str | None:
+        """Why a count over this window would mean nothing, else ``None``.
+
+        A POSITIVE window with no bars is the case this exists for: "no bar
+        reached the rung" over zero bars is not a measurement. The command path
+        cannot reach it -- ``_walk_start_uncovered`` refuses a series that
+        begins after the anchor, so a positive window always holds at least the
+        opening bar -- and this block is a published function of its own.
+        """
+        if self.why_no_instant is not None:
+            return self.why_no_instant
+        if self.size_ms is not None and self.size_ms > 0 and not self.bars:
+            return _ARMING_WINDOW_UNOBSERVED
+        return None
+
+    @property
+    def why_no_low(self) -> str | None:
+        """Why the window carries no lowest low, or ``None`` when it does.
+
+        An EMPTY window has no low and the count over it is still 0, which is
+        why this is a third reason and not the second one: a pick armed before
+        its own open is told so, instead of being told nothing observed it.
+        """
+        if self.bars:
+            return None
+        return self.why_no_count or _ARMING_NO_HEAD_START
+
+
+def _arming_verdict(
+    limit: float | None,
+    window: _HeadStart,
+    *,
+    declared: Mapping[str, Any] | None,
+    reaching: int,
+) -> tuple[str, str]:
+    """One rung's verdict against the head-start window, and the branch taken.
+
+    ``unknown`` is only ever "the question has no subject": no readable limit,
+    no arming instant, or a window no bar of the series observed. A window with
+    no bars cannot answer "was the rung reachable here", and answering it
+    ``false`` would be a measurement over zero observations -- the same rule the
+    touch audit's ``observed`` keeps.
+    """
+    if limit is None:
+        return ARMING_UNKNOWN, (_TIER_UNREADABLE if declared is None else _TIER_NO_LIMIT)
+    if window.why_no_instant is not None:
+        return ARMING_UNKNOWN, window.why_no_instant
+    if window.size_ms is not None and window.size_ms <= 0:
+        return ARMING_BEFORE_OPEN, _ARMING_NO_HEAD_START
+    if window.why_no_count is not None:
+        return ARMING_UNKNOWN, window.why_no_count
+    if reaching == 0:
+        return ARMING_WINDOW_UNREACHABLE, _ARMING_NO_REACH
+    return (
+        ARMING_RUNG_REACHED,
+        f"{reaching} of {len(window.bars)} bars before the arming instant have "
+        f"`{_TOUCH_TAPE_TEST}`; {_ARMING_NOT_AN_EFFECT_SIZE}",
+    )
+
+
+def _tier_arming_audit(
+    index: int,
+    tier: Any,
+    window: _HeadStart,
+    *,
+    currency: str,
+) -> dict[str, Any]:
+    """One declared rung against the head-start window, with its construction."""
+    unit = _price_unit(currency)
+    declared = _mapping(tier)
+    limit = _tier_limit(declared)
+    reaching = (
+        []
+        if limit is None
+        else [
+            bar["t"]
+            for bar in window.bars
+            if (low := _price(bar, "low")) is not None and low <= limit
+        ]
+    )
+    # Every field that needs the limit shares one reason for not having it, so
+    # a reader is not sent to a different explanation per field. A window that
+    # cannot be counted over supplies the other half: with no arming instant,
+    # "0 bars reached the rung" is a count over a window nobody could delimit.
+    limit_absent = _TIER_UNREADABLE if declared is None else _TIER_NO_LIMIT
+    count_absent = limit_absent if limit is None else window.why_no_count
+    verdict, why = _arming_verdict(limit, window, declared=declared, reaching=len(reaching))
+    return {
+        "tier_index": index,
+        "tag": None if declared is None else declared.get("tag"),
+        "tier_limit": _stated(
+            "entry_tier_limit",
+            limit,
+            unit=unit,
+            source=f"document.spec.entry_tiers[{index}].limit_price",
+            formula=f"the limit the walk's own test compares a bar's low against ({unit})",
+            null_reason=None if limit is not None else limit_absent,
+        ),
+        "pre_arming_reaching_bars": _stated(
+            "pre_arming_reaching_bars",
+            None if count_absent is not None else len(reaching),
+            unit=_BARS,
+            source="the written bars file",
+            formula=(
+                f"the number of bars with t < plan_armed_at and `{_TOUCH_TAPE_TEST}`; a count "
+                "over the head-start window alone, not over the entry window"
+            ),
+            null_reason=count_absent,
+            of_pre_arming_bars=len(window.bars),
+        ),
+        "first_pre_arming_reach_at": _stated(
+            "first_pre_arming_reach",
+            None if not reaching else format_time(_instant(min(reaching))),
+            unit=None,
+            source="the written bars file",
+            formula=(
+                f"the first bar with t < plan_armed_at and `{_TOUCH_TAPE_TEST}`; the instant "
+                "the rung first became reachable inside the window the live watch did not have"
+            ),
+            # Three causes, each named: no window to look in, a window with no
+            # bar in it, or a window whose bars never put the rung in reach.
+            null_reason=None
+            if reaching
+            else (count_absent or window.why_no_low or _ARMING_NO_REACH),
+            t=None if not reaching else min(reaching),
+        ),
+        "verdict": verdict,
+        "verdict_formula": why,
+    }
+
+
+def arming_audit(
+    trade: Mapping[str, Any],
+    document: Mapping[str, Any],
+    built: BuiltBars,
+    *,
+    currency: str,
+) -> dict[str, Any]:
+    """The head start this record's replay gets over its own live watch.
+
+    Keyed on the DOCUMENT's tiers and not on the record's rows, exactly as
+    :func:`touch_audit` is: the limit a reader must judge the tape against is
+    the one the walk compares against. Unlike the touch audit this block needs
+    no entry row at all -- ``plan_armed_at`` is a field of the record itself --
+    which is what lets it answer on the 41 of 53 records that journalled no
+    touch and on the 11 that never filled.
+
+    The anchor is read off the BAR WINDOW's left edge rather than re-derived
+    from the calendar, because that edge is ``config.walk_start`` by
+    construction (``main`` builds the window from it) and a second derivation
+    here could disagree with the value the replay will actually walk from.
+
+    An ANNOTATION. It never refuses a record, it is not a key of
+    ``configuration``, and it does not move ``walk_start``.
+    """
+    window = _HeadStart.of(trade, built)
+    anchor = built.window.start
+    low = _lowest_low(window.bars)
+    spec = _mapping(document.get("spec")) or {}
+    tiers = spec.get("entry_tiers")
+    tiers = tiers if isinstance(tiers, list) else []
+    return {
+        "tape_test": _TOUCH_TAPE_TEST,
+        "tape_test_source": _TOUCH_TAPE_TEST_SOURCE,
+        "verdicts": list(ARMING_VERDICTS),
+        "necessary_not_sufficient": _ARMING_NOT_AN_EFFECT_SIZE,
+        "blind_spots": list(_ARMING_BLIND_SPOTS),
+        # COPIED from the record, with this join's own reason when the record
+        # states an absence without one: a bare `null` beside no reason reads
+        # as "measured, and zero".
+        "plan_armed_at": _record_fact(
+            trade.get("plan_armed_at"),
+            unit=None,
+            absent=window.why_no_instant or _ARMING_NOT_STATED,
+        ),
+        "walk_start": _stated(
+            "day1_session_open",
+            _epoch_ms(anchor),
+            unit=units.EPOCH_MS_UTC,
+            source="configuration.walk_start",
+            formula=(
+                "the anchor the walk skips every earlier bar from, which is this window's "
+                "own left edge"
+            ),
+            at_utc=format_time(anchor),
+        ),
+        "head_start_minutes": _stated(
+            "arming_head_start",
+            None if window.size_ms is None else round(window.size_ms / _MS_PER_MINUTE, 3),
+            unit=_MINUTES,
+            source="plan_armed_at + configuration.walk_start",
+            formula=(
+                "(plan_armed_at - config.walk_start) / 60000 ms; NEGATIVE when the plan was "
+                "armed before its day-1 session open, where the replay gets no head start"
+            ),
+            null_reason=window.why_no_instant,
+        ),
+        "pre_arming_bars": _stated(
+            "pre_arming_bars",
+            None if window.size_ms is None else len(window.bars),
+            unit=_BARS,
+            source="the written bars file",
+            formula=(
+                "the kept bars with t < plan_armed_at; half-open on the right like the "
+                "session grid, because the bar stamped at the arming instant spans "
+                "armed..armed+59s and the watch was running for all but its first instant"
+            ),
+            null_reason=window.why_no_instant,
+        ),
+        "pre_arming_lowest_low": _stated(
+            "pre_arming_lowest_low",
+            None if low is None else low[0],
+            unit=_price_unit(currency),
+            source="the written bars file",
+            formula="min(bar.low) over the bars with t < plan_armed_at",
+            null_reason=None if low is not None else window.why_no_low,
+            at_t=None if low is None else low[1],
+            at_utc=None if low is None else format_time(_instant(low[1])),
+        ),
+        "entries": [
+            _tier_arming_audit(index, tier, window, currency=currency)
             for index, tier in enumerate(tiers)
         ],
     }
@@ -2424,6 +2827,15 @@ OUTPUT
   `bars_provenance_path`, the stated `facts`, the whole `configuration`, a
   `bars` block carrying the session filter and its counts, and a runnable
   `replay_argv`.
+
+  Two annotation blocks travel beside that, both top-level and neither part of
+  `configuration`, which the engine refuses a key it does not model:
+  `touch_audit`, per entry tier, how this record's journalled bid touch stands
+  against the tape; and `arming`, the head start the walk gets over the live
+  watch -- `plan_armed_at` against `config.walk_start`, the bars inside that
+  window and whether a declared rung was reachable in it. Each publishes a
+  closed `verdicts` vocabulary and a `null_reason` per absent field. Both only
+  annotate: neither refuses a record and neither changes what the walk does.
 
   The bars are the venue's own session grid, half-open at the close
   (`open_ms <= t < close_ms`), so the bar stamped at a session close is not
@@ -3059,6 +3471,9 @@ def main(
         "touch_audit": touch_audit(
             trade, inputs.document, built, currency=facts.instrument_currency
         ),
+        # The second annotation block, a SIBLING of `touch_audit` and justified
+        # the same way: an added optional field inside the same major version.
+        "arming": arming_audit(trade, inputs.document, built, currency=facts.instrument_currency),
         "replay_argv": [
             sys.executable,
             "-m",
@@ -3092,6 +3507,23 @@ def main(
             f" (limit {tier['tier_limit']['value']},"
             f" journalled touch {tier['journaled_touch']['value']},"
             f" tape lag {tier['touch_to_tape_lag_minutes']['value']} {_MINUTES})"
+        )
+    # The arming window, rendered for the same reason: the operator who reads
+    # `rung_reached_before_arming` is the one who must not quote the replay's R
+    # as a model disagreement before checking what the head start held.
+    arming = answer["arming"]
+    print(
+        f"  arming: head start {arming['head_start_minutes']['value']} {_MINUTES}"
+        f" ({arming['pre_arming_bars']['value']} {_BARS} before arming,"
+        f" lowest low {arming['pre_arming_lowest_low']['value']})"
+    )
+    for tier in arming["entries"]:
+        reaching = tier["pre_arming_reaching_bars"]
+        print(
+            f"  arming tier {tier['tier_index']}: {tier['verdict']}"
+            f" (limit {tier['tier_limit']['value']},"
+            f" {reaching['value']} of {reaching['of_pre_arming_bars']} pre-arming {_BARS}"
+            f" reach it, first {tier['first_pre_arming_reach_at']['value']})"
         )
     print("  next: " + " ".join(answer["replay_argv"]))
     return 0
