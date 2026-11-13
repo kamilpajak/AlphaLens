@@ -4522,6 +4522,41 @@ class TheArmingAuditMeasuresTheHeadStartTheReplayGetsTest(_FetchingTestCase):
             self.assertIn("3 of 3", out)
 
 
+class TheSidecarSLeftEdgeIsTheAnchorItNamesTest(_FetchingTestCase):
+    """The provenance file states `from_formula` as "config.walk_start
+    (session_open_utc(...))". Nothing pinned that sentence to the anchor the
+    value actually came from -- `grep -rn from_formula apps/alphalens-research/
+    tests/` returned nothing -- so a moved anchor would leave the sidecar
+    describing a left edge the file no longer has, with every test still green.
+
+    The RELATION is what is pinned, not the literal string: the sidecar's left
+    edge is the configuration's own `walk_start`, by value AND by the
+    construction the configuration itself states for it.
+    """
+
+    def test_the_sidecar_s_left_edge_is_the_configuration_s_own_walk_start(self) -> None:
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+
+            _, out, _, _ = self._replay(directory)
+            answer = json.loads(out)
+            anchor = answer["configuration"]["walk_start"]
+            window = self._sidecar(out)["window"]
+
+            # The value: the sidecar's left edge IS the anchor the walk starts
+            # at, in the same unit.
+            self.assertEqual(window["from_t"], anchor["value"])
+            # The construction: the configuration states how it derived that
+            # instant, and the sidecar's prose quotes THAT derivation rather
+            # than a sentence of its own that could outlive it.
+            stated = anchor["formula"].split(";")[0].strip()
+            self.assertIn(stated, window["from_formula"])
+            self.assertIn("config.walk_start", window["from_formula"])
+            # And the anchor is the day-1 open, which is the fact the formula
+            # names: a moved anchor changes this kind and the prose with it.
+            self.assertEqual(anchor["kind"], "day1_session_open")
+
+
 class TheHelpTextIsThePublishedSurfaceTest(unittest.TestCase):
     """``usage=argparse.SUPPRESS`` with a raw-description formatter means
     argparse generates no option list, so a flag the hand-written help text
