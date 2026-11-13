@@ -4508,6 +4508,59 @@ class TheArmingAuditMeasuresTheHeadStartTheReplayGetsTest(_FetchingTestCase):
         self.assertEqual(block["entries"][0]["verdict"], "unknown")
         self.assertIn("nothing observed", block["entries"][0]["verdict_formula"])
 
+    def test_every_document_tier_gets_its_own_verdict(self) -> None:
+        """TWO tiers is the ordinary shape and not an edge case: all three
+        hand-written pick examples in `apps/alphalens-broker-contract/examples/
+        manual-pick/` declare two, while both fixtures here declare one. One
+        window, two rungs, two different answers is what shows the verdict is
+        per RUNG and not per pick -- the head start is the same window for both,
+        and whether it put a rung in reach is not."""
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            report = self._report_with_arming(directory)
+            body = json.loads(report.read_text())
+            record = next(row for row in body["trades"] if row["pick_key"] == self._PICK)
+            tiers = record["plan"]["spec"]["entry_tiers"]
+            tiers[0]["alloc_pct"] = 50.0
+            # The default tape's day-1 bars are priced at 10.0, so their lows
+            # are exactly 9.5: the first tier is reached inside the window and
+            # the second, a cent and a half lower, is not.
+            tiers.append(
+                {"alloc_pct": 50.0, "entry_mode": "pullback", "limit_price": 9.0, "tag": "T2"}
+            )
+            report.write_text(json.dumps(body))
+
+            status, out, err = self._run(
+                str(report),
+                self._PICK,
+                "--out",
+                str(directory),
+                "--entry-trail-bps",
+                "50",
+                "--bar-cache",
+                str(directory / "cache"),
+                "--format",
+                "json",
+                **self._seams(self._tape()),
+            )
+
+            self.assertEqual(status, 0, err)
+            block = json.loads(out)["arming"]
+            entries = block["entries"]
+            self.assertEqual([tier["tier_index"] for tier in entries], [0, 1])
+            self.assertEqual([tier["tag"] for tier in entries], ["T1", "T2"])
+            self.assertEqual(entries[0]["verdict"], "rung_reached_before_arming")
+            self.assertEqual(entries[1]["verdict"], "window_unreachable")
+            self.assertEqual(entries[0]["pre_arming_reaching_bars"]["value"], 3)
+            self.assertEqual(entries[1]["pre_arming_reaching_bars"]["value"], 0)
+            # One window, counted once: both rungs are judged over the same
+            # three bars.
+            self.assertEqual(
+                [tier["pre_arming_reaching_bars"]["of_pre_arming_bars"] for tier in entries],
+                [3, 3],
+            )
+            self.assertEqual(block["pre_arming_bars"]["value"], 3)
+
     def test_the_human_rendering_carries_the_same_verdict_as_the_json(self) -> None:
         """A CLI is one result object rendered two ways: the operator who runs
         the join by hand is the reader who has to see the verdict before quoting
