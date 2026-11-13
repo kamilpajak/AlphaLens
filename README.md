@@ -7,11 +7,18 @@
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm_Noncommercial_1.0.0-blue.svg)](https://polyformproject.org/licenses/noncommercial/1.0.0/)
 
-AlphaLens is a personal research-lab and decision-support monorepo for retail active-equity research. It combines real-time SEC EDGAR event detection, a daily thematic event-driven brief (news → ranked candidate cards surfaced in a web dashboard), and a rigorous quant backtest/attribution engine for factor-paradigm validation. It is decision **support**, not automated trading — capital deployment is off-table and there is no standing strategy PASS.
+> [!WARNING]
+> **Deprecated.** This repository is superseded by
+> [bellwether](https://github.com/kamilpajak/bellwether), which rebuilds the point-in-time core in
+> Rust. The live services here are being wound down and no new features land here. The daily
+> thematic brief and its API are still running; the SEC EDGAR detector and the live order rail are
+> not.
+
+AlphaLens is a personal research-lab and decision-support monorepo for retail active-equity research. It combined real-time SEC EDGAR event detection, and still runs a daily thematic event-driven brief (news → ranked candidate cards surfaced in a web dashboard), and a rigorous quant backtest/attribution engine for factor-paradigm validation. It is decision **support**, not automated trading — capital deployment is off-table and there is no standing strategy PASS.
 
 ## What's inside
 
-- **Live EDGAR detector** — Layer 1 SEC EDGAR poller that classifies new filings and queues candidates, firing every 15 minutes in production.
+- **EDGAR detector** — Layer 1 SEC EDGAR poller that classifies new filings and queues candidates. **No longer running**: its timer was disabled on 2026-11-13, so the successor has the whole 10-requests-per-second SEC budget this host shares.
 - **Daily thematic brief pipeline + web dashboard** — ingest news → LLM theme extraction → beneficiary mapping → scorer screen → daily brief of ranked candidate cards. Each card carries an **expert panel** (Buffett value/quality + O'Neil momentum lenses, with a disagreement spread; display-only).
 - **EDGE market-behavior feedback** — the `/edge` dashboard plus a broker-free **ladder monitor** that replays trade-setup ladders over price paths to measure market behavior (the sole go-forward feedback metric; N≥30 gated).
 - **Backtest / attribution research lab** — a screener-agnostic replay engine and a 5-layer attribution stack producing risk-adjusted metrics and a GO/KILL verdict for factor-paradigm audits.
