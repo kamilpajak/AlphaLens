@@ -4353,6 +4353,43 @@ class TheArmingAuditMeasuresTheHeadStartTheReplayGetsTest(_FetchingTestCase):
             self.assertEqual(block["entries"][0]["pre_arming_reaching_bars"]["value"], 3)
             self.assertEqual(block["entries"][0]["verdict"], "rung_reached_before_arming")
 
+    def test_only_some_pre_arming_bars_reach_the_rung(self) -> None:
+        """The count and the first-reach instant must be distinguishable from
+        "the whole window" and from "the window's first bar".
+
+        Every other fixture here has a head-start window where either EVERY bar
+        reaches the rung or none does, so a block that published
+        `pre_arming_bars` as the count, or `walk_start` as the first reach,
+        would satisfy all of them. This is also the normal production shape:
+        on the 2026-11-12 LIVE report the reaching counts are small fractions
+        of their windows, 5 of 258 on `MSFT:2026-10-30`.
+
+        The tape puts the reachable bar in the MIDDLE, so the first reach is
+        neither the window's first bar nor its last.
+        """
+        with TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            middle = self.WALK_START + dt.timedelta(minutes=1)
+            payload = (
+                _aggs(self.WALK_START, 1, price=200.0)
+                + _aggs(middle, 1, price=9.5)
+                + _aggs(self.WALK_START + dt.timedelta(minutes=2), 1, price=200.0)
+                + _aggs(self.AFTER_DEADLINE, 3, price=10.0)
+            )
+            _, out, _ = self._arming(directory, payload=payload, limit_price=9.5)
+            tier = self._block(out)["entries"][0]
+
+            self.assertEqual(self._block(out)["pre_arming_bars"]["value"], 3)
+            # STRICTLY between: not 0, and not the whole window.
+            self.assertEqual(tier["pre_arming_reaching_bars"]["value"], 1)
+            self.assertEqual(tier["pre_arming_reaching_bars"]["of_pre_arming_bars"], 3)
+            # The MIDDLE bar, so a block reporting the window's start fails.
+            self.assertEqual(tier["first_pre_arming_reach_at"]["value"], format_time(middle))
+            self.assertNotEqual(
+                tier["first_pre_arming_reach_at"]["value"], format_time(self.WALK_START)
+            )
+            self.assertEqual(tier["verdict"], "rung_reached_before_arming")
+
     def test_a_tier_with_no_usable_limit_is_unknown_and_not_a_traceback(self) -> None:
         """Nothing before this block validates `spec.entry_tiers`: the run
         configuration never reads them and the engine refuses them later."""
