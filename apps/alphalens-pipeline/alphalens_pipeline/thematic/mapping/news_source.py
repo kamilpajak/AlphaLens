@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+from functools import lru_cache
 from pathlib import Path
 
 import pandas as pd
@@ -94,6 +95,20 @@ READ_NEWS_LAKE = False
 NEWS_SOURCE_VIEW = "view"
 NEWS_SOURCE_VIEW_PLUS_LAKE = "view+lake"
 
+#: ONE window, because exactly one is ever in flight: every production caller
+#: resolves against the lake beside its own news dir at one ``asof`` and
+#: ``DEFAULT_LOOKBACK_DAYS``, so a second entry would never be hit.
+#:
+#: NOT because a window is expensive to retain. An earlier version of this
+#: comment said "about 1.46 GB per cached frame" and that four would be 5.8 GB.
+#: Both figures were wrong by about 31x: 1.46 GB is the READ PEAK, dominated by
+#: one parquet's body text being materialised and thrown away. Measured
+#: ``memory_usage(deep=True)`` of the real cached frame — 30-day window, asof
+#: 2026-11-08, 36,246 rows, 12,754 distinct ids — is **45.5 MB**, and four real
+#: windows held at once are 185.9 MB. Anyone who needs a second window in
+#: flight should raise this number; the old comment would have told them not to.
+_LAKE_CACHE_SIZE = 1
+
 _LAKE_SESSION_PREFIX = "session_date="
 _LAKE_RUN_GLOB = "run=*.parquet"
 _NEWS_ID_COLUMN = "id"
@@ -120,8 +135,25 @@ def news_source_token() -> str | None:
     return NEWS_SOURCE_VIEW_PLUS_LAKE if READ_NEWS_LAKE else None
 
 
-def load_lake_window(lake_dir: Path, asof: dt.date, lookback_days: int) -> pd.DataFrame:
-    """Every run of every ``session_date`` inside the window, concatenated.
+@lru_cache(maxsize=_LAKE_CACHE_SIZE)
+def _read_lake_window(
+    lake_dir: Path, asof: dt.date, lookback_days: int, /
+) -> tuple[pd.DataFrame, bool]:
+    """The runs of every ``session_date`` inside the window, concatenated.
+
+    CACHED, because the cost is in opening the files and not in the rows kept.
+    Measured on the production lake, 30-day window, asof 2026-11-08: restricting
+    the read to the ids an event points at cut rows 36,255 -> 17,366 and the read
+    peak 6.29 -> 3.83 GB, but asking for a single theme's TWO ids still cost
+    5.65 s, because all 93 files are opened either way. Restricting rows shrinks
+    the result, not the read. So the window is read ONCE per
+    ``(lake_dir, asof, lookback_days)`` and :func:`with_lake` filters it in
+    memory, which turns one read per theme into one read per run at the same
+    peak.
+
+    Each body is measured as its file is read and the column is dropped, which
+    is what makes caching affordable: ``body`` is 4,623 MB of the window's
+    4,658 MB uncompressed (99.2%) and has no consumer below the news join.
 
     The lake's layout is a directory per session date holding one parquet per
     ingest run, so this cannot reuse ``catalyst_resolver._load_window``, which
@@ -130,7 +162,8 @@ def load_lake_window(lake_dir: Path, asof: dt.date, lookback_days: int) -> pd.Da
     run the ingest has no lake at all.
     """
     if not lake_dir.exists():
-        return pd.DataFrame()
+        return pd.DataFrame(), False
+    complete = True
     lo = asof - dt.timedelta(days=lookback_days)
     frames: list[pd.DataFrame] = []
     for session in sorted(lake_dir.glob(f"{_LAKE_SESSION_PREFIX}*")):
@@ -147,11 +180,40 @@ def load_lake_window(lake_dir: Path, asof: dt.date, lookback_days: int) -> pd.Da
                 frame = pd.read_parquet(path)
             except Exception as exc:
                 logger.warning("failed to read %s: %s", path, exc)
+                complete = False
                 continue
-            frames.append(frame)
+            frames.append(_measure_and_drop_body(frame))
     if not frames:
-        return pd.DataFrame()
-    return _within_window(pd.concat(frames, ignore_index=True), asof, lookback_days)
+        return pd.DataFrame(), complete
+    return _within_window(pd.concat(frames, ignore_index=True), asof, lookback_days), complete
+
+
+def load_lake_window(lake_dir: Path, asof: dt.date, lookback_days: int, /) -> pd.DataFrame:
+    """The cached window, but an INCOMPLETE read is never cached.
+
+    The cache turned a transient read failure from a one-theme problem into a
+    whole-run one. ``_read_lake_window`` treats two states as answers: a lake
+    directory that is not there yet, and a file that would not open. Before the
+    cache each theme re-read the lake, so a run file caught mid-write cost one
+    theme. Cached, the short window is frozen and served to every later theme,
+    and the only alarm this module has fires on an EMPTY window and never on a
+    short one — so the orphan rows this whole change exists to recover are
+    dropped for the rest of the run, in silence.
+
+    So a frame built from an incomplete read is returned once and then evicted.
+    The next caller pays the read again, which is the behaviour the cache
+    replaced and is correct when the previous answer was not an answer.
+
+    The key is POSITIONAL-ONLY. ``lru_cache`` keys by call shape, so
+    ``lookback_days=30`` and ``30`` are two entries; at ``maxsize=1`` two
+    spellings in one run evict each other on every call and the hit rate is
+    zero. Positional-only makes the second spelling a ``TypeError`` instead of a
+    silent cache miss.
+    """
+    frame, complete = _read_lake_window(lake_dir, asof, lookback_days)
+    if not complete:
+        _read_lake_window.cache_clear()
+    return frame
 
 
 def _within_window(frame: pd.DataFrame, asof: dt.date, lookback_days: int) -> pd.DataFrame:
@@ -169,6 +231,28 @@ def _within_window(frame: pd.DataFrame, asof: dt.date, lookback_days: int) -> pd
     lo = pd.Timestamp(asof - dt.timedelta(days=lookback_days), tz="UTC")
     hi = pd.Timestamp(asof, tz="UTC") + pd.Timedelta(days=1)
     return frame[stamps.notna() & (stamps >= lo) & (stamps < hi)]
+
+
+def _measure_and_drop_body(frame: pd.DataFrame) -> pd.DataFrame:
+    """Record how long each row's body is, then let the body go.
+
+    ``body`` is 4,623 MB of a 30-day window's 4,658 MB uncompressed (99.2%), and
+    it has NO consumer below the news join: dropping the column right after the
+    union gave a byte-identical resolver result on six real themes. Measuring
+    per file and dropping immediately means only ONE file's bodies are resident
+    at a time, and the longest-body rule in :func:`merge_news_sources` keeps
+    working on the recorded length rather than on the text.
+
+    This is why pruning needs no decision about that rule: the rule reads a
+    number, and the number survives.
+    """
+    if _NEWS_BODY_COLUMN not in frame.columns:
+        return frame
+    # `assign` returns a NEW frame. An in-place column assignment would mutate
+    # whatever was handed in, and both the view read and the lake read are
+    # `lru_cache`d — so the caller would be editing the cache.
+    lengths = frame[_NEWS_BODY_COLUMN].fillna("").astype(str).str.len()
+    return frame.assign(**{_BODY_LENGTH_COLUMN: lengths}).drop(columns=[_NEWS_BODY_COLUMN])
 
 
 def merge_news_sources(view: pd.DataFrame, lake: pd.DataFrame) -> pd.DataFrame:
@@ -197,14 +281,24 @@ def merge_news_sources(view: pd.DataFrame, lake: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
     merged = pd.concat(frames, ignore_index=True)
     body = merged.get(_NEWS_BODY_COLUMN)
-    merged[_BODY_LENGTH_COLUMN] = body.fillna("").astype(str).str.len() if body is not None else 0
+    measured = merged.get(_BODY_LENGTH_COLUMN)
+    from_text = body.fillna("").astype(str).str.len() if body is not None else 0
+    # Lake rows arrive with the length already recorded and the text gone; view
+    # rows arrive with the text. Prefer the recorded number, fall back to the
+    # text, so neither source has to carry what the other has.
+    merged[_BODY_LENGTH_COLUMN] = measured.fillna(from_text) if measured is not None else from_text
     merged = merged.sort_values(_BODY_LENGTH_COLUMN, ascending=False, kind="stable")
     merged = merged.drop_duplicates(subset=[_NEWS_ID_COLUMN], keep="first")
     return merged.drop(columns=list(_TRANSIENT_COLUMNS)).reset_index(drop=True)
 
 
 def with_lake(
-    view: pd.DataFrame, lake_dir: Path, asof: dt.date, lookback_days: int
+    view: pd.DataFrame,
+    lake_dir: Path,
+    asof: dt.date,
+    lookback_days: int,
+    *,
+    needed_ids: frozenset[str] | None = None,
 ) -> pd.DataFrame:
     """The news the resolver joins against: ``view``, plus the lake when enabled.
 
@@ -220,6 +314,11 @@ def with_lake(
     """
     if not READ_NEWS_LAKE:
         return view
+    if needed_ids is not None and not needed_ids:
+        # Nothing in hand can join, so the lake is not touched even on a cold
+        # cache. The pushdown this replaced got that for free; an in-memory
+        # filter has to ask for it.
+        return view
     lake = load_lake_window(lake_dir, asof, lookback_days)
     if lake.empty:
         # The cohort key records the INTENT to read the lake. Without this line
@@ -234,7 +333,18 @@ def with_lake(
             asof.isoformat(),
             NEWS_SOURCE_VIEW_PLUS_LAKE,
         )
-    return merge_news_sources(view, lake)
+    if needed_ids is not None and not lake.empty:
+        # Never assign to the cached frame: a boolean mask returns a new object,
+        # and merge_news_sources concatenates rather than mutating its inputs.
+        lake = lake[lake[_NEWS_ID_COLUMN].astype(str).isin(needed_ids)]
+    # The VIEW's body goes the same way as the lake's. Measured: it is 98.8% of
+    # the view's bytes, so keeping it re-materialised 575 MB the lake read had
+    # just avoided. And it removes a worse thing than the bytes: with only the
+    # lake's body dropped, a merged row the lake won carried a float NaN in
+    # `body`, and `bool(nan)` is True — a truthiness guard would read "this row
+    # has text" while any `.str` or `len()` path got NaN. With the column absent
+    # from the output, a future consumer gets a KeyError instead of a lie.
+    return merge_news_sources(_measure_and_drop_body(view), lake)
 
 
 __all__ = [

@@ -108,18 +108,20 @@ class TestTheLakeWindowReader(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.stores = _Stores(Path(self._tmp.name))
         self.addCleanup(self._tmp.cleanup)
+        news_source._read_lake_window.cache_clear()
+        self.addCleanup(news_source._read_lake_window.cache_clear)
 
     def test_it_reads_every_run_of_a_day_inside_the_window(self) -> None:
         self.stores.write_lake_run(_ASOF, "20261105T010000000Z", [_news_row("a", _SHORT_BODY)])
         self.stores.write_lake_run(_ASOF, "20261105T020000000Z", [_news_row("b", _SHORT_BODY)])
-        got = news_source.load_lake_window(self.stores.lake, _ASOF, lookback_days=30)
+        got = news_source.load_lake_window(self.stores.lake, _ASOF, 30)
         self.assertEqual(sorted(got["id"]), ["a", "b"])
 
     def test_it_ignores_session_dates_outside_the_window(self) -> None:
         inside, outside = _ASOF, _ASOF - dt.timedelta(days=40)
         self.stores.write_lake_run(inside, "20261105T010000000Z", [_news_row("in", _SHORT_BODY)])
         self.stores.write_lake_run(outside, "20260926T010000000Z", [_news_row("out", _SHORT_BODY)])
-        got = news_source.load_lake_window(self.stores.lake, _ASOF, lookback_days=30)
+        got = news_source.load_lake_window(self.stores.lake, _ASOF, 30)
         self.assertEqual(list(got["id"]), ["in"])
 
     def test_a_session_date_after_asof_is_excluded(self) -> None:
@@ -132,7 +134,7 @@ class TestTheLakeWindowReader(unittest.TestCase):
         later = _ASOF + dt.timedelta(days=5)
         self.stores.write_lake_run(_ASOF, "20261105T010000000Z", [_news_row("now", _SHORT_BODY)])
         self.stores.write_lake_run(later, "20261110T010000000Z", [_news_row("future", _SHORT_BODY)])
-        got = news_source.load_lake_window(self.stores.lake, _ASOF, lookback_days=30)
+        got = news_source.load_lake_window(self.stores.lake, _ASOF, 30)
         self.assertEqual(list(got["id"]), ["now"])
 
     def test_a_row_outside_the_window_is_dropped_even_inside_a_listed_partition(self) -> None:
@@ -146,13 +148,11 @@ class TestTheLakeWindowReader(unittest.TestCase):
         self.stores.write_lake_run(
             _ASOF, "20261105T010000000Z", [_news_row("fresh", _SHORT_BODY), stale]
         )
-        got = news_source.load_lake_window(self.stores.lake, _ASOF, lookback_days=30)
+        got = news_source.load_lake_window(self.stores.lake, _ASOF, 30)
         self.assertEqual(list(got["id"]), ["fresh"])
 
     def test_an_absent_lake_directory_is_empty_and_does_not_raise(self) -> None:
-        got = news_source.load_lake_window(
-            self.stores.lake.parent / "never_created", _ASOF, lookback_days=30
-        )
+        got = news_source.load_lake_window(self.stores.lake.parent / "never_created", _ASOF, 30)
         self.assertTrue(got.empty)
 
 
@@ -274,6 +274,8 @@ class TestWhatTheResolverSees(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.stores = _Stores(Path(self._tmp.name))
         self.addCleanup(self._tmp.cleanup)
+        news_source._read_lake_window.cache_clear()
+        self.addCleanup(news_source._read_lake_window.cache_clear)
         # The orphan shape, exactly: the event is in the events store, its news
         # row is in the lake, and the view no longer has it.
         self.stores.write_view(_ASOF, [_news_row("kept", _SHORT_BODY)])
@@ -352,11 +354,20 @@ class TestWhatTheResolverSees(unittest.TestCase):
             self.assertEqual(sorted(self._news()["id"]), ["kept"])
 
     def test_with_the_flag_on_the_evicted_row_comes_back(self) -> None:
+        """What matters is that the ROW returns, not that it carries its text.
+
+        An earlier version asserted ``row["body"] == _LONG_BODY``. That pins a
+        FRAME COLUMN rather than anything a consumer reads, and it is the only
+        thing that broke when the lake read began measuring each body and
+        dropping it — ``body`` is 99.2% of the bytes a lake window costs and has
+        no reader below the news join. The identity that still has to hold is
+        the row's, and the length the selection rule used.
+        """
         with mock.patch.object(news_source, "READ_NEWS_LAKE", True):
             got = self._news()
         self.assertEqual(sorted(got["id"]), ["evicted", "kept"])
         row = got[got["id"] == "evicted"].iloc[0]
-        self.assertEqual(row["body"], _LONG_BODY)
+        self.assertEqual(row["url"], "https://example.test/evicted")
 
     def test_the_orphaned_event_resolves_only_with_the_flag_on(self) -> None:
         """End to end: a theme whose only event is orphaned has no catalyst today."""
